@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ask AI</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./theme.js"></script>
+  </head>
+  <body class="ask-body">
+    <main class="ask-page" aria-label="Ask AI">
+      <header class="ask-header">
+        <div>
+          <h1>Ask AI</h1>
+          <p>Answers are generated locally after model setup. Enable web search when you want answers grounded in retrieved sources.</p>
+        </div>
+        <div class="header-actions">
+          <button class="secondary-action compact-action privacy-receipt-toggle" id="privacy-receipt-toggle" type="button" aria-expanded="false" aria-controls="privacy-receipt-panel">Shield 0</button>
+          <button class="secondary-action compact-action" id="new-chat" type="button">New chat</button>
+        </div>
+      </header>
+
+      <section class="privacy-receipt-panel" id="privacy-receipt-panel" aria-label="Network privacy receipt" hidden>
+        <div class="privacy-receipt-head">
+          <div>
+            <div class="section-title">Network receipt</div>
+            <p id="privacy-receipt-summary">No Search or Ask AI network activity yet.</p>
+          </div>
+          <div class="privacy-receipt-actions">
+            <label class="privacy-history-label" for="privacy-receipt-history">Receipt</label>
+            <select class="privacy-receipt-history" id="privacy-receipt-history"></select>
+            <button class="secondary-action compact-action" id="privacy-export-json" type="button">Export JSON</button>
+            <div class="privacy-cloud-check" id="privacy-cloud-check">✓ No data sent to cloud AI services</div>
+          </div>
+        </div>
+        <div class="privacy-table-wrap">
+          <table class="privacy-table">
+            <thead>
+              <tr>
+                <th>Category</th>
+                <th>Host</th>
+                <th>What was sent</th>
+              </tr>
+            </thead>
+            <tbody id="privacy-receipt-rows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="model-setup-card" id="model-setup-card" aria-label="Local model setup" hidden>
+        <div>
+          <div class="section-title">Local model</div>
+          <h2 id="model-name">Checking model...</h2>
+          <p id="model-size"></p>
+          <p id="model-status">Checking local cache...</p>
+        </div>
+        <button class="primary-action" id="download-model" type="button">Download model</button>
+      </section>
+
+      <section class="chat-history-panel" id="chat-history-panel" aria-label="Saved chats" hidden>
+        <div class="chat-history-header">
+          <strong>Saved chats</strong>
+          <button class="secondary-action compact-action" id="clear-chat-history" type="button">Clear history</button>
+        </div>
+        <div class="chat-history-list" id="chat-history-list"></div>
+      </section>
+
+      <section class="chat-thread" id="chat-thread" aria-label="Conversation"></section>
+
+      <section class="chat-controls" aria-label="Ask AI controls">
+        <label class="settings-check web-toggle">
+          <input id="web-toggle" type="checkbox">
+          <span>Search the web</span>
+        </label>
+        <label class="secondary-action compact-action attachment-picker" for="attachment-input">Attach</label>
+        <input id="attachment-input" type="file" accept=".pdf,.txt,.md,.markdown,.csv,text/plain,text/markdown,text/csv,application/pdf" multiple hidden>
+        <div class="chat-status" id="chat-status" role="status" aria-live="polite"></div>
+      </section>
+
+      <section class="attachment-panel" id="attachment-panel" aria-label="Ask AI attachments">
+        <div class="attachment-drop-zone" id="attachment-drop-zone" tabindex="0">
+          Drop PDF, TXT, Markdown, or CSV files here. Attachments stay temporary in this chat unless chat saving is enabled.
+        </div>
+        <div class="attachment-list" id="attachment-list"></div>
+      </section>
+
+      <form class="chat-composer" id="chat-form">
+        <textarea id="chat-input" rows="2" maxlength="1200" placeholder="Ask a question" aria-label="Ask a question"></textarea>
+        <div class="chat-actions">
+          <button class="primary-action" id="send-chat" type="submit">Send</button>
+          <button class="secondary-action" id="stop-chat" type="button" disabled>Stop</button>
+          <button class="secondary-action" id="retry-chat" type="button" disabled>Retry</button>
+          <button class="secondary-action" id="copy-chat" type="button" disabled>Copy</button>
+          <button class="secondary-action" id="export-md" type="button" disabled>Markdown</button>
+          <button class="secondary-action" id="export-pdf" type="button" disabled>PDF</button>
+        </div>
+      </form>
+    </main>
+
+    <script src="./search-utils.js"></script>
+    <script src="./generated/ai-engine.bundle.js"></script>
+    <script src="./ask.js"></script>
+  </body>
+</html>

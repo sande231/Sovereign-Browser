@@ -1,0 +1,39 @@
+{
+  "name": "sovereign-browser",
+  "version": "0.1.0",
+  "description": "A standalone Electron browser prototype named Sovereign.",
+  "main": "src/main.js",
+  "scripts": {
+    "build:ai": "mkdir -p src/generated && esbuild src/ai/ai-engine-entry.js --bundle --format=iife --platform=browser --outfile=src/generated/ai-engine.bundle.js && esbuild src/pdf-extract-worker.js --bundle --format=esm --platform=browser --outfile=src/generated/pdf-extract-worker.js && cp node_modules/pdfjs-dist/build/pdf.worker.mjs src/generated/pdf.worker.mjs",
+    "start": "npm run build:ai && env -u ELECTRON_RUN_AS_NODE electron .",
+    "check": "npm run build:ai && node --check src/main.js && node --check src/preload.js && node --check src/renderer.js && node --check src/sidebar.js && node --check src/search.js && node --check src/ask.js && node --check src/model-setup.js && node --check src/search-backend.js && node --check src/search-utils.js && node --check src/source-reader.js && node --check src/summary-utils.js && node --check src/privacy-receipt.js && node --check src/newtab.js && node --check src/settings.js && node --check src/downloads.js && node --check src/bookmarks.js && node --check src/theme.js && node --check src/ai/ai-engine-entry.js && node --check src/pdf-extract-worker.js && node tests/privacy-receipt.test.js && node tests/audit-compare.test.js && npm run check:tests",
+    "check:tests": "node --check tests/electron/model-chat.test.js && node --check tests/electron/auto-setup-shutdown.test.js && node --check tests/electron/generation-shutdown.test.js && node --check tests/electron/downloads.test.js && node --check tests/electron/browser-features.test.js && node --check tests/electron/ui-smoke.test.js && node --check tests/electron/stage1-usability.test.js && node --check tests/electron/attachments.test.js && node --check tests/electron/home-attachments.test.js && node --check tests/electron/pdf-attachments.test.js && node --check tests/electron/media-chat.test.js",
+    "test:electron:model-chat": "npm run build:ai && node --check tests/electron/model-chat.test.js && env -u ELECTRON_RUN_AS_NODE electron tests/electron/model-chat.test.js",
+    "test:electron:auto-setup-shutdown": "npm run build:ai && node --check tests/electron/auto-setup-shutdown.test.js && env -u ELECTRON_RUN_AS_NODE electron tests/electron/auto-setup-shutdown.test.js",
+    "test:electron:generation-shutdown": "npm run build:ai && node --check tests/electron/generation-shutdown.test.js && env -u ELECTRON_RUN_AS_NODE electron tests/electron/generation-shutdown.test.js",
+    "test:electron:downloads": "npm run build:ai && node --check tests/electron/downloads.test.js && env -u ELECTRON_RUN_AS_NODE electron tests/electron/downloads.test.js",
+    "test:electron:browser-features": "npm run build:ai && node --check tests/electron/browser-features.test.js && env -u ELECTRON_RUN_AS_NODE electron tests/electron/browser-features.test.js",
+    "test:electron:ui-smoke": "npm run build:ai && node --check tests/electron/ui-smoke.test.js && env -u ELECTRON_RUN_AS_NODE electron tests/electron/ui-smoke.test.js",
+    "test:electron:stage1-usability": "npm run build:ai && node --check tests/electron/stage1-usability.test.js && env -u ELECTRON_RUN_AS_NODE electron tests/electron/stage1-usability.test.js",
+    "test:electron:attachments": "npm run build:ai && node --check tests/electron/attachments.test.js && env -u ELECTRON_RUN_AS_NODE electron tests/electron/attachments.test.js",
+    "test:electron:home-attachments": "npm run build:ai && node --check tests/electron/home-attachments.test.js && env -u ELECTRON_RUN_AS_NODE electron tests/electron/home-attachments.test.js",
+    "test:electron:pdf-attachments": "npm run build:ai && node --check tests/electron/pdf-attachments.test.js && env -u ELECTRON_RUN_AS_NODE electron tests/electron/pdf-attachments.test.js",
+    "test:electron:media-chat": "npm run build:ai && node --check tests/electron/media-chat.test.js && env -u ELECTRON_RUN_AS_NODE electron tests/electron/media-chat.test.js",
+    "test:electron:media-chat-live": "npm run build:ai && node --check tests/electron/media-chat-live.test.js && env -u ELECTRON_RUN_AS_NODE electron tests/electron/media-chat-live.test.js"
+  },
+  "keywords": [
+    "electron",
+    "browser",
+    "sovereign"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@mlc-ai/web-llm": "^0.2.85",
+    "electron": "^38.1.0",
+    "esbuild": "^0.28.2"
+  },
+  "dependencies": {
+    "pdfjs-dist": "^6.3.289"
+  }
+}

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sovereign</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./theme.js"></script>
+  </head>
+  <body class="newtab-body">
+    <main class="newtab-page" aria-label="Sovereign new tab">
+      <section class="newtab-center">
+        <div class="newtab-wordmark">Sovereign</div>
+        <form class="home-search" id="home-search">
+          <div class="home-mode" role="radiogroup" aria-label="Search mode">
+            <label>
+              <input type="radio" name="home-mode" value="search" checked>
+              <span>Search</span>
+            </label>
+            <label>
+              <input type="radio" name="home-mode" value="ask">
+              <span>Ask AI</span>
+            </label>
+          </div>
+          <div class="home-search-box">
+            <input
+              id="home-query"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="Search the web or ask a question"
+              aria-label="Search the web or ask a question"
+            >
+            <button
+              id="home-attach"
+              class="secondary-action home-attach-button"
+              type="button"
+              title="Attach a local file for Ask AI"
+              aria-label="Attach a local file for Ask AI"
+            >+</button>
+            <input
+              id="home-attachment-input"
+              type="file"
+              accept=".pdf,.txt,.md,.markdown,.csv,text/plain,text/markdown,text/csv,application/pdf"
+              multiple
+              hidden
+            >
+            <button type="submit" class="primary-action">Go</button>
+          </div>
+          <div class="home-attachment-list" id="home-attachment-list" aria-live="polite"></div>
+          <p class="home-attachment-status" id="home-attachment-status"></p>
+        </form>
+
+        <section class="shortcuts" aria-label="Shortcuts">
+          <div class="shortcuts-row" id="shortcuts-row"></div>
+          <form class="shortcut-editor" id="shortcut-editor" novalidate hidden>
+            <div class="shortcut-editor-header">
+              <strong id="shortcut-editor-title">Add shortcut</strong>
+              <button class="secondary-action compact-action" id="shortcut-cancel" type="button">Cancel</button>
+            </div>
+            <label>
+              <span>Title</span>
+              <input id="shortcut-title" type="text" maxlength="40" autocomplete="off" required>
+            </label>
+            <label>
+              <span>URL</span>
+              <input id="shortcut-url" type="text" inputmode="url" autocomplete="off" placeholder="https://example.com" required>
+            </label>
+            <div class="shortcut-editor-footer">
+              <p id="shortcut-help">Home-page shortcuts use HTTP or HTTPS addresses and are stored locally.</p>
+              <button class="primary-action" id="shortcut-save" type="submit">Save</button>
+            </div>
+          </form>
+        </section>
+      </section>
+    </main>
+
+    <script src="./newtab.js"></script>
+  </body>
+</html>

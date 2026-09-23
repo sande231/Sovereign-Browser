@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sovereign Downloads</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./theme.js"></script>
+  </head>
+  <body class="downloads-body">
+    <main class="downloads-page" aria-label="Downloads">
+      <header class="downloads-header">
+        <h1>Downloads</h1>
+        <p>Website downloads save locally. Sovereign never opens downloaded files automatically.</p>
+      </header>
+
+      <section class="downloads-toolbar" aria-label="Download actions">
+        <div>
+          <div class="section-title">Recent files</div>
+          <p>Clearing an entry removes it from this list only. It does not delete the file.</p>
+        </div>
+        <button class="secondary-action compact-action" id="downloads-clear-finished" type="button">Clear finished</button>
+      </section>
+
+      <div class="search-status" id="downloads-status" role="status" aria-live="polite"></div>
+      <section class="downloads-list" id="downloads-list" aria-label="Download list"></section>
+    </main>
+
+    <script src="./downloads.js"></script>
+  </body>
+</html>

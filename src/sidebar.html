@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sovereign AI</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./theme.js"></script>
+  </head>
+  <body class="sidebar-body">
+    <main class="ai-sidebar" aria-label="Sovereign AI sidebar">
+      <header class="ai-header">
+        <div>
+          <h1>Sovereign AI</h1>
+          <p>Model setup requires a download. Summaries run locally after setup.</p>
+        </div>
+      </header>
+
+      <section class="ai-model" aria-label="Local model setup">
+        <div class="ai-model-row">
+          <div>
+            <div class="ai-label">Local model</div>
+            <div class="ai-model-name" id="model-name">Checking model...</div>
+          </div>
+          <div class="ai-model-size" id="model-size"></div>
+        </div>
+        <div class="ai-progress" id="model-progress"></div>
+        <button class="primary-action" id="download-model" type="button">Download model</button>
+      </section>
+
+      <section class="ai-source" aria-label="Source page">
+        <div class="ai-label">Source</div>
+        <div class="source-title" id="source-title">No active page</div>
+        <div class="source-url" id="source-url"></div>
+      </section>
+
+      <section class="ai-actions" aria-label="Summary actions">
+        <button class="primary-action" id="summarize-page" type="button">Summarize this page</button>
+        <button class="secondary-action" id="stop-summary" type="button" disabled>Stop</button>
+      </section>
+
+      <div class="ai-status" id="ai-status" role="status" aria-live="polite"></div>
+
+      <section class="summary-box" aria-label="Summary output">
+        <div class="summary-output" id="summary-output"></div>
+      </section>
+
+      <section class="privacy-box" aria-label="Privacy">
+        <div class="ai-label">Privacy</div>
+        <p>No page content or prompts are sent to a cloud AI service. Model files download once and are cached locally.</p>
+      </section>
+    </main>
+
+    <script src="./summary-utils.js"></script>
+    <script src="./generated/ai-engine.bundle.js"></script>
+    <script src="./sidebar.js"></script>
+  </body>
+</html>

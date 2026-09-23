@@ -1,0 +1,13 @@
+services:
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    container_name: sovereign-searxng
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./core-config:/etc/searxng:rw
+      - ./cache:/var/cache/searxng:rw
+    environment:
+      SEARXNG_BASE_URL: "http://127.0.0.1:8080/"
+      SEARXNG_SECRET: "${SEARXNG_SECRET:-sovereign-local-development-change-me}"

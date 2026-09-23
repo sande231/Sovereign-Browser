@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "description": "Small Sovereign Search / Ask AI answer-quality evaluation set. Use with the current configured local model first, then compare optional local candidates without cloud fallback.",
+  "cases": [
+    {
+      "id": "factual-tides",
+      "category": "factual",
+      "question": "What causes tides on Earth?",
+      "expectation": "Answer should identify the Moon's gravity as the primary cause, mention the Sun's smaller contribution, and cite supporting source passages."
+    },
+    {
+      "id": "factual-leaves",
+      "category": "factual",
+      "question": "Why do leaves change color in autumn?",
+      "expectation": "Answer should explain chlorophyll breakdown and pigments such as carotenoids/anthocyanins when supported by sources."
+    },
+    {
+      "id": "comparison-lists-tuples",
+      "category": "multi-source comparison",
+      "question": "What is the difference between Python lists and tuples?",
+      "expectation": "Answer should combine distinct points once, especially mutability and typical use, without repeating the same claim for every result."
+    },
+    {
+      "id": "follow-up-context",
+      "category": "follow-up",
+      "turns": [
+        "Explain the difference between Python lists and tuples.",
+        "Which one should I use for a fixed record?"
+      ],
+      "expectation": "Second answer should use prior context and answer the follow-up directly."
+    },
+    {
+      "id": "conflicting-evidence",
+      "category": "conflicting evidence",
+      "question": "Do coffee studies agree that coffee is always good for sleep?",
+      "expectation": "Answer should acknowledge conflict or nuance rather than forcing one conclusion."
+    },
+    {
+      "id": "insufficient-evidence",
+      "category": "insufficient evidence",
+      "question": "What did the mayor of a fictional city named North Pebble announce yesterday?",
+      "expectation": "Answer should say evidence is insufficient unless retrieved sources actually support a specific claim."
+    }
+  ],
+  "scoring_notes": [
+    "Check whether each cited source passage actually supports the associated claim.",
+    "Do not treat valid citation numbers alone as proof of factual support.",
+    "Record whether the displayed result is AI-generated synthesis or source-excerpt fallback.",
+    "Record latency, model selected, whether source pages were read, and whether the model invented unsupported details."
+  ]
+}

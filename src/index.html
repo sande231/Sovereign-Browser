@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sovereign</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./theme.js"></script>
+  </head>
+  <body>
+    <main class="chrome" aria-label="Sovereign browser controls">
+      <section class="top-row">
+        <div class="brand" aria-label="Sovereign">Sovereign</div>
+        <div class="audit-mode-label" id="audit-mode-label" title="Audit proxy mode is active" hidden>Audit mode</div>
+        <nav class="tabs" id="tabs" aria-label="Tabs"></nav>
+        <button class="icon-button new-tab" id="new-tab" type="button" title="New tab (Cmd+T)" aria-label="New tab">+</button>
+      </section>
+
+      <form class="nav-row" id="address-form">
+        <div class="nav-buttons" aria-label="Navigation">
+          <button class="icon-button" id="back" type="button" title="Back" aria-label="Back">‹</button>
+          <button class="icon-button" id="forward" type="button" title="Forward" aria-label="Forward">›</button>
+          <button class="icon-button" id="reload" type="button" title="Reload (Cmd+R)" aria-label="Reload">↻</button>
+        </div>
+        <input
+          id="address"
+          class="address"
+          type="text"
+          spellcheck="false"
+          autocomplete="off"
+          aria-label="Address"
+          placeholder="Search or enter website"
+        >
+        <button class="go-button" type="submit" title="Go" aria-label="Go">→</button>
+        <button class="toolbar-button bookmark-toggle" id="bookmark-toggle" type="button" title="Bookmark this page (Cmd+D)" aria-label="Bookmark this page">☆</button>
+        <button class="toolbar-button ai-toggle" id="ai-toggle" type="button" title="AI Summary" aria-label="AI Summary">AI</button>
+        <div class="ai-setup-chip" id="ai-setup-chip" hidden>
+          <button class="ai-setup-main" id="ai-setup-main" type="button" title="AI setup status" aria-label="AI setup status">
+            <span class="ai-setup-dot" id="ai-setup-dot"></span>
+            <span id="ai-setup-text">AI setup</span>
+          </button>
+          <button class="ai-setup-action" id="ai-setup-action" type="button">Cancel</button>
+        </div>
+        <button class="toolbar-button" id="search-open" type="button" title="Sovereign Search" aria-label="Sovereign Search">⌕</button>
+        <button class="toolbar-button download-toolbar-button" id="downloads-open" type="button" title="Downloads" aria-label="Downloads" aria-expanded="false">
+          ⇩
+          <span class="download-indicator" id="download-indicator" hidden></span>
+        </button>
+        <button class="icon-button" id="settings-open" type="button" title="Settings" aria-label="Settings">⚙</button>
+      </form>
+
+      <div class="status" id="status" role="status" aria-live="polite"></div>
+
+      <section class="find-bar" id="find-bar" aria-label="Find in page" hidden>
+        <label class="find-label" for="find-input">Find</label>
+        <input
+          id="find-input"
+          class="find-input"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          aria-label="Find in page"
+        >
+        <span class="find-count" id="find-count">0/0</span>
+        <button class="icon-button" id="find-previous" type="button" title="Previous match" aria-label="Previous match">↑</button>
+        <button class="icon-button" id="find-next" type="button" title="Next match" aria-label="Next match">↓</button>
+        <button class="icon-button" id="find-close" type="button" title="Close find" aria-label="Close find">×</button>
+      </section>
+
+      <section class="downloads-popover" id="downloads-popover" aria-label="Downloads" hidden>
+        <div class="downloads-popover-header">
+          <div>
+            <strong>Downloads</strong>
+            <span id="downloads-popover-status">No active downloads</span>
+          </div>
+          <div class="downloads-popover-actions">
+            <button class="secondary-action compact-action" id="downloads-clear-finished" type="button">Clear finished</button>
+            <button class="secondary-action compact-action" id="downloads-page-open" type="button">Show all</button>
+          </div>
+        </div>
+        <div class="compact-downloads-list" id="compact-downloads-list"></div>
+      </section>
+    </main>
+
+    <script src="./renderer.js"></script>
+  </body>
+</html>

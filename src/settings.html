@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sovereign Settings</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./theme.js"></script>
+  </head>
+  <body class="settings-body">
+    <main class="settings-page" aria-label="Sovereign Settings">
+      <header class="settings-header">
+        <h1>Settings</h1>
+        <p>Local browser preferences and technical configuration.</p>
+      </header>
+
+      <section class="settings-section" aria-label="Appearance">
+        <h2>Appearance</h2>
+        <label class="settings-label" for="theme-mode">Theme</label>
+        <select id="theme-mode" class="settings-select">
+          <option value="system">System</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </section>
+
+      <section class="settings-section" aria-label="Startup">
+        <h2>Startup</h2>
+        <label class="settings-check">
+          <input id="settings-restore-session" type="checkbox">
+          <span>Continue where you left off</span>
+        </label>
+        <p class="settings-help">Sovereign restores window and tab URLs only. It does not restore unsaved form text.</p>
+      </section>
+
+      <section class="settings-section" aria-label="Search backend">
+        <h2>Search Backend</h2>
+        <label class="settings-label" for="settings-endpoint">SearXNG endpoint</label>
+        <div class="endpoint-row">
+          <input id="settings-endpoint" class="endpoint-input" type="url" spellcheck="false" autocomplete="off">
+          <button class="secondary-action" id="save-settings-endpoint" type="button">Save</button>
+        </div>
+        <p class="settings-help">Search queries go to this local or private-network SearXNG endpoint. Upstream search engines may still receive queries from SearXNG.</p>
+      </section>
+
+      <section class="settings-section" aria-label="Local model">
+        <h2>Local Model</h2>
+        <label class="settings-check">
+          <input id="settings-auto-model" type="checkbox">
+          <span>Automatically download AI model</span>
+        </label>
+        <p class="settings-help">Enabled by default. Setup downloads the configured model files in the background and uses disk space; answer generation runs locally after setup. If setup is interrupted, retrying reuses cached files when WebLLM can, otherwise it starts the remaining setup again.</p>
+        <label class="settings-label" for="settings-model-select">AI model</label>
+        <select id="settings-model-select" class="settings-select"></select>
+        <p class="settings-help" id="settings-model-details">The current model remains available. Selecting a larger model does not download it until setup starts.</p>
+        <label class="settings-check settings-check-spaced">
+          <input id="settings-save-chats" type="checkbox">
+          <span>Save chats on this device</span>
+        </label>
+        <p class="settings-help">When disabled, Ask AI chat history stays in memory for the current tab only.</p>
+        <dl class="settings-facts">
+          <div>
+            <dt>Model</dt>
+            <dd id="settings-model-name">Checking...</dd>
+          </div>
+          <div>
+            <dt>Setup download</dt>
+            <dd id="settings-model-size"></dd>
+          </div>
+          <div>
+            <dt>Setup status</dt>
+            <dd id="settings-model-status">Checking...</dd>
+          </div>
+          <div>
+            <dt>Runtime</dt>
+            <dd>Answer generation and summaries run locally after setup. Sovereign does not use a cloud AI fallback.</dd>
+          </div>
+        </dl>
+        <div class="settings-inline-actions">
+          <button class="secondary-action" id="settings-start-model" type="button">Start setup</button>
+          <button class="secondary-action" id="settings-cancel-model" type="button">Cancel setup</button>
+        </div>
+        <p class="settings-help">Observed bottleneck so far: the small local model sometimes ignores citation instructions or emits invalid citation numbers. Sovereign validates the output and falls back to source excerpts when needed. A later model upgrade should be evaluated with measured citation reliability, latency, and memory use before changing models.</p>
+      </section>
+
+      <section class="settings-section" aria-label="Downloads">
+        <h2>Downloads</h2>
+        <label class="settings-check">
+          <input id="settings-ask-downloads" type="checkbox">
+          <span>Ask where to save each file before downloading</span>
+        </label>
+        <div class="settings-folder-row">
+          <div>
+            <div class="settings-label">Default download folder</div>
+            <p class="settings-help" id="settings-downloads-dir">Downloads save locally.</p>
+          </div>
+          <div class="settings-folder-actions">
+            <button class="secondary-action" id="choose-download-folder" type="button">Choose...</button>
+            <button class="secondary-action" id="reset-download-folder" type="button">Use Downloads</button>
+          </div>
+        </div>
+      </section>
+
+      <div class="search-status" id="settings-status" role="status" aria-live="polite"></div>
+    </main>
+
+    <script src="./settings.js"></script>
+  </body>
+</html>

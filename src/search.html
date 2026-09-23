@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sovereign Search</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./theme.js"></script>
+  </head>
+  <body class="search-body">
+    <main class="search-page search-page-results" aria-label="Sovereign Search">
+      <section class="search-main results-only-main">
+        <header class="search-header">
+          <div>
+            <h1>Sovereign Search</h1>
+            <p>Search queries go to your configured SearXNG endpoint and upstream search engines. Local AI is not loaded for ordinary search.</p>
+          </div>
+          <button class="secondary-action compact-action privacy-receipt-toggle" id="privacy-receipt-toggle" type="button" aria-expanded="false" aria-controls="privacy-receipt-panel">Shield 0</button>
+        </header>
+
+        <section class="privacy-receipt-panel" id="privacy-receipt-panel" aria-label="Network privacy receipt" hidden>
+          <div class="privacy-receipt-head">
+            <div>
+              <div class="section-title">Network receipt</div>
+              <p id="privacy-receipt-summary">No Search network activity yet.</p>
+            </div>
+            <div class="privacy-receipt-actions">
+              <label class="privacy-history-label" for="privacy-receipt-history">Receipt</label>
+              <select class="privacy-receipt-history" id="privacy-receipt-history"></select>
+              <button class="secondary-action compact-action" id="privacy-export-json" type="button">Export JSON</button>
+              <div class="privacy-cloud-check" id="privacy-cloud-check">✓ No data sent to cloud AI services</div>
+            </div>
+          </div>
+          <div class="privacy-table-wrap">
+            <table class="privacy-table">
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th>Host</th>
+                  <th>What was sent</th>
+                </tr>
+              </thead>
+              <tbody id="privacy-receipt-rows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <form class="search-form compact-search-form" id="search-form">
+          <label class="search-label" for="question">Search</label>
+          <div class="question-row ordinary-search-row">
+            <input id="question" class="question-input ordinary-search-input" maxlength="300" placeholder="Search the web" autocomplete="off" spellcheck="false">
+            <div class="question-actions ordinary-search-actions">
+              <button class="primary-action" id="search-button" type="submit">Search</button>
+              <button class="secondary-action" id="cancel-search" type="button" disabled>Stop</button>
+            </div>
+          </div>
+        </form>
+
+        <div class="search-status" id="search-status" role="status" aria-live="polite"></div>
+
+        <section class="search-results-section ordinary-results-section" aria-label="Search results">
+          <div class="section-title">Results</div>
+          <div class="results-list ordinary-results-list" id="results-list"></div>
+        </section>
+
+        <details class="activity-disclosure" id="activity-disclosure">
+          <summary>Search activity</summary>
+          <div class="activity-endpoint" id="activity-endpoint"></div>
+          <div class="activity-note">
+            This panel shows client-observed retrieval requests only. SearXNG may contact upstream search engines, depending on its configuration.
+          </div>
+          <div class="activity-list" id="activity-list"></div>
+        </details>
+      </section>
+    </main>
+
+    <script src="./search.js"></script>
+  </body>
+</html>

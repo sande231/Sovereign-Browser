@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sovereign Bookmarks</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./theme.js"></script>
+  </head>
+  <body class="bookmarks-body">
+    <main class="bookmarks-page" aria-label="Bookmarks">
+      <header class="bookmarks-header">
+        <h1>Bookmarks</h1>
+        <p>Saved pages are stored locally on this Mac.</p>
+      </header>
+
+      <section class="bookmarks-toolbar" aria-label="Bookmark controls">
+        <input
+          id="bookmarks-search"
+          class="bookmarks-search"
+          type="search"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="Search bookmarks"
+          aria-label="Search bookmarks"
+        >
+        <button class="secondary-action compact-action" id="open-current" type="button">Open in current tab</button>
+      </section>
+
+      <div class="search-status" id="bookmarks-status" role="status" aria-live="polite"></div>
+      <section class="bookmarks-list" id="bookmarks-list" aria-label="Bookmark list"></section>
+    </main>
+
+    <script src="./bookmarks.js"></script>
+  </body>
+</html>
