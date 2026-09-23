@@ -8,3 +8,4 @@ mitm-hosts.txt
 *.receipts.json
 searxng/.env
 .env
+searxng/.env
