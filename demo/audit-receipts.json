@@ -1,0 +1,656 @@
+{
+  "appVersion": "0.1.0",
+  "exportedAt": "2026-09-24T16:21:04.126Z",
+  "cloudAiHosts": [
+    "api.openai.com",
+    "api.anthropic.com",
+    "generativelanguage.googleapis.com",
+    "api.mistral.ai",
+    "api.groq.com",
+    "api.together.xyz",
+    "api.deepseek.com",
+    "api.perplexity.ai",
+    "openrouter.ai",
+    "api.cohere.ai"
+  ],
+  "note": "Privacy receipts are in-memory diagnostics. Entries omit cookies, auth headers, and request bodies.",
+  "ignoredSchemes": [
+    "file:",
+    "devtools:",
+    "blob:",
+    "data:",
+    "sovereign:"
+  ],
+  "receipts": [
+    {
+      "id": "1790266746518-pca5epnbvod",
+      "type": "ask",
+      "label": "Media image retrieval",
+      "query": "Golden Gate Bridge",
+      "localOnly": false,
+      "startedAt": "2026-09-24T16:19:06.524Z",
+      "updatedAt": "2026-09-24T16:19:10.412Z",
+      "summary": "Image/media hosts contacted: 127.0.0.1:8080, cdn.britannica.com, upload.wikimedia.org, thesologlobetrotter.com · Other trusted-app requests: ts4.mm.bing.net, thumb.wikimedia.org, ts3.mm.bing.net · AI generated locally",
+      "cloudAi": {
+        "ok": true,
+        "message": "✓ No data sent to cloud AI services",
+        "hosts": []
+      },
+      "entries": [
+        {
+          "timestamp": "2026-09-24T16:19:06.525Z",
+          "category": "image",
+          "method": "GET",
+          "host": "127.0.0.1:8080",
+          "url": "http://127.0.0.1:8080/search?q=Golden+Gate+Bridge&format=json&language=en-US&safesearch=1&categories=images",
+          "whatWasSent": "Image search query: Golden Gate Bridge"
+        },
+        {
+          "timestamp": "2026-09-24T16:19:09.964Z",
+          "category": "image",
+          "method": "HEAD",
+          "host": "cdn.britannica.com",
+          "url": "https://cdn.britannica.com/13/77413-050-95217C0B/Golden-Gate-Bridge-San-Francisco.jpg",
+          "whatWasSent": "media validation request – no query, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T16:19:09.966Z",
+          "category": "image",
+          "method": "HEAD",
+          "host": "upload.wikimedia.org",
+          "url": "https://upload.wikimedia.org/wikipedia/commons/a/ac/Golden_Gate_Bridge_Yang_Ming_Line.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+          "whatWasSent": "media validation request – no query, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T16:19:09.967Z",
+          "category": "image",
+          "method": "HEAD",
+          "host": "cdn.britannica.com",
+          "url": "https://cdn.britannica.com/95/94195-050-FCBF777E/Golden-Gate-Bridge-San-Francisco.jpg",
+          "whatWasSent": "media validation request – no query, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T16:19:09.969Z",
+          "category": "image",
+          "method": "HEAD",
+          "host": "upload.wikimedia.org",
+          "url": "https://upload.wikimedia.org/wikipedia/commons/2/20/Golden_Gate_Bridge_and_San_Francisco_skyline_from_Hawk_Hill_at_Blue_Hour_dllu.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+          "whatWasSent": "media validation request – no query, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T16:19:10.024Z",
+          "category": "image",
+          "method": "HEAD",
+          "host": "thesologlobetrotter.com",
+          "url": "https://thesologlobetrotter.com/wp-content/uploads/2022/06/Golden-Gate-Bridge-Viewpoints-scaled.jpg",
+          "whatWasSent": "media validation request – no query, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T16:19:10.410Z",
+          "category": "other",
+          "method": "GET",
+          "host": "ts4.mm.bing.net",
+          "url": "https://ts4.mm.bing.net/th?id=OIP.9XsqX3Ps1eIb0pi2tSYCowHaFa&pid=15.1",
+          "whatWasSent": "trusted app/AI request – no cookies, auth headers, request body, prompt, or AI output logged"
+        },
+        {
+          "timestamp": "2026-09-24T16:19:10.411Z",
+          "category": "other",
+          "method": "GET",
+          "host": "thumb.wikimedia.org",
+          "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ac/Golden_Gate_Bridge_Yang_Ming_Line.jpg/250px-Golden_Gate_Bridge_Yang_Ming_Line.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+          "whatWasSent": "trusted app/AI request – no cookies, auth headers, request body, prompt, or AI output logged"
+        },
+        {
+          "timestamp": "2026-09-24T16:19:10.411Z",
+          "category": "other",
+          "method": "GET",
+          "host": "ts3.mm.bing.net",
+          "url": "https://ts3.mm.bing.net/th?id=OIP.ROM7WgA640Yt0hyARGyl5AHaFI&pid=15.1",
+          "whatWasSent": "trusted app/AI request – no cookies, auth headers, request body, prompt, or AI output logged"
+        },
+        {
+          "timestamp": "2026-09-24T16:19:10.411Z",
+          "category": "other",
+          "method": "GET",
+          "host": "ts4.mm.bing.net",
+          "url": "https://ts4.mm.bing.net/th?id=OIP.NymqoyUx0rNGTOMYWrSTHQHaEK&pid=15.1",
+          "whatWasSent": "trusted app/AI request – no cookies, auth headers, request body, prompt, or AI output logged"
+        },
+        {
+          "timestamp": "2026-09-24T16:19:10.412Z",
+          "category": "other",
+          "method": "GET",
+          "host": "thumb.wikimedia.org",
+          "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/2/20/Golden_Gate_Bridge_and_San_Francisco_skyline_from_Hawk_Hill_at_Blue_Hour_dllu.jpg/960px-Golden_Gate_Bridge_and_San_Francisco_skyline_from_Hawk_Hill_at_Blue_Hour_dllu.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+          "whatWasSent": "trusted app/AI request – no cookies, auth headers, request body, prompt, or AI output logged"
+        }
+      ]
+    },
+    {
+      "id": "1790266472875-8y2yg1nnbsq",
+      "type": "ask",
+      "label": "Ask AI web retrieval",
+      "query": "what is webGPU?",
+      "localOnly": false,
+      "startedAt": "2026-09-24T16:14:32.879Z",
+      "updatedAt": "2026-09-24T16:14:37.351Z",
+      "summary": "Query sent to 127.0.0.1:8080 (SearXNG) · 3 source pages fetched · AI generated locally",
+      "cloudAi": {
+        "ok": true,
+        "message": "✓ No data sent to cloud AI services",
+        "hosts": []
+      },
+      "entries": [
+        {
+          "timestamp": "2026-09-24T16:14:32.880Z",
+          "category": "search",
+          "method": "GET",
+          "host": "127.0.0.1:8080",
+          "url": "http://127.0.0.1:8080/search?q=what+is+webGPU%3F&format=json&language=en-US&safesearch=1",
+          "whatWasSent": "Search query: what is webGPU?"
+        },
+        {
+          "timestamp": "2026-09-24T16:14:35.923Z",
+          "category": "source-page",
+          "method": "GET",
+          "host": "en.wikipedia.org",
+          "url": "https://en.wikipedia.org/wiki/WebGPU",
+          "whatWasSent": "page fetch – no query or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T16:14:37.041Z",
+          "category": "source-page",
+          "method": "GET",
+          "host": "developer.mozilla.org",
+          "url": "https://developer.mozilla.org/en-US/docs/Web/API/WebGPU_API",
+          "whatWasSent": "page fetch – no query or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T16:14:37.351Z",
+          "category": "source-page",
+          "method": "GET",
+          "host": "developer.chrome.com",
+          "url": "https://developer.chrome.com/docs/web-platform/webgpu/overview",
+          "whatWasSent": "page fetch – no query or AI output sent"
+        }
+      ]
+    },
+    {
+      "id": "1790266415455-yg8bg14vvz",
+      "type": "ask",
+      "label": "Ask AI",
+      "query": "what is webGPU?",
+      "localOnly": true,
+      "startedAt": "2026-09-24T16:13:35.455Z",
+      "updatedAt": "2026-09-24T16:13:35.455Z",
+      "summary": "Nothing left this device: answer generated locally",
+      "cloudAi": {
+        "ok": true,
+        "message": "✓ No data sent to cloud AI services",
+        "hosts": []
+      },
+      "entries": []
+    },
+    {
+      "id": "1790266199566-qlrguye234q",
+      "type": "search",
+      "label": "Search",
+      "query": "local LLM privacy",
+      "localOnly": false,
+      "startedAt": "2026-09-24T16:09:59.567Z",
+      "updatedAt": "2026-09-24T16:09:59.568Z",
+      "summary": "Query sent to 127.0.0.1:8080 (SearXNG)",
+      "cloudAi": {
+        "ok": true,
+        "message": "✓ No data sent to cloud AI services",
+        "hosts": []
+      },
+      "entries": [
+        {
+          "timestamp": "2026-09-24T16:09:59.568Z",
+          "category": "search",
+          "method": "GET",
+          "host": "127.0.0.1:8080",
+          "url": "http://127.0.0.1:8080/search?q=local+LLM+privacy&format=json&language=en-US&safesearch=1",
+          "whatWasSent": "Search query: local LLM privacy"
+        }
+      ]
+    },
+    {
+      "id": "background-1790264216841-wr9xoepj7zq",
+      "type": "background",
+      "label": "Background",
+      "query": "",
+      "localOnly": false,
+      "startedAt": "2026-09-24T15:36:56.841Z",
+      "updatedAt": "2026-09-24T15:37:15.650Z",
+      "summary": "Background app/AI network activity · Model files requested from huggingface.co, raw.githubusercontent.com, us.aws.cdn.hf.co",
+      "cloudAi": {
+        "ok": true,
+        "message": "✓ No data sent to cloud AI services",
+        "hosts": []
+      },
+      "entries": [
+        {
+          "timestamp": "2026-09-24T15:36:56.842Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/mlc-chat-config.json",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:36:56.984Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/api/resolve-cache/models/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/2a37b0a5ecb622d51ddc2fac74de0b95872affd7/mlc-chat-config.json?%2Fmlc-ai%2FLlama-3.2-1B-Instruct-q4f16_1-MLC%2Fresolve%2Fmain%2Fmlc-chat-config.json=&etag=%228d9ffe829f2787c0b809ab20d4d93cd00c4385a0%22",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:36:57.019Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "raw.githubusercontent.com",
+          "url": "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_84/base/Llama-3.2-1B-Instruct-q4f16_1_cs1k-webgpu.wasm",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:36:57.591Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/tokenizer.json",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:36:57.624Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/api/resolve-cache/models/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/2a37b0a5ecb622d51ddc2fac74de0b95872affd7/tokenizer.json?%2Fmlc-ai%2FLlama-3.2-1B-Instruct-q4f16_1-MLC%2Fresolve%2Fmain%2Ftokenizer.json=&etag=%225cc5f00a5b203e90a27a3bd60d1ec393b07971e8%22",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:36:58.406Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/tensor-cache.json",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:36:58.440Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/api/resolve-cache/models/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/2a37b0a5ecb622d51ddc2fac74de0b95872affd7/tensor-cache.json?%2Fmlc-ai%2FLlama-3.2-1B-Instruct-q4f16_1-MLC%2Fresolve%2Fmain%2Ftensor-cache.json=&etag=%22bb1512a5080d3ea19199445f7461882c70e5c147%22",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:36:58.480Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/params_shard_0.bin",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:36:58.480Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/params_shard_5.bin",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:36:58.480Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/params_shard_10.bin",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:36:58.480Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/params_shard_15.bin",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:36:58.512Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "us.aws.cdn.hf.co",
+          "url": "https://us.aws.cdn.hf.co/xet-bridge-us/66f45fcce9d18c8ce61c987b/510c88261dcda4d35848d6b56d4092c190ff234ed3d2ba10c73e1af2787273c6?X-Xet-Cas-Uid=public&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27params_shard_0.bin%3B+filename%3D%22params_shard_0.bin%22%3B&response-content-type=application%2Foctet-stream&user_id=public&Expires=1790267818&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjZmNDVmY2NlOWQxOGM4Y2U2MWM5ODdiLzUxMGM4ODI2MWRjZGE0ZDM1ODQ4ZDZiNTZkNDA5MmMxOTBmZjIzNGVkM2QyYmExMGM3M2UxYWYyNzg3MjczYzZcXD9YLVhldC1DYXMtVWlkPXB1YmxpYyZyZXNwb25zZS1jb250ZW50LWRpc3Bvc2l0aW9uPWlubGluZSUzQitmaWxlbmFtZSUyQSUzRFVURi04JTI3JTI3cGFyYW1zX3NoYXJkXzAuYmluJTNCK2ZpbGVuYW1lJTNEJTIycGFyYW1zX3NoYXJkXzAuYmluJTIyJTNCJnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1hcHBsaWNhdGlvbiUyRm9jdGV0LXN0cmVhbSZ1c2VyX2lkPXB1YmxpYyIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiRXBvY2hUaW1lIjoxNzkwMjY3ODE4fX19XX0_&Signature=MEUCIQDWPEpfxEv%7EVblsM7ZAvzVU3BDyI7W28w0VpXh0F4DY-QIgUL7u9xBbiG77Tc%7EcmR279Ij-gd5QsD9DQt4wDCyPO44_&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F&Hash-Algorithm=SHA256",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:36:58.521Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "us.aws.cdn.hf.co",
+          "url": "https://us.aws.cdn.hf.co/xet-bridge-us/66f45fcce9d18c8ce61c987b/c8eda8237db4d08823fceb6d1b0c8e21b162c0449a793198cf7a2b2349cc1327?X-Xet-Cas-Uid=public&user_id=public&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27params_shard_10.bin%3B+filename%3D%22params_shard_10.bin%22%3B&response-content-type=application%2Foctet-stream&Expires=1790267818&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjZmNDVmY2NlOWQxOGM4Y2U2MWM5ODdiL2M4ZWRhODIzN2RiNGQwODgyM2ZjZWI2ZDFiMGM4ZTIxYjE2MmMwNDQ5YTc5MzE5OGNmN2EyYjIzNDljYzEzMjdcXD9YLVhldC1DYXMtVWlkPXB1YmxpYyZ1c2VyX2lkPXB1YmxpYyZyZXNwb25zZS1jb250ZW50LWRpc3Bvc2l0aW9uPWlubGluZSUzQitmaWxlbmFtZSUyQSUzRFVURi04JTI3JTI3cGFyYW1zX3NoYXJkXzEwLmJpbiUzQitmaWxlbmFtZSUzRCUyMnBhcmFtc19zaGFyZF8xMC5iaW4lMjIlM0ImcmVzcG9uc2UtY29udGVudC10eXBlPWFwcGxpY2F0aW9uJTJGb2N0ZXQtc3RyZWFtIiwiQ29uZGl0aW9uIjp7IkRhdGVMZXNzVGhhbiI6eyJFcG9jaFRpbWUiOjE3OTAyNjc4MTh9fX1dfQ__&Signature=MEQCIAmHpn8zfetUBHA2uSblVM9InVZ8Ivvi-cEfic3mwNHpAiB7S2gmtP-hh5MtwJi3ose9xuWquaRgRifN6pI%7EHAVIIw__&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F&Hash-Algorithm=SHA256",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:36:58.522Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "us.aws.cdn.hf.co",
+          "url": "https://us.aws.cdn.hf.co/xet-bridge-us/66f45fcce9d18c8ce61c987b/680221474f100b722eb77fc0b5d12ec092118b680f29b12b87bca5c8df0a5238?response-content-type=application%2Foctet-stream&X-Xet-Cas-Uid=public&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27params_shard_15.bin%3B+filename%3D%22params_shard_15.bin%22%3B&user_id=public&Expires=1790267818&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjZmNDVmY2NlOWQxOGM4Y2U2MWM5ODdiLzY4MDIyMTQ3NGYxMDBiNzIyZWI3N2ZjMGI1ZDEyZWMwOTIxMThiNjgwZjI5YjEyYjg3YmNhNWM4ZGYwYTUyMzhcXD9yZXNwb25zZS1jb250ZW50LXR5cGU9YXBwbGljYXRpb24lMkZvY3RldC1zdHJlYW0mWC1YZXQtQ2FzLVVpZD1wdWJsaWMmcmVzcG9uc2UtY29udGVudC1kaXNwb3NpdGlvbj1pbmxpbmUlM0IrZmlsZW5hbWUlMkElM0RVVEYtOCUyNyUyN3BhcmFtc19zaGFyZF8xNS5iaW4lM0IrZmlsZW5hbWUlM0QlMjJwYXJhbXNfc2hhcmRfMTUuYmluJTIyJTNCJnVzZXJfaWQ9cHVibGljIiwiQ29uZGl0aW9uIjp7IkRhdGVMZXNzVGhhbiI6eyJFcG9jaFRpbWUiOjE3OTAyNjc4MTh9fX1dfQ__&Signature=MEUCIE%7ESqe8hWNMQ4FoWjsX6NGwEibCPTSw7eZnc4fhVxTZ7AiEAi9BscCA3VmxJG9qqX7H-q1wwRIlYte6W8bxntOA-t-Q_&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F&Hash-Algorithm=SHA256",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:36:58.523Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "us.aws.cdn.hf.co",
+          "url": "https://us.aws.cdn.hf.co/xet-bridge-us/66f45fcce9d18c8ce61c987b/97cc470c771b6a6844245f216314b191577b5b40b66bd65b56270d199521afe6?X-Xet-Cas-Uid=public&user_id=public&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27params_shard_5.bin%3B+filename%3D%22params_shard_5.bin%22%3B&response-content-type=application%2Foctet-stream&Expires=1790267818&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjZmNDVmY2NlOWQxOGM4Y2U2MWM5ODdiLzk3Y2M0NzBjNzcxYjZhNjg0NDI0NWYyMTYzMTRiMTkxNTc3YjViNDBiNjZiZDY1YjU2MjcwZDE5OTUyMWFmZTZcXD9YLVhldC1DYXMtVWlkPXB1YmxpYyZ1c2VyX2lkPXB1YmxpYyZyZXNwb25zZS1jb250ZW50LWRpc3Bvc2l0aW9uPWlubGluZSUzQitmaWxlbmFtZSUyQSUzRFVURi04JTI3JTI3cGFyYW1zX3NoYXJkXzUuYmluJTNCK2ZpbGVuYW1lJTNEJTIycGFyYW1zX3NoYXJkXzUuYmluJTIyJTNCJnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1hcHBsaWNhdGlvbiUyRm9jdGV0LXN0cmVhbSIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiRXBvY2hUaW1lIjoxNzkwMjY3ODE4fX19XX0_&Signature=MEUCIBAaQz4tMceK-GJdgNu5J53nhUgo09-9MEsxx679DUXuAiEA614G%7EcA%7E7xR%7E5KyZT2pV6%7E3mHFQ2vkj87tyVg4T%7EW9U_&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F&Hash-Algorithm=SHA256",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:36:59.979Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/params_shard_16.bin",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:00.024Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "us.aws.cdn.hf.co",
+          "url": "https://us.aws.cdn.hf.co/xet-bridge-us/66f45fcce9d18c8ce61c987b/b6e73db5768b19a5c4b8d7d53da3bf0bd590dc6ebf94cf44dfe6f9a729e7ebc8?response-content-type=application%2Foctet-stream&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27params_shard_16.bin%3B+filename%3D%22params_shard_16.bin%22%3B&X-Xet-Cas-Uid=public&user_id=public&Expires=1790267820&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjZmNDVmY2NlOWQxOGM4Y2U2MWM5ODdiL2I2ZTczZGI1NzY4YjE5YTVjNGI4ZDdkNTNkYTNiZjBiZDU5MGRjNmViZjk0Y2Y0NGRmZTZmOWE3MjllN2ViYzhcXD9yZXNwb25zZS1jb250ZW50LXR5cGU9YXBwbGljYXRpb24lMkZvY3RldC1zdHJlYW0mcmVzcG9uc2UtY29udGVudC1kaXNwb3NpdGlvbj1pbmxpbmUlM0IrZmlsZW5hbWUlMkElM0RVVEYtOCUyNyUyN3BhcmFtc19zaGFyZF8xNi5iaW4lM0IrZmlsZW5hbWUlM0QlMjJwYXJhbXNfc2hhcmRfMTYuYmluJTIyJTNCJlgtWGV0LUNhcy1VaWQ9cHVibGljJnVzZXJfaWQ9cHVibGljIiwiQ29uZGl0aW9uIjp7IkRhdGVMZXNzVGhhbiI6eyJFcG9jaFRpbWUiOjE3OTAyNjc4MjB9fX1dfQ__&Signature=MEQCICjf6CmBm3F6Wtcu6SDEHdOBK6-N1LGm8vFGuOT2jJnqAiAUSuyXDCJdsCjfp9l-7GVEvFMHFa9kDf-yINVFI3QnGg__&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F&Hash-Algorithm=SHA256",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:00.274Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/params_shard_6.bin",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:00.310Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "us.aws.cdn.hf.co",
+          "url": "https://us.aws.cdn.hf.co/xet-bridge-us/66f45fcce9d18c8ce61c987b/9f8d4340ef2147a4d0b62aa06a79f75188b96b4259c96b8406691c60439b37a2?response-content-disposition=inline%3B+filename*%3DUTF-8%27%27params_shard_6.bin%3B+filename%3D%22params_shard_6.bin%22%3B&response-content-type=application%2Foctet-stream&user_id=public&X-Xet-Cas-Uid=public&Expires=1790267820&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjZmNDVmY2NlOWQxOGM4Y2U2MWM5ODdiLzlmOGQ0MzQwZWYyMTQ3YTRkMGI2MmFhMDZhNzlmNzUxODhiOTZiNDI1OWM5NmI4NDA2NjkxYzYwNDM5YjM3YTJcXD9yZXNwb25zZS1jb250ZW50LWRpc3Bvc2l0aW9uPWlubGluZSUzQitmaWxlbmFtZSUyQSUzRFVURi04JTI3JTI3cGFyYW1zX3NoYXJkXzYuYmluJTNCK2ZpbGVuYW1lJTNEJTIycGFyYW1zX3NoYXJkXzYuYmluJTIyJTNCJnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1hcHBsaWNhdGlvbiUyRm9jdGV0LXN0cmVhbSZ1c2VyX2lkPXB1YmxpYyZYLVhldC1DYXMtVWlkPXB1YmxpYyIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiRXBvY2hUaW1lIjoxNzkwMjY3ODIwfX19XX0_&Signature=MEYCIQCtF%7E6CYubkoBwjhNe1HMzrGA21NF5kkf0zpLrxCz5q-wIhAPNB2Nnzzot9x8X347tbCjKtRhVJppvJIEdyKGXkX4Rz&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F&Hash-Algorithm=SHA256",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:00.580Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/params_shard_11.bin",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:00.612Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "us.aws.cdn.hf.co",
+          "url": "https://us.aws.cdn.hf.co/xet-bridge-us/66f45fcce9d18c8ce61c987b/8cdadfb64facc1dad17a1f5a5a34816b7ef333dc053f34c226e43e83d33f9d82?response-content-disposition=inline%3B+filename*%3DUTF-8%27%27params_shard_11.bin%3B+filename%3D%22params_shard_11.bin%22%3B&user_id=public&response-content-type=application%2Foctet-stream&X-Xet-Cas-Uid=public&Expires=1790267820&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjZmNDVmY2NlOWQxOGM4Y2U2MWM5ODdiLzhjZGFkZmI2NGZhY2MxZGFkMTdhMWY1YTVhMzQ4MTZiN2VmMzMzZGMwNTNmMzRjMjI2ZTQzZTgzZDMzZjlkODJcXD9yZXNwb25zZS1jb250ZW50LWRpc3Bvc2l0aW9uPWlubGluZSUzQitmaWxlbmFtZSUyQSUzRFVURi04JTI3JTI3cGFyYW1zX3NoYXJkXzExLmJpbiUzQitmaWxlbmFtZSUzRCUyMnBhcmFtc19zaGFyZF8xMS5iaW4lMjIlM0ImdXNlcl9pZD1wdWJsaWMmcmVzcG9uc2UtY29udGVudC10eXBlPWFwcGxpY2F0aW9uJTJGb2N0ZXQtc3RyZWFtJlgtWGV0LUNhcy1VaWQ9cHVibGljIiwiQ29uZGl0aW9uIjp7IkRhdGVMZXNzVGhhbiI6eyJFcG9jaFRpbWUiOjE3OTAyNjc4MjB9fX1dfQ__&Signature=MEYCIQD5JEbgnU5TdSxTX4yH9rqMQRg7kqBE3jVe18x3rrxCwQIhAKKWCpd3KQE-lYG42dJFcqXEW4WLNXWqW5AZejRquhbz&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F&Hash-Algorithm=SHA256",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:02.014Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/params_shard_17.bin",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:02.051Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "us.aws.cdn.hf.co",
+          "url": "https://us.aws.cdn.hf.co/xet-bridge-us/66f45fcce9d18c8ce61c987b/8c9f572bc5e0553617998fd45b211c0658894733a16fef44dd9e570649fb6579?response-content-disposition=inline%3B+filename*%3DUTF-8%27%27params_shard_17.bin%3B+filename%3D%22params_shard_17.bin%22%3B&response-content-type=application%2Foctet-stream&X-Xet-Cas-Uid=public&user_id=public&Expires=1790267822&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjZmNDVmY2NlOWQxOGM4Y2U2MWM5ODdiLzhjOWY1NzJiYzVlMDU1MzYxNzk5OGZkNDViMjExYzA2NTg4OTQ3MzNhMTZmZWY0NGRkOWU1NzA2NDlmYjY1NzlcXD9yZXNwb25zZS1jb250ZW50LWRpc3Bvc2l0aW9uPWlubGluZSUzQitmaWxlbmFtZSUyQSUzRFVURi04JTI3JTI3cGFyYW1zX3NoYXJkXzE3LmJpbiUzQitmaWxlbmFtZSUzRCUyMnBhcmFtc19zaGFyZF8xNy5iaW4lMjIlM0ImcmVzcG9uc2UtY29udGVudC10eXBlPWFwcGxpY2F0aW9uJTJGb2N0ZXQtc3RyZWFtJlgtWGV0LUNhcy1VaWQ9cHVibGljJnVzZXJfaWQ9cHVibGljIiwiQ29uZGl0aW9uIjp7IkRhdGVMZXNzVGhhbiI6eyJFcG9jaFRpbWUiOjE3OTAyNjc4MjJ9fX1dfQ__&Signature=MEUCIQCddzEZLf3gQdg92VKNIml%7EtH-ZLpEGkgD01S%7EKxIDM8wIgApL%7EDkz0k0EtlKTM3fbowoELETXH78THewWdDyOKeVs_&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F&Hash-Algorithm=SHA256",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:03.377Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/params_shard_18.bin",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:03.412Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "us.aws.cdn.hf.co",
+          "url": "https://us.aws.cdn.hf.co/xet-bridge-us/66f45fcce9d18c8ce61c987b/3c254a2900557643ba4a58ef0bdda811c609db573aae8188c55e8f77a7f6cbda?X-Xet-Cas-Uid=public&response-content-type=application%2Foctet-stream&user_id=public&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27params_shard_18.bin%3B+filename%3D%22params_shard_18.bin%22%3B&Expires=1790267823&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjZmNDVmY2NlOWQxOGM4Y2U2MWM5ODdiLzNjMjU0YTI5MDA1NTc2NDNiYTRhNThlZjBiZGRhODExYzYwOWRiNTczYWFlODE4OGM1NWU4Zjc3YTdmNmNiZGFcXD9YLVhldC1DYXMtVWlkPXB1YmxpYyZyZXNwb25zZS1jb250ZW50LXR5cGU9YXBwbGljYXRpb24lMkZvY3RldC1zdHJlYW0mdXNlcl9pZD1wdWJsaWMmcmVzcG9uc2UtY29udGVudC1kaXNwb3NpdGlvbj1pbmxpbmUlM0IrZmlsZW5hbWUlMkElM0RVVEYtOCUyNyUyN3BhcmFtc19zaGFyZF8xOC5iaW4lM0IrZmlsZW5hbWUlM0QlMjJwYXJhbXNfc2hhcmRfMTguYmluJTIyJTNCIiwiQ29uZGl0aW9uIjp7IkRhdGVMZXNzVGhhbiI6eyJFcG9jaFRpbWUiOjE3OTAyNjc4MjN9fX1dfQ__&Signature=MEYCIQCskv32hQgvaiuwJDEQHPKEpqly4ncTC9cnj8Z2YPbIKgIhANESx30sCAhPuHUop5qNA2qygYMmVlYEIxU8WrlCUmrD&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F&Hash-Algorithm=SHA256",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:03.489Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/params_shard_7.bin",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:03.531Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "us.aws.cdn.hf.co",
+          "url": "https://us.aws.cdn.hf.co/xet-bridge-us/66f45fcce9d18c8ce61c987b/0a73e1719412ef414fa6b5ea3e3a35c728e6b09de5ba32de2481c5dc9dda1d0e?user_id=public&X-Xet-Cas-Uid=public&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27params_shard_7.bin%3B+filename%3D%22params_shard_7.bin%22%3B&response-content-type=application%2Foctet-stream&Expires=1790267823&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjZmNDVmY2NlOWQxOGM4Y2U2MWM5ODdiLzBhNzNlMTcxOTQxMmVmNDE0ZmE2YjVlYTNlM2EzNWM3MjhlNmIwOWRlNWJhMzJkZTI0ODFjNWRjOWRkYTFkMGVcXD91c2VyX2lkPXB1YmxpYyZYLVhldC1DYXMtVWlkPXB1YmxpYyZyZXNwb25zZS1jb250ZW50LWRpc3Bvc2l0aW9uPWlubGluZSUzQitmaWxlbmFtZSUyQSUzRFVURi04JTI3JTI3cGFyYW1zX3NoYXJkXzcuYmluJTNCK2ZpbGVuYW1lJTNEJTIycGFyYW1zX3NoYXJkXzcuYmluJTIyJTNCJnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1hcHBsaWNhdGlvbiUyRm9jdGV0LXN0cmVhbSIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiRXBvY2hUaW1lIjoxNzkwMjY3ODIzfX19XX0_&Signature=MEUCIQDb7RpAwojjh6J3nZNbnagyP5Pt%7ETsNDEuYZy%7EBcasWBgIgCSfQeuVgXjFMmE9rmSFjhh77%7EAuD0jZ5v2cR1brSkTE_&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F&Hash-Algorithm=SHA256",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:04.099Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/params_shard_12.bin",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:04.140Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "us.aws.cdn.hf.co",
+          "url": "https://us.aws.cdn.hf.co/xet-bridge-us/66f45fcce9d18c8ce61c987b/caaea4773238007ab4f5c4374dc891f7da332cb3f271e6275bbffcf1d8062d1f?user_id=public&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27params_shard_12.bin%3B+filename%3D%22params_shard_12.bin%22%3B&response-content-type=application%2Foctet-stream&X-Xet-Cas-Uid=public&Expires=1790267824&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjZmNDVmY2NlOWQxOGM4Y2U2MWM5ODdiL2NhYWVhNDc3MzIzODAwN2FiNGY1YzQzNzRkYzg5MWY3ZGEzMzJjYjNmMjcxZTYyNzViYmZmY2YxZDgwNjJkMWZcXD91c2VyX2lkPXB1YmxpYyZyZXNwb25zZS1jb250ZW50LWRpc3Bvc2l0aW9uPWlubGluZSUzQitmaWxlbmFtZSUyQSUzRFVURi04JTI3JTI3cGFyYW1zX3NoYXJkXzEyLmJpbiUzQitmaWxlbmFtZSUzRCUyMnBhcmFtc19zaGFyZF8xMi5iaW4lMjIlM0ImcmVzcG9uc2UtY29udGVudC10eXBlPWFwcGxpY2F0aW9uJTJGb2N0ZXQtc3RyZWFtJlgtWGV0LUNhcy1VaWQ9cHVibGljIiwiQ29uZGl0aW9uIjp7IkRhdGVMZXNzVGhhbiI6eyJFcG9jaFRpbWUiOjE3OTAyNjc4MjR9fX1dfQ__&Signature=MEUCIHBvXUvj71nsdvIXfRz7IZOJBcRvn9Mo6Zut85k8r7R7AiEA9WQv59tjxAH4K9H2QWUZEUxX7ppsUFTRFJ5ImhwvzLY_&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F&Hash-Algorithm=SHA256",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:04.155Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/params_shard_8.bin",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:04.194Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "us.aws.cdn.hf.co",
+          "url": "https://us.aws.cdn.hf.co/xet-bridge-us/66f45fcce9d18c8ce61c987b/59262492a4e5ec9de1e85da91e00a4acac8e05f22f95dadadea355008ad65fcf?response-content-type=application%2Foctet-stream&X-Xet-Cas-Uid=public&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27params_shard_8.bin%3B+filename%3D%22params_shard_8.bin%22%3B&user_id=public&Expires=1790267824&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjZmNDVmY2NlOWQxOGM4Y2U2MWM5ODdiLzU5MjYyNDkyYTRlNWVjOWRlMWU4NWRhOTFlMDBhNGFjYWM4ZTA1ZjIyZjk1ZGFkYWRlYTM1NTAwOGFkNjVmY2ZcXD9yZXNwb25zZS1jb250ZW50LXR5cGU9YXBwbGljYXRpb24lMkZvY3RldC1zdHJlYW0mWC1YZXQtQ2FzLVVpZD1wdWJsaWMmcmVzcG9uc2UtY29udGVudC1kaXNwb3NpdGlvbj1pbmxpbmUlM0IrZmlsZW5hbWUlMkElM0RVVEYtOCUyNyUyN3BhcmFtc19zaGFyZF84LmJpbiUzQitmaWxlbmFtZSUzRCUyMnBhcmFtc19zaGFyZF84LmJpbiUyMiUzQiZ1c2VyX2lkPXB1YmxpYyIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiRXBvY2hUaW1lIjoxNzkwMjY3ODI0fX19XX0_&Signature=MEYCIQDbbM6OCiFdtAjbjjZJp-RRAgmvOmor2Wd39QinoHjQPQIhAM5Rs6bYo6Ni0TDEu3G8LiEplapjgjSYV-5nsh4IHgZa&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F&Hash-Algorithm=SHA256",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:06.474Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/params_shard_9.bin",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:06.514Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "us.aws.cdn.hf.co",
+          "url": "https://us.aws.cdn.hf.co/xet-bridge-us/66f45fcce9d18c8ce61c987b/17926460510d990a44f0036aa8649614308d8dbe1a89bc78cde410f82e05424a?response-content-type=application%2Foctet-stream&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27params_shard_9.bin%3B+filename%3D%22params_shard_9.bin%22%3B&user_id=public&X-Xet-Cas-Uid=public&Expires=1790267826&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjZmNDVmY2NlOWQxOGM4Y2U2MWM5ODdiLzE3OTI2NDYwNTEwZDk5MGE0NGYwMDM2YWE4NjQ5NjE0MzA4ZDhkYmUxYTg5YmM3OGNkZTQxMGY4MmUwNTQyNGFcXD9yZXNwb25zZS1jb250ZW50LXR5cGU9YXBwbGljYXRpb24lMkZvY3RldC1zdHJlYW0mcmVzcG9uc2UtY29udGVudC1kaXNwb3NpdGlvbj1pbmxpbmUlM0IrZmlsZW5hbWUlMkElM0RVVEYtOCUyNyUyN3BhcmFtc19zaGFyZF85LmJpbiUzQitmaWxlbmFtZSUzRCUyMnBhcmFtc19zaGFyZF85LmJpbiUyMiUzQiZ1c2VyX2lkPXB1YmxpYyZYLVhldC1DYXMtVWlkPXB1YmxpYyIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiRXBvY2hUaW1lIjoxNzkwMjY3ODI2fX19XX0_&Signature=MEYCIQC43wiZxUZsoJhfqnG3sCqcPP5VIFPbhy1yrTslWGa11wIhAK1WIrme8Rv83y09cxBwYdC6X0j8L3w8p8IoVgU2Rdu8&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F&Hash-Algorithm=SHA256",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:06.623Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/params_shard_19.bin",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:06.658Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "us.aws.cdn.hf.co",
+          "url": "https://us.aws.cdn.hf.co/xet-bridge-us/66f45fcce9d18c8ce61c987b/ce26fff0f3f52eca9d59b9f7fce3e9945fdedec667d624fe611d8dcf950f1f80?response-content-type=application%2Foctet-stream&X-Xet-Cas-Uid=public&user_id=public&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27params_shard_19.bin%3B+filename%3D%22params_shard_19.bin%22%3B&Expires=1790267826&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjZmNDVmY2NlOWQxOGM4Y2U2MWM5ODdiL2NlMjZmZmYwZjNmNTJlY2E5ZDU5YjlmN2ZjZTNlOTk0NWZkZWRlYzY2N2Q2MjRmZTYxMWQ4ZGNmOTUwZjFmODBcXD9yZXNwb25zZS1jb250ZW50LXR5cGU9YXBwbGljYXRpb24lMkZvY3RldC1zdHJlYW0mWC1YZXQtQ2FzLVVpZD1wdWJsaWMmdXNlcl9pZD1wdWJsaWMmcmVzcG9uc2UtY29udGVudC1kaXNwb3NpdGlvbj1pbmxpbmUlM0IrZmlsZW5hbWUlMkElM0RVVEYtOCUyNyUyN3BhcmFtc19zaGFyZF8xOS5iaW4lM0IrZmlsZW5hbWUlM0QlMjJwYXJhbXNfc2hhcmRfMTkuYmluJTIyJTNCIiwiQ29uZGl0aW9uIjp7IkRhdGVMZXNzVGhhbiI6eyJFcG9jaFRpbWUiOjE3OTAyNjc4MjZ9fX1dfQ__&Signature=MEYCIQCIqlpRjz9UJgqbODOxlfDSUKeYiRKUTifd4eVGApCa3QIhAIAaPsMxKJbLJ-YLFT4OLzzpviJpKT6dRv7WMijkHsgg&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F&Hash-Algorithm=SHA256",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:08.586Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/params_shard_1.bin",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:08.666Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "us.aws.cdn.hf.co",
+          "url": "https://us.aws.cdn.hf.co/xet-bridge-us/66f45fcce9d18c8ce61c987b/d4cf2170501ee054ee7d3267926e07aa838cec8b754d277833f39b08d13e1000?user_id=public&response-content-type=application%2Foctet-stream&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27params_shard_1.bin%3B+filename%3D%22params_shard_1.bin%22%3B&X-Xet-Cas-Uid=public&Expires=1790267828&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjZmNDVmY2NlOWQxOGM4Y2U2MWM5ODdiL2Q0Y2YyMTcwNTAxZWUwNTRlZTdkMzI2NzkyNmUwN2FhODM4Y2VjOGI3NTRkMjc3ODMzZjM5YjA4ZDEzZTEwMDBcXD91c2VyX2lkPXB1YmxpYyZyZXNwb25zZS1jb250ZW50LXR5cGU9YXBwbGljYXRpb24lMkZvY3RldC1zdHJlYW0mcmVzcG9uc2UtY29udGVudC1kaXNwb3NpdGlvbj1pbmxpbmUlM0IrZmlsZW5hbWUlMkElM0RVVEYtOCUyNyUyN3BhcmFtc19zaGFyZF8xLmJpbiUzQitmaWxlbmFtZSUzRCUyMnBhcmFtc19zaGFyZF8xLmJpbiUyMiUzQiZYLVhldC1DYXMtVWlkPXB1YmxpYyIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiRXBvY2hUaW1lIjoxNzkwMjY3ODI4fX19XX0_&Signature=MEUCIQCa2QF0pgl1VnL0WSKjarDkB9UtYS4hnWok2SlhaW4oPwIgNsOJ95c-7wWrAHqR75NN9Nwt9cMNjPJNLHe1Ntn3qwo_&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F&Hash-Algorithm=SHA256",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:09.290Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/params_shard_20.bin",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:09.331Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "us.aws.cdn.hf.co",
+          "url": "https://us.aws.cdn.hf.co/xet-bridge-us/66f45fcce9d18c8ce61c987b/7f5e6425b33c5279ad2b7bb40017368a145d440106e87f3dd175708beec52f8b?user_id=public&X-Xet-Cas-Uid=public&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27params_shard_20.bin%3B+filename%3D%22params_shard_20.bin%22%3B&response-content-type=application%2Foctet-stream&Expires=1790267829&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjZmNDVmY2NlOWQxOGM4Y2U2MWM5ODdiLzdmNWU2NDI1YjMzYzUyNzlhZDJiN2JiNDAwMTczNjhhMTQ1ZDQ0MDEwNmU4N2YzZGQxNzU3MDhiZWVjNTJmOGJcXD91c2VyX2lkPXB1YmxpYyZYLVhldC1DYXMtVWlkPXB1YmxpYyZyZXNwb25zZS1jb250ZW50LWRpc3Bvc2l0aW9uPWlubGluZSUzQitmaWxlbmFtZSUyQSUzRFVURi04JTI3JTI3cGFyYW1zX3NoYXJkXzIwLmJpbiUzQitmaWxlbmFtZSUzRCUyMnBhcmFtc19zaGFyZF8yMC5iaW4lMjIlM0ImcmVzcG9uc2UtY29udGVudC10eXBlPWFwcGxpY2F0aW9uJTJGb2N0ZXQtc3RyZWFtIiwiQ29uZGl0aW9uIjp7IkRhdGVMZXNzVGhhbiI6eyJFcG9jaFRpbWUiOjE3OTAyNjc4Mjl9fX1dfQ__&Signature=MEUCIFISKYI8rcqrcWlkBQshLByFu2qyHXR68eRSCx5p1RBLAiEA6TlJ3SE86plog6eUduNal7oVDTgtuAoWEm6q9xA4BFo_&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F&Hash-Algorithm=SHA256",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:09.539Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/params_shard_2.bin",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:09.574Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "us.aws.cdn.hf.co",
+          "url": "https://us.aws.cdn.hf.co/xet-bridge-us/66f45fcce9d18c8ce61c987b/9f0750eb899c1f2c0e5045862ba0ad85a73def2af84b606b537f934353325084?user_id=public&response-content-type=application%2Foctet-stream&X-Xet-Cas-Uid=public&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27params_shard_2.bin%3B+filename%3D%22params_shard_2.bin%22%3B&Expires=1790267829&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjZmNDVmY2NlOWQxOGM4Y2U2MWM5ODdiLzlmMDc1MGViODk5YzFmMmMwZTUwNDU4NjJiYTBhZDg1YTczZGVmMmFmODRiNjA2YjUzN2Y5MzQzNTMzMjUwODRcXD91c2VyX2lkPXB1YmxpYyZyZXNwb25zZS1jb250ZW50LXR5cGU9YXBwbGljYXRpb24lMkZvY3RldC1zdHJlYW0mWC1YZXQtQ2FzLVVpZD1wdWJsaWMmcmVzcG9uc2UtY29udGVudC1kaXNwb3NpdGlvbj1pbmxpbmUlM0IrZmlsZW5hbWUlMkElM0RVVEYtOCUyNyUyN3BhcmFtc19zaGFyZF8yLmJpbiUzQitmaWxlbmFtZSUzRCUyMnBhcmFtc19zaGFyZF8yLmJpbiUyMiUzQiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiRXBvY2hUaW1lIjoxNzkwMjY3ODI5fX19XX0_&Signature=MEUCIA6gTe3lhG0XEpvFXvLEExe4eatiQtGnSMljIV-IH5zoAiEA5tT%7EZS-CDjMZX7%7EFNBPuPKzksaeLARBg4V-kao-Y8OI_&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F&Hash-Algorithm=SHA256",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:11.057Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/params_shard_21.bin",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:11.124Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "us.aws.cdn.hf.co",
+          "url": "https://us.aws.cdn.hf.co/xet-bridge-us/66f45fcce9d18c8ce61c987b/ed08d5b2e51182c55ca384ad6b43f91eb30990745a539d24a341552ba3f24c9a?response-content-disposition=inline%3B+filename*%3DUTF-8%27%27params_shard_21.bin%3B+filename%3D%22params_shard_21.bin%22%3B&X-Xet-Cas-Uid=public&response-content-type=application%2Foctet-stream&user_id=public&Expires=1790267831&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjZmNDVmY2NlOWQxOGM4Y2U2MWM5ODdiL2VkMDhkNWIyZTUxMTgyYzU1Y2EzODRhZDZiNDNmOTFlYjMwOTkwNzQ1YTUzOWQyNGEzNDE1NTJiYTNmMjRjOWFcXD9yZXNwb25zZS1jb250ZW50LWRpc3Bvc2l0aW9uPWlubGluZSUzQitmaWxlbmFtZSUyQSUzRFVURi04JTI3JTI3cGFyYW1zX3NoYXJkXzIxLmJpbiUzQitmaWxlbmFtZSUzRCUyMnBhcmFtc19zaGFyZF8yMS5iaW4lMjIlM0ImWC1YZXQtQ2FzLVVpZD1wdWJsaWMmcmVzcG9uc2UtY29udGVudC10eXBlPWFwcGxpY2F0aW9uJTJGb2N0ZXQtc3RyZWFtJnVzZXJfaWQ9cHVibGljIiwiQ29uZGl0aW9uIjp7IkRhdGVMZXNzVGhhbiI6eyJFcG9jaFRpbWUiOjE3OTAyNjc4MzF9fX1dfQ__&Signature=MEUCIQDk8JwFu4BX3yxCHfXT1kFcBVHpJJR4gVBpLnBHHNCtvwIgVEn6nbhZ9EKaU32CHLk7m4rpT6LdhEHUkpuNm1JO7R0_&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F&Hash-Algorithm=SHA256",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:11.147Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/params_shard_3.bin",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:11.183Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "us.aws.cdn.hf.co",
+          "url": "https://us.aws.cdn.hf.co/xet-bridge-us/66f45fcce9d18c8ce61c987b/371f7432f8554a1902e512f82327fa1ac9f2de9716f23e5a1c1c317a806340bf?user_id=public&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27params_shard_3.bin%3B+filename%3D%22params_shard_3.bin%22%3B&response-content-type=application%2Foctet-stream&X-Xet-Cas-Uid=public&Expires=1790267831&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjZmNDVmY2NlOWQxOGM4Y2U2MWM5ODdiLzM3MWY3NDMyZjg1NTRhMTkwMmU1MTJmODIzMjdmYTFhYzlmMmRlOTcxNmYyM2U1YTFjMWMzMTdhODA2MzQwYmZcXD91c2VyX2lkPXB1YmxpYyZyZXNwb25zZS1jb250ZW50LWRpc3Bvc2l0aW9uPWlubGluZSUzQitmaWxlbmFtZSUyQSUzRFVURi04JTI3JTI3cGFyYW1zX3NoYXJkXzMuYmluJTNCK2ZpbGVuYW1lJTNEJTIycGFyYW1zX3NoYXJkXzMuYmluJTIyJTNCJnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1hcHBsaWNhdGlvbiUyRm9jdGV0LXN0cmVhbSZYLVhldC1DYXMtVWlkPXB1YmxpYyIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiRXBvY2hUaW1lIjoxNzkwMjY3ODMxfX19XX0_&Signature=MEUCIQD0U0MyVL3Pt-rLTgJP6kPPu0JQ0UjYyCkpopynh-SFzgIgCcRDe2hjkUwnogCtEI%7Efb4KlJdrgWGjjJFsQFZltmJ8_&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F&Hash-Algorithm=SHA256",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:12.589Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/params_shard_13.bin",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:12.633Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "us.aws.cdn.hf.co",
+          "url": "https://us.aws.cdn.hf.co/xet-bridge-us/66f45fcce9d18c8ce61c987b/b585ff8a60a485b585d39fc22418bf8a38138199c23a2b9d274f377fa1da14ea?response-content-disposition=inline%3B+filename*%3DUTF-8%27%27params_shard_13.bin%3B+filename%3D%22params_shard_13.bin%22%3B&user_id=public&X-Xet-Cas-Uid=public&response-content-type=application%2Foctet-stream&Expires=1790267832&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjZmNDVmY2NlOWQxOGM4Y2U2MWM5ODdiL2I1ODVmZjhhNjBhNDg1YjU4NWQzOWZjMjI0MThiZjhhMzgxMzgxOTljMjNhMmI5ZDI3NGYzNzdmYTFkYTE0ZWFcXD9yZXNwb25zZS1jb250ZW50LWRpc3Bvc2l0aW9uPWlubGluZSUzQitmaWxlbmFtZSUyQSUzRFVURi04JTI3JTI3cGFyYW1zX3NoYXJkXzEzLmJpbiUzQitmaWxlbmFtZSUzRCUyMnBhcmFtc19zaGFyZF8xMy5iaW4lMjIlM0ImdXNlcl9pZD1wdWJsaWMmWC1YZXQtQ2FzLVVpZD1wdWJsaWMmcmVzcG9uc2UtY29udGVudC10eXBlPWFwcGxpY2F0aW9uJTJGb2N0ZXQtc3RyZWFtIiwiQ29uZGl0aW9uIjp7IkRhdGVMZXNzVGhhbiI6eyJFcG9jaFRpbWUiOjE3OTAyNjc4MzJ9fX1dfQ__&Signature=MEUCIQClgQa-gpBYisSYOxTqrEDpWVKFHkfRtDip%7EoF2%7EAsrmQIgIoDx1YkDo107Iji3Ce5gkdbhaCb8CziQqYqXq%7Eb3240_&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F&Hash-Algorithm=SHA256",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:13.955Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/params_shard_4.bin",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:14.001Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "us.aws.cdn.hf.co",
+          "url": "https://us.aws.cdn.hf.co/xet-bridge-us/66f45fcce9d18c8ce61c987b/236e248c9edcfe3f7a6f855f38f8370987391ae59a299fa5651ab18625a4a3f7?user_id=public&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27params_shard_4.bin%3B+filename%3D%22params_shard_4.bin%22%3B&X-Xet-Cas-Uid=public&response-content-type=application%2Foctet-stream&Expires=1790267834&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjZmNDVmY2NlOWQxOGM4Y2U2MWM5ODdiLzIzNmUyNDhjOWVkY2ZlM2Y3YTZmODU1ZjM4ZjgzNzA5ODczOTFhZTU5YTI5OWZhNTY1MWFiMTg2MjVhNGEzZjdcXD91c2VyX2lkPXB1YmxpYyZyZXNwb25zZS1jb250ZW50LWRpc3Bvc2l0aW9uPWlubGluZSUzQitmaWxlbmFtZSUyQSUzRFVURi04JTI3JTI3cGFyYW1zX3NoYXJkXzQuYmluJTNCK2ZpbGVuYW1lJTNEJTIycGFyYW1zX3NoYXJkXzQuYmluJTIyJTNCJlgtWGV0LUNhcy1VaWQ9cHVibGljJnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1hcHBsaWNhdGlvbiUyRm9jdGV0LXN0cmVhbSIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiRXBvY2hUaW1lIjoxNzkwMjY3ODM0fX19XX0_&Signature=MEQCICAlig5tH9oqVnHz%7E5UDWN0%7EpESLILOaD9lI5x9WWEjwAiAW5%7EZN%7ELnqY8v-I94fwBoxzrUAkyRFyR8DvaNPkocJFQ__&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F&Hash-Algorithm=SHA256",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:15.616Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "huggingface.co",
+          "url": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/params_shard_14.bin",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        },
+        {
+          "timestamp": "2026-09-24T15:37:15.650Z",
+          "category": "model-download",
+          "method": "GET",
+          "host": "us.aws.cdn.hf.co",
+          "url": "https://us.aws.cdn.hf.co/xet-bridge-us/66f45fcce9d18c8ce61c987b/af620259e2cc08927badb42570c887851ea59b7d29c1bdbe5b24637a48fb55aa?X-Xet-Cas-Uid=public&response-content-type=application%2Foctet-stream&user_id=public&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27params_shard_14.bin%3B+filename%3D%22params_shard_14.bin%22%3B&Expires=1790267835&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly91cy5hd3MuY2RuLmhmLmNvL3hldC1icmlkZ2UtdXMvNjZmNDVmY2NlOWQxOGM4Y2U2MWM5ODdiL2FmNjIwMjU5ZTJjYzA4OTI3YmFkYjQyNTcwYzg4Nzg1MWVhNTliN2QyOWMxYmRiZTViMjQ2MzdhNDhmYjU1YWFcXD9YLVhldC1DYXMtVWlkPXB1YmxpYyZyZXNwb25zZS1jb250ZW50LXR5cGU9YXBwbGljYXRpb24lMkZvY3RldC1zdHJlYW0mdXNlcl9pZD1wdWJsaWMmcmVzcG9uc2UtY29udGVudC1kaXNwb3NpdGlvbj1pbmxpbmUlM0IrZmlsZW5hbWUlMkElM0RVVEYtOCUyNyUyN3BhcmFtc19zaGFyZF8xNC5iaW4lM0IrZmlsZW5hbWUlM0QlMjJwYXJhbXNfc2hhcmRfMTQuYmluJTIyJTNCIiwiQ29uZGl0aW9uIjp7IkRhdGVMZXNzVGhhbiI6eyJFcG9jaFRpbWUiOjE3OTAyNjc4MzV9fX1dfQ__&Signature=MEQCIENqYoGMdQiNkQrFzH0CEUDzbxNFVrRHmxyqEd8mCrRqAiACE-b0l8GZEc1buveC3a2IuM-35fuNmfmD8CYCL3vpLA__&Key-Pair-Id=01KXEF4KZ1B6FV465MAWR4M21F&Hash-Algorithm=SHA256",
+          "whatWasSent": "model/runtime file request – no page content, prompt, or AI output sent"
+        }
+      ]
+    }
+  ],
+  "debug": {
+    "unattributedRequestsSkipped": 11,
+    "ignoredSchemes": [
+      "file:",
+      "devtools:",
+      "blob:",
+      "data:",
+      "sovereign:"
+    ]
+  }
+}

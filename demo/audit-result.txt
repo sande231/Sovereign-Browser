@@ -1,0 +1,21 @@
+MATCHED:
+  cdn.britannica.com
+  developer.chrome.com
+  developer.mozilla.org
+  en.wikipedia.org
+  huggingface.co
+  raw.githubusercontent.com
+  thesologlobetrotter.com
+  thumb.wikimedia.org
+  ts3.mm.bing.net
+  ts4.mm.bing.net
+  upload.wikimedia.org
+  us.aws.cdn.hf.co
+
+IN NETWORK CAPTURE BUT NOT IN RECEIPT:
+  (none)
+
+IN RECEIPT BUT NOT IN CAPTURE:
+  127.0.0.1
+
+PASS: no uncaptured hosts and no cloud-AI hosts
