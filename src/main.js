@@ -4279,6 +4279,28 @@ ipcMain.handle('privacy:get-latest-receipt', () => privacyReceipts.getLatestRece
 
 ipcMain.handle('privacy:get-receipts', () => privacyReceipts.getReceipts());
 
+ipcMain.handle('privacy:start-activity', (event, request) => {
+  const { tab } = findTabBySender(event.sender);
+  if (!tab || !['ask', 'search'].includes(tab.kind)) {
+    throw new Error('Privacy receipts can only be started from Sovereign Search and Ask AI tabs.');
+  }
+  const input = request && typeof request === 'object' ? request : {};
+  const receiptId = String(input.requestId || '').slice(0, 100);
+  if (!receiptId) {
+    throw new Error('Privacy receipt activity is missing an id.');
+  }
+  const receiptType = input.type === 'search' ? 'search' : 'ask';
+  const receipt = privacyReceipts.createReceipt({
+    id: receiptId,
+    type: receiptType,
+    label: receiptType === 'ask' ? 'Ask AI' : 'Search',
+    query: String(input.query || '').replace(/\s+/g, ' ').trim().slice(0, 300),
+    localOnly: Boolean(input.localOnly)
+  });
+  assignPrivacyReceiptToSender(event.sender, receipt.id);
+  return receipt;
+});
+
 ipcMain.handle('privacy:export-receipts', async event => {
   const state = findWindowStateBySender(event.sender);
   const defaultPath = path.join(

@@ -84,6 +84,9 @@ function uniqueHosts(entries, category) {
 
 function buildSummary(receipt) {
   const entries = Array.isArray(receipt.entries) ? receipt.entries : [];
+  if (entries.length === 0 && receipt.localOnly && receipt.type === 'ask') {
+    return 'Nothing left this device: answer generated locally';
+  }
   const parts = [];
   const searchHosts = uniqueHosts(entries, 'search');
   const sourceCount = entries.filter(entry => entry.category === 'source-page').length;
@@ -121,6 +124,7 @@ function sanitizeReceipt(receipt) {
     type: receipt.type,
     label: receipt.label,
     query: receipt.query,
+    localOnly: Boolean(receipt.localOnly),
     startedAt: receipt.startedAt,
     updatedAt: receipt.updatedAt,
     summary: receipt.summary,
@@ -147,6 +151,9 @@ function createReceipt({ id, type = 'activity', label = '', query = '' } = {}) {
     existing.type = safeString(type, 40) || existing.type;
     existing.label = safeString(label, 120) || existing.label;
     existing.query = safeString(query, 300) || existing.query;
+    if (arguments[0] && Object.prototype.hasOwnProperty.call(arguments[0], 'localOnly')) {
+      existing.localOnly = Boolean(arguments[0].localOnly);
+    }
     existing.updatedAt = timestamp();
     existing.summary = buildSummary(existing);
     notify(existing);
@@ -159,12 +166,14 @@ function createReceipt({ id, type = 'activity', label = '', query = '' } = {}) {
     type: safeString(type, 40) || 'activity',
     label: safeString(label, 120),
     query: safeString(query, 300),
+    localOnly: Boolean(arguments[0]?.localOnly),
     startedAt: now,
     updatedAt: now,
-    summary: 'No outbound network requests observed for this activity.',
+    summary: '',
     cloudAi: cloudCheck([]),
     entries: []
   };
+  receipt.summary = buildSummary(receipt);
   receipts.unshift(receipt);
   receipts = receipts.slice(0, MAX_RECEIPTS);
   notify(receipt);

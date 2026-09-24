@@ -1183,6 +1183,26 @@ button:disabled {
   text-decoration: underline;
 }
 
+.markdown-link {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-strong);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.chat-inline-code {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 1px 4px;
+  background: var(--panel-soft);
+  color: var(--text);
+}
+
 .activity-panel {
   flex: 0 0 270px;
   min-height: 0;

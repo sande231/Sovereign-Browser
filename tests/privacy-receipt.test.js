@@ -19,6 +19,17 @@ const ask = receipts.createReceipt({
   label: 'Ask AI',
   query: 'beta question'
 });
+const localOnly = receipts.createReceipt({
+  id: 'local-ask-1',
+  type: 'ask',
+  label: 'Ask AI',
+  query: 'local question',
+  localOnly: true
+});
+
+assert.equal(localOnly.entries.length, 0);
+assert.equal(localOnly.summary, 'Nothing left this device: answer generated locally');
+assert.equal(localOnly.cloudAi.ok, true);
 
 receipts.addEntry(search.id, {
   category: 'search',

@@ -83,6 +83,7 @@ contextBridge.exposeInMainWorld('sovereign', {
   privacy: {
     getLatestReceipt: () => ipcRenderer.invoke('privacy:get-latest-receipt'),
     getReceipts: () => ipcRenderer.invoke('privacy:get-receipts'),
+    startActivity: request => ipcRenderer.invoke('privacy:start-activity', request),
     exportReceipts: () => ipcRenderer.invoke('privacy:export-receipts'),
     onReceiptUpdated: callback => {
       const listener = (_event, receipt) => callback(receipt);

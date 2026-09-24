@@ -243,6 +243,23 @@ function selectPrivacyReceiptForActivity(receiptId) {
   refreshPrivacyReceipts().catch(() => {});
 }
 
+async function startLocalAskReceipt(question) {
+  const receiptId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  currentRequestId = receiptId;
+  selectPrivacyReceiptForActivity(receiptId);
+  try {
+    await window.sovereign.privacy.startActivity({
+      requestId: receiptId,
+      type: 'ask',
+      query: question,
+      localOnly: true
+    });
+  } catch (error) {
+    logAsk('could not start local privacy receipt', describeError(error));
+  }
+  return receiptId;
+}
+
 function setupPrivacyReceiptPanel() {
   if (!privacyReceiptToggle || !window.sovereign?.privacy) {
     return;
@@ -303,28 +320,78 @@ function sourceLabel(source) {
   return 'Snippet';
 }
 
-function appendTextWithCitations(parent, text, sources = []) {
-  const pattern = /\[(\d{1,2})\]/g;
+function appendPlainText(parent, text) {
+  if (text) {
+    parent.append(document.createTextNode(text));
+  }
+}
+
+function safeMarkdownUrl(value) {
+  try {
+    const parsed = new URL(String(value || ''));
+    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.toString() : '';
+  } catch {
+    return '';
+  }
+}
+
+function appendInlineMarkdown(parent, text, sources = []) {
+  const pattern = /(\[(\d{1,2})\])|(\[([^\]\n]{1,160})\]\((https?:\/\/[^)\s]+)\))|(`([^`\n]+)`)|(\*\*([^*\n]+)\*\*)|(__([^_\n]+)__)|(\*([^*\n]+)\*)|(_([^_\n]+)_)/g;
   let cursor = 0;
   let match;
   while ((match = pattern.exec(String(text || ''))) !== null) {
-    parent.append(document.createTextNode(text.slice(cursor, match.index)));
-    const number = Number(match[1]);
-    const source = sources[number - 1];
-    if (source?.url) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'citation-link';
-      button.textContent = `[${number}]`;
-      button.title = source.title || source.url;
-      button.addEventListener('click', () => window.sovereign.newTab(source.url));
-      parent.append(button);
+    appendPlainText(parent, String(text || '').slice(cursor, match.index));
+
+    if (match[1]) {
+      const number = Number(match[2]);
+      const source = sources[number - 1];
+      if (source?.url) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'citation-link';
+        button.textContent = `[${number}]`;
+        button.title = source.title || source.url;
+        button.addEventListener('click', () => window.sovereign.newTab(source.url));
+        parent.append(button);
+      } else {
+        appendPlainText(parent, match[0]);
+      }
+    } else if (match[3]) {
+      const url = safeMarkdownUrl(match[5]);
+      if (url) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'markdown-link';
+        button.textContent = match[4];
+        button.title = url;
+        button.addEventListener('click', () => window.sovereign.newTab(url));
+        parent.append(button);
+      } else {
+        appendPlainText(parent, match[0]);
+      }
+    } else if (match[6]) {
+      const code = document.createElement('code');
+      code.className = 'chat-inline-code';
+      code.textContent = match[7] || '';
+      parent.append(code);
+    } else if (match[8] || match[10]) {
+      const strong = document.createElement('strong');
+      strong.textContent = match[9] || match[11] || '';
+      parent.append(strong);
+    } else if (match[12] || match[14]) {
+      const emphasis = document.createElement('em');
+      emphasis.textContent = match[13] || match[15] || '';
+      parent.append(emphasis);
     } else {
-      parent.append(document.createTextNode(match[0]));
+      appendPlainText(parent, match[0]);
     }
     cursor = match.index + match[0].length;
   }
-  parent.append(document.createTextNode(String(text || '').slice(cursor)));
+  appendPlainText(parent, String(text || '').slice(cursor));
+}
+
+function appendTextWithCitations(parent, text, sources = []) {
+  appendInlineMarkdown(parent, text, sources);
 }
 
 function appendParagraph(container, text, sources) {
@@ -1985,6 +2052,10 @@ async function answerQuestion(question, options = {}) {
       content: question,
       attachments: attachedFiles
     });
+  }
+
+  if (!useWeb) {
+    await startLocalAskReceipt(question);
   }
 
   if (!useWeb) {
