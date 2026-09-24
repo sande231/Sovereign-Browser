@@ -59,6 +59,7 @@ let saveChatsOnDevice = false;
 let mediaTurns = [];
 let privacyReceiptList = [];
 let selectedPrivacyReceiptId = '';
+let userSelectedPrivacyReceipt = false;
 const CHAT_HISTORY_KEY = 'sovereign.ask.chats';
 const CONTEXT_CHAR_BUDGET = 9000;
 const MAX_ATTACHMENTS = 3;
@@ -183,8 +184,7 @@ function renderPrivacyReceipt(receipt) {
   if (!privacyReceiptToggle || !privacyReceiptRows) {
     return;
   }
-  const latestReceipt = privacyReceiptList[0] || receipt;
-  const hostCount = receiptHostCount(latestReceipt);
+  const hostCount = receiptHostCount(receipt);
   privacyReceiptToggle.textContent = `Shield ${hostCount}`;
   privacyReceiptToggle.title = hostCount === 0
     ? 'No recorded outbound hosts for the latest Search or Ask AI activity.'
@@ -218,19 +218,29 @@ function renderPrivacyReceipt(receipt) {
   }
 }
 
+function defaultPrivacyReceiptId() {
+  return privacyReceiptList.find(receipt => receipt.type !== 'background')?.id || privacyReceiptList[0]?.id || '';
+}
+
 async function refreshPrivacyReceipts(preferredReceipt = null) {
   if (!window.sovereign?.privacy) {
     return;
   }
   privacyReceiptList = await window.sovereign.privacy.getReceipts();
-  if (preferredReceipt?.id && (!selectedPrivacyReceiptId || selectedPrivacyReceiptId === privacyReceiptList[1]?.id)) {
+  if (preferredReceipt?.id && preferredReceipt.type !== 'background' && !userSelectedPrivacyReceipt) {
     selectedPrivacyReceiptId = preferredReceipt.id;
   }
   if (!privacyReceiptList.some(receipt => receipt.id === selectedPrivacyReceiptId)) {
-    selectedPrivacyReceiptId = privacyReceiptList[0]?.id || '';
+    selectedPrivacyReceiptId = defaultPrivacyReceiptId();
   }
   renderPrivacyHistory();
   renderPrivacyReceipt(privacyReceiptList.find(receipt => receipt.id === selectedPrivacyReceiptId) || null);
+}
+
+function selectPrivacyReceiptForActivity(receiptId) {
+  selectedPrivacyReceiptId = String(receiptId || '');
+  userSelectedPrivacyReceipt = false;
+  refreshPrivacyReceipts().catch(() => {});
 }
 
 function setupPrivacyReceiptPanel() {
@@ -244,6 +254,7 @@ function setupPrivacyReceiptPanel() {
   });
   privacyReceiptHistory?.addEventListener('change', () => {
     selectedPrivacyReceiptId = privacyReceiptHistory.value;
+    userSelectedPrivacyReceipt = true;
     renderPrivacyReceipt(privacyReceiptList.find(receipt => receipt.id === selectedPrivacyReceiptId) || null);
   });
   privacyExportJsonButton?.addEventListener('click', async () => {
@@ -1729,6 +1740,7 @@ async function streamLocalAnswer(question, assistantId) {
 async function streamWebAnswer(question, assistantId) {
   const searchUtils = getSearchUtils();
   currentRequestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  selectPrivacyReceiptForActivity(currentRequestId);
   setStatus('Searching the web...');
   const searchSettings = await window.sovereign.search.getSettings();
   const response = await window.sovereign.search.query({
@@ -1876,6 +1888,7 @@ async function streamMediaAnswer(question, assistantId) {
   const type = mediaTypeForQuestion(question);
   const query = mediaQueryForQuestion(question);
   currentRequestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  selectPrivacyReceiptForActivity(currentRequestId);
   setStatus(`Searching ${type === 'videos' ? 'videos' : 'images'}...`);
   const searchSettings = await window.sovereign.search.getSettings();
   const response = await window.sovereign.search.media({

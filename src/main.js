@@ -30,6 +30,11 @@ const {
   readSourcePages
 } = require('./source-reader');
 const privacyReceipts = require('./privacy-receipt');
+const {
+  IGNORED_SCHEMES: PRIVACY_RECEIPT_IGNORED_SCHEMES,
+  classifyPrivacyRequest,
+  originFromUrl
+} = require('./privacy-attribution');
 
 const UI_HEIGHT = 92;
 const UI_HEIGHT_COMPACT = 174;
@@ -52,7 +57,6 @@ const ENABLE_DETACH_DIAGNOSTICS = false;
 const DETACH_LOG_PREFIX = '[Sovereign detach]';
 const AI_LOG_PREFIX = '[Sovereign AI]';
 const MEDIA_TEST_FIXTURES = process.env.SOVEREIGN_MEDIA_TEST_FIXTURES === '1';
-const PRIVACY_RECEIPT_IGNORED_SCHEMES = new Set(['file:', 'devtools:', 'blob:', 'data:', 'sovereign:']);
 const AUDIT_PROXY_BYPASS_RULES = '<local>;localhost;127.0.0.1;[::1]';
 
 function normalizeAuditProxy(value) {
@@ -125,6 +129,7 @@ const aiNetworkEvents = [];
 const searchActivityEvents = [];
 const activeSearchRequests = new Map();
 const activePrivacyReceiptsByWebContentsId = new Map();
+let unattributedPrivacyRequestSkips = 0;
 const askHandoffs = new Map();
 const downloads = new Map();
 const activeDownloadItems = new Map();
@@ -984,29 +989,6 @@ function makeReceiptFetch(receiptId, category, whatWasSent, fetchImpl = (url, op
   });
 }
 
-function isTrustedAppWebContentsId(webContentsId) {
-  if (aiWebContentsIds.has(webContentsId)) {
-    return true;
-  }
-  for (const state of windows.values()) {
-    const uiContents = state.uiView?.webContents;
-    const sidebarContents = state.sidebarView?.webContents;
-    if (uiContents && !uiContents.isDestroyed() && uiContents.id === webContentsId) {
-      return true;
-    }
-    if (sidebarContents && !sidebarContents.isDestroyed() && sidebarContents.id === webContentsId) {
-      return true;
-    }
-    for (const tab of state.tabs.values()) {
-      const contents = tab.view?.webContents;
-      if (tab.kind !== 'web' && contents && !contents.isDestroyed() && contents.id === webContentsId) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 function receiptCategoryForTrustedRequest(url) {
   let host = '';
   try {
@@ -1028,33 +1010,14 @@ function receiptCategoryForTrustedRequest(url) {
   return 'other';
 }
 
-function requestScheme(url) {
-  try {
-    return new URL(String(url || '')).protocol;
-  } catch {
-    return '';
-  }
-}
-
-function isIgnoredPrivacyReceiptScheme(url) {
-  return PRIVACY_RECEIPT_IGNORED_SCHEMES.has(requestScheme(url));
-}
-
-function originFromUrl(value) {
-  try {
-    const parsed = new URL(String(value || ''));
-    return `${parsed.protocol}//${parsed.host}`;
-  } catch {
-    return '';
-  }
-}
-
 function openWebTabOrigins() {
   const origins = new Set();
   for (const state of windows.values()) {
     for (const tab of state.tabs.values()) {
-      if (tab.kind === 'web') {
-        const origin = originFromUrl(tab.url);
+      const contents = tab.view?.webContents;
+      const currentUrl = contents && !contents.isDestroyed() ? contents.getURL() : tab.url;
+      if (tab.kind === 'web' || /^https?:\/\//i.test(String(currentUrl || ''))) {
+        const origin = originFromUrl(currentUrl || tab.url);
         if (origin) {
           origins.add(origin);
         }
@@ -1064,75 +1027,53 @@ function openWebTabOrigins() {
   return origins;
 }
 
-function trustedOriginFromDetails(details) {
-  const candidates = [
-    details.initiator,
-    details.documentUrl,
-    details.frame?.url,
-    details.referrer,
-    details.originUrl
-  ].filter(Boolean);
-
-  for (const candidate of candidates) {
-    const scheme = requestScheme(candidate);
-    if (scheme === 'sovereign:') {
-      return { trusted: true, unattributed: false };
+function contextForPrivacyRequest(details) {
+  const webContentsId = Number(details.webContentsId || 0);
+  const { tab } = findTabByWebContentsId(webContentsId);
+  let currentUrl = '';
+  let isUiView = false;
+  let isSidebarView = false;
+  for (const state of windows.values()) {
+    const uiContents = state.uiView?.webContents;
+    const sidebarContents = state.sidebarView?.webContents;
+    if (uiContents && !uiContents.isDestroyed() && uiContents.id === webContentsId) {
+      isUiView = true;
+      currentUrl = uiContents.getURL();
     }
-    if (scheme === 'file:') {
-      const filePath = String(candidate || '');
-      if (filePath.includes('/Sovereign-Browser/src/') || filePath.includes('/Sovereign-Browser/')) {
-        return { trusted: true, unattributed: false };
-      }
-    }
-    const origin = originFromUrl(candidate);
-    if (origin && openWebTabOrigins().has(origin)) {
-      return { trusted: false, unattributed: false };
+    if (sidebarContents && !sidebarContents.isDestroyed() && sidebarContents.id === webContentsId) {
+      isSidebarView = true;
+      currentUrl = sidebarContents.getURL();
     }
   }
-
-  return { trusted: false, unattributed: candidates.length === 0 };
-}
-
-function privacyReceiptTargetForRequest(details) {
-  if (isIgnoredPrivacyReceiptScheme(details.url)) {
-    return null;
+  const contents = tab?.view?.webContents;
+  if (!currentUrl && contents && !contents.isDestroyed()) {
+    currentUrl = contents.getURL();
+  }
+  const isAiView = aiWebContentsIds.has(webContentsId);
+  if (!currentUrl && isAiView && modelSetupWebContentsId === webContentsId) {
+    currentUrl = MODEL_SETUP_PAGE_URL;
   }
 
-  const { tab } = findTabByWebContentsId(details.webContentsId);
-  if (tab?.kind === 'web') {
-    return null;
-  }
-
-  if (details.webContentsId && isTrustedAppWebContentsId(details.webContentsId)) {
-    const receiptId = activePrivacyReceiptsByWebContentsId.get(details.webContentsId);
-    return {
-      receiptId,
-      background: !receiptId,
-      unattributed: false
-    };
-  }
-
-  const origin = trustedOriginFromDetails(details);
-  if (origin.trusted) {
-    return {
-      receiptId: '',
-      background: true,
-      unattributed: false
-    };
-  }
-  if (origin.unattributed) {
-    return {
-      receiptId: '',
-      background: true,
-      unattributed: true
-    };
-  }
-  return null;
+  return {
+    hasWebContents: Boolean(webContentsId && (tab || isUiView || isSidebarView || isAiView)),
+    tabKind: tab?.kind || '',
+    currentUrl,
+    isUiView,
+    isSidebarView,
+    isAiView,
+    activeReceiptId: webContentsId ? activePrivacyReceiptsByWebContentsId.get(webContentsId) || '' : '',
+    openWebOrigins: openWebTabOrigins(),
+    appRoot: path.resolve(__dirname, '..')
+  };
 }
 
 function recordPrivacyWebRequest(details) {
-  const target = privacyReceiptTargetForRequest(details);
-  if (!target) {
+  const target = classifyPrivacyRequest(details, contextForPrivacyRequest(details));
+  if (target.action === 'debug-skip') {
+    unattributedPrivacyRequestSkips += 1;
+    return;
+  }
+  if (target.action === 'ignore') {
     return;
   }
   const category = receiptCategoryForTrustedRequest(details.url);
@@ -1147,7 +1088,7 @@ function recordPrivacyWebRequest(details) {
         : 'trusted app/AI request – no cookies, auth headers, request body, prompt, or AI output logged'
   };
 
-  if (target.receiptId && !target.background) {
+  if (target.action === 'receipt' && target.receiptId) {
     privacyReceipts.addEntry(target.receiptId, entry);
     return;
   }
@@ -3207,6 +3148,7 @@ function createTab(state, address = DEFAULT_HOME, makeActive = true) {
   const tab = {
     id: nextTabId,
     windowId: state.id,
+    kind: 'web',
     title: 'New Tab',
     url: checked.url,
     view: createWebView()
@@ -4361,6 +4303,10 @@ ipcMain.handle('privacy:export-receipts', async event => {
   const payload = privacyReceipts.exportPayload({
     appVersion: packageMetadata.version || app.getVersion()
   });
+  payload.debug = {
+    unattributedRequestsSkipped: unattributedPrivacyRequestSkips,
+    ignoredSchemes: [...PRIVACY_RECEIPT_IGNORED_SCHEMES]
+  };
   fs.writeFileSync(result.filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
   return {
     ok: true,

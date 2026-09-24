@@ -32,11 +32,18 @@ receipts.addEntry(ask.id, {
   url: 'https://example.org/source',
   whatWasSent: 'page fetch - no query or AI output sent'
 });
+receipts.addEntry(ask.id, {
+  category: 'image',
+  method: 'HEAD',
+  url: 'https://images.example/photo.jpg',
+  whatWasSent: 'media validation request - no query, prompt, or AI output sent'
+});
 
 assert.equal(receiptById(search.id).entries.length, 1);
-assert.equal(receiptById(ask.id).entries.length, 1);
+assert.equal(receiptById(ask.id).entries.length, 2);
 assert.equal(receiptById(search.id).entries[0].host, '127.0.0.1:8080');
 assert.equal(receiptById(ask.id).entries[0].category, 'source-page');
+assert.equal(receiptById(ask.id).entries[1].category, 'image');
 
 receipts.addEntry(ask.id, {
   category: 'other',
@@ -58,13 +65,14 @@ assert.equal(unknownEntry.category, 'other');
 assert.equal(unknownEntry.host, 'unknown.example');
 
 const background = receipts.addBackgroundEntry({
-  category: 'other',
+  category: 'model-download',
   method: 'GET',
   url: 'https://model-cdn.example/file.bin',
-  whatWasSent: 'other (unattributed) app-session request - no cookies, headers, or body logged'
+  whatWasSent: 'model/runtime file request - no page content, prompt, or AI output sent'
 });
 assert.equal(background.type, 'background');
 assert.match(background.summary, /Background/);
+assert.equal(background.entries.at(-1).category, 'model-download');
 
 for (let index = 0; index < 25; index += 1) {
   receipts.createReceipt({
