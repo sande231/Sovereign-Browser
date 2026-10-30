@@ -913,7 +913,15 @@
     return finalizeSearchAnswerWithMeta(text, results, question).answer;
   }
 
+  function buildSourceAnswerMessages(question, sources) {
+    return [
+      { role: 'system', content: SEARCH_SYSTEM_PROMPT },
+      { role: 'user', content: buildSourceAnswerPrompt(question, sources) }
+    ];
+  }
+
   const api = {
+    buildSourceAnswerMessages,
     SEARCH_ANSWER_VERSION,
     SEARCH_SYSTEM_PROMPT,
     buildSearchAnswerPrompt,

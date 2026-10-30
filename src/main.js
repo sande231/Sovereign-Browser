@@ -30,6 +30,8 @@ const {
   readSourcePages
 } = require('./source-reader');
 const privacyReceipts = require('./privacy-receipt');
+const datasetBatchEnabled = Boolean(process.env.SOVEREIGN_DATASET_BATCH);
+let datasetWindow = null;
 const {
   IGNORED_SCHEMES: PRIVACY_RECEIPT_IGNORED_SCHEMES,
   classifyPrivacyRequest,
@@ -1527,7 +1529,7 @@ function captureOpenSession() {
 }
 
 function saveOpenSessionNow() {
-  if (!app.isReady()) {
+  if (!app.isReady() || datasetBatchEnabled) {
     return;
   }
   savedSession = captureOpenSession();
@@ -4025,6 +4027,42 @@ function setupAiNetworkMonitor() {
   });
 }
 
+async function runDatasetCollection() {
+  const { collectDataset, expandPath } = require('./dataset-collection');
+  const outputPath = expandPath(process.env.SOVEREIGN_DATASET_OUT || '~/sovereign-finetune/data/collected.jsonl');
+  datasetWindow = new BrowserWindow({
+    width: 560, height: 240, title: 'Dataset collection',
+    webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true }
+  });
+  datasetWindow.on('closed', () => {
+    for (const controller of activeSearchRequests.values()) controller.abort();
+    app.quit();
+  });
+  try {
+    await datasetWindow.loadFile(path.join(__dirname, 'dataset-collection.html'));
+    const event = { sender: datasetWindow.webContents };
+    await collectDataset({
+      questionsPath: expandPath(process.env.SOVEREIGN_DATASET_BATCH),
+      outputPath,
+      query: request => handleSearchQuery(event, { ...request, endpoint: searchSettings.endpoint }),
+      readSources: request => handleReadSources(event, request),
+      onProgress: async (done, total) => {
+        const label = `Dataset collection — ${done} / ${total}`;
+        console.log(label);
+        if (!datasetWindow.isDestroyed()) {
+          datasetWindow.setTitle(label);
+          await datasetWindow.webContents.executeJavaScript(`document.getElementById('progress').textContent = ${JSON.stringify(`${done} / ${total}`)}`);
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Dataset collection stopped:', error.message);
+    process.exitCode = 1;
+  } finally {
+    app.quit();
+  }
+}
+
 app.whenReady().then(async () => {
   app.setName('Sovereign');
   loadPreferences();
@@ -4034,6 +4072,10 @@ app.whenReady().then(async () => {
   setupAiNetworkMonitor();
   setupDownloadHandling();
   ensureFindQueueTimer();
+  if (datasetBatchEnabled) {
+    await runDatasetCollection();
+    return;
+  }
   ensureModelSetupService({ autoStart: true });
   if (!restoreSavedSessionWindows()) {
     createWindow();
@@ -4384,8 +4426,10 @@ ipcMain.handle('search:update-settings', (_event, patch) => {
   return searchSettingsSnapshot();
 });
 
-ipcMain.handle('search:query', async (event, request) => {
-  const { tab } = findTabBySender(event.sender);
+async function handleSearchQuery(event, request) {
+  const tab = datasetWindow && event.sender === datasetWindow.webContents
+    ? { kind: 'ask' }
+    : findTabBySender(event.sender).tab;
   if (!tab || !['search', 'ask'].includes(tab.kind)) {
     throw new Error('Search requests are only available from Sovereign Search and Ask AI tabs.');
   }
@@ -4444,7 +4488,8 @@ ipcMain.handle('search:query', async (event, request) => {
   } finally {
     activeSearchRequests.delete(requestId);
   }
-});
+}
+ipcMain.handle('search:query', handleSearchQuery);
 
 ipcMain.handle('search:media', async (event, request) => {
   const { tab } = findTabBySender(event.sender);
@@ -4581,8 +4626,10 @@ ipcMain.handle('media:download', async (event, request) => {
   return downloadsSnapshot();
 });
 
-ipcMain.handle('search:read-sources', async (event, request) => {
-  const { tab } = findTabBySender(event.sender);
+async function handleReadSources(event, request) {
+  const tab = datasetWindow && event.sender === datasetWindow.webContents
+    ? { kind: 'ask' }
+    : findTabBySender(event.sender).tab;
   if (!tab || !['search', 'ask'].includes(tab.kind)) {
     throw new Error('Source reading is only available from Sovereign Search and Ask AI tabs.');
   }
@@ -4636,7 +4683,8 @@ ipcMain.handle('search:read-sources', async (event, request) => {
   } finally {
     activeSearchRequests.delete(requestId);
   }
-});
+}
+ipcMain.handle('search:read-sources', handleReadSources);
 
 ipcMain.on('search:cancel', (_event, requestId) => {
   const id = String(requestId || '').slice(0, 80);

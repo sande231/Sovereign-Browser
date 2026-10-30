@@ -1835,10 +1835,7 @@ async function streamWebAnswer(question, assistantId) {
   updateAssistant(assistantId, { sources: evidenceResults });
 
   const contextualQuestion = webContextQuestion(question);
-  const messagesForModel = [
-    { role: 'system', content: searchUtils.SEARCH_SYSTEM_PROMPT },
-    { role: 'user', content: searchUtils.buildSourceAnswerPrompt(contextualQuestion, sourceBundle.sources) }
-  ];
+  const messagesForModel = searchUtils.buildSourceAnswerMessages(contextualQuestion, sourceBundle.sources);
   lastModelMessages = messagesForModel;
 
   let output = '';
