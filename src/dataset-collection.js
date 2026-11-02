@@ -32,6 +32,16 @@ function completedIds(outputPath) {
   return ids;
 }
 
+function isConnectionRefused(error) {
+  const seen = new Set();
+  while (error && !seen.has(error)) {
+    seen.add(error);
+    if (error.code === 'ECONNREFUSED' || /ECONNREFUSED|ERR_CONNECTION_REFUSED|connection refused/i.test(error.message || '')) return true;
+    error = error.cause;
+  }
+  return false;
+}
+
 async function collectDataset({ questionsPath, outputPath, query, readSources,
   onProgress = async () => {}, wait = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
   const delayMs = Number(process.env.SOVEREIGN_DATASET_DELAY_MS ?? 3000);
@@ -47,9 +57,31 @@ async function collectDataset({ questionsPath, outputPath, query, readSources,
   let attempted = false;
   let emptyStreak = 0;
   let checkingAfterPause = false;
+  let refusedStreak = 0;
+  const skippedByReason = Object.create(null);
+  // Retry only the failed stage; a source retry can reuse successful search results.
+  const retry = async (operation, search = false) => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const value = await operation(attempt);
+        if (search) refusedStreak = 0;
+        return { value };
+      } catch (error) {
+        if (search) {
+          refusedStreak = isConnectionRefused(error) ? refusedStreak + 1 : 0;
+          if (refusedStreak === 3) {
+            return { error, stop: 'SearXNG endpoint is unreachable: connection refused 3 times in a row; try again later' };
+          }
+        }
+        if (attempt === 1) return { error };
+        await wait(5000);
+      }
+    }
+  };
   const skip = (id, question, reason) => {
     fs.appendFileSync(outputPath + '.skipped.txt', JSON.stringify({ id, question, reason }) + '\n');
     skipped++;
+    skippedByReason[reason] = (skippedByReason[reason] || 0) + 1;
   };
   try {
     await onProgress(0, questions.length);
@@ -62,20 +94,22 @@ async function collectDataset({ questionsPath, outputPath, query, readSources,
         if (attempted) await wait(delayMs);
         attempted = true;
         const requestId = `dataset-${Date.now()}-${id}`;
-        let response;
-        try {
-          response = await query({ requestId, query: question });
-        } catch (error) {
-          skip(id, question, error?.message || String(error));
-          throw error;
+        const search = await retry(attempt => query({ requestId: `${requestId}-search-${attempt}`, query: question }), true);
+        if (search.error) {
+          emptyStreak = 0;
+          skip(id, question, search.error?.message || String(search.error));
+          if (search.stop) throw new Error(search.stop);
+          await onProgress(index + 1, questions.length);
+          continue;
         }
+        const response = search.value;
         if (!response.results?.length) {
           skip(id, question, 'no_results');
           emptyStreak++;
-          if (checkingAfterPause) {
+          if (checkingAfterPause && emptyStreak === 3) {
             throw new Error('search engines appear to be rate-limiting; try again later');
           }
-          if (emptyStreak === 3 && index + 1 < questions.length) {
+          if (!checkingAfterPause && emptyStreak === 3 && index + 1 < questions.length) {
             console.log('Three consecutive questions returned no search results; pausing for 10 minutes.');
             await wait(10 * 60 * 1000);
             checkingAfterPause = true;
@@ -84,19 +118,17 @@ async function collectDataset({ questionsPath, outputPath, query, readSources,
         } else {
           emptyStreak = 0;
           checkingAfterPause = false;
-          let bundle;
-          try {
-            bundle = await readSources({ requestId, question, results: response.results });
-          } catch (error) {
-            skip(id, question, error?.message || String(error));
-            throw error;
-          }
-          const sources = bundle?.sources;
-          if (!Array.isArray(sources) || !sources.length) {
-            skip(id, question, 'source_read_failed');
+          const read = await retry(async attempt => {
+            const bundle = await readSources({ requestId: `${requestId}-read-${attempt}`, question, results: response.results });
+            if (!Array.isArray(bundle?.sources) || !bundle.sources.length) throw new Error('source_read_failed');
+            return bundle;
+          });
+          if (read.error) {
+            skip(id, question, read.error?.message || String(read.error));
             await onProgress(index + 1, questions.length);
             continue;
           }
+          const sources = read.value.sources;
           const row = {
             id, question,
             prompt_version: `${SEARCH_ANSWER_VERSION}-source-pages`,
@@ -113,7 +145,7 @@ async function collectDataset({ questionsPath, outputPath, query, readSources,
     }
     return { collected, skipped, resumed };
   } finally {
-    console.log(`Dataset collection summary: collected=${collected}, skipped=${skipped}, already collected=${resumed}, output=${outputPath}`);
+    console.log(`Dataset collection summary: collected=${collected}, skipped=${skipped}, skipped by reason=${JSON.stringify(skippedByReason)}, already collected=${resumed}, output=${outputPath}`);
   }
 }
 

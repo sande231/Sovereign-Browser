@@ -40,7 +40,7 @@ const utils = require('../src/search-utils');
     assert.deepEqual(await collectDataset(options), { collected: 0, skipped: 1, resumed: 2 });
     assert.deepEqual(queried, ['Empty?']);
     assert.equal(fs.readFileSync(outputPath, 'utf8').trim().split('\n').length, 2);
-    await assert.rejects(collectDataset({ ...options, query: async () => { throw new Error('offline'); } }), /offline/);
+    assert.deepEqual(await collectDataset({ ...options, query: async () => { throw new Error('offline'); } }), { collected: 0, skipped: 1, resumed: 2 });
     const skips = file => fs.readFileSync(file + '.skipped.txt', 'utf8').trim().split('\n').map(JSON.parse);
     assert.equal(skips(outputPath).at(-1).reason, 'offline');
     const run = async (name, results, extra = {}) => {
@@ -53,11 +53,11 @@ const utils = require('../src/search-utils');
         wait: async ms => waits.push(ms), ...extra });
       return { promise, file, waits, calls: () => calls };
     };
-    const stopped = await run('stopped', [true, false, false, false, false, true]);
+    const stopped = await run('stopped', [true, false, false, false, false, false, false, true]);
     await assert.rejects(stopped.promise, /search engines appear to be rate-limiting; try again later/);
-    assert.equal(stopped.calls(), 5);
+    assert.equal(stopped.calls(), 7);
     assert.equal(stopped.waits.filter(ms => ms === 600000).length, 1);
-    assert.deepEqual(skips(stopped.file).map(row => row.reason), Array(4).fill('no_results'));
+    assert.deepEqual(skips(stopped.file).map(row => row.reason), Array(6).fill('no_results'));
     assert.equal(JSON.parse(fs.readFileSync(stopped.file, 'utf8')).id, '1');
 
     const recovered = await run('recovered', [false, false, false, true, false, true]);
@@ -71,9 +71,57 @@ const utils = require('../src/search-utils');
     assert.deepEqual(await missing.promise, { collected: 0, skipped: 2, resumed: 0 });
     assert.deepEqual(skips(missing.file), [1, 2].map(id => ({ id: String(id), question: `Question ${id}?`, reason: 'source_read_failed' })));
     const failed = await run('failed', [true], { readSources: async () => { throw new Error('source timeout\nretry later'); } });
-    await assert.rejects(failed.promise, /source timeout/);
+    assert.deepEqual(await failed.promise, { collected: 0, skipped: 1, resumed: 0 });
+    assert.deepEqual(failed.waits, [5000]);
     assert.deepEqual(skips(failed.file), [{ id: '1', question: 'Question 1?', reason: 'source timeout\nretry later' }]);
     assert.equal(fs.readFileSync(failed.file + '.skipped.txt', 'utf8').trim().split('\n').length, 1);
+
+    let readAttempts = 0;
+    const canceled = await run('canceled', [true, true], {
+      readSources: async ({ question }) => {
+        if (question === 'Question 1?') {
+          readAttempts++;
+          throw new DOMException('Source reading was canceled.', 'AbortError');
+        }
+        return { sources };
+      }
+    });
+    assert.deepEqual(await canceled.promise, { collected: 1, skipped: 1, resumed: 0 });
+    assert.equal(readAttempts, 2);
+    assert.deepEqual(canceled.waits, [5000, 3000]);
+    assert.deepEqual(skips(canceled.file), [{ id: '1', question: 'Question 1?', reason: 'Source reading was canceled.' }]);
+    assert.equal(JSON.parse(fs.readFileSync(canceled.file, 'utf8')).id, '2');
+    const retriedIds = [];
+    assert.deepEqual(await collectDataset({ ...options, outputPath: canceled.file,
+      query: async ({ query }) => { retriedIds.push(query); return { results: [{}] }; }
+    }), { collected: 1, skipped: 0, resumed: 1 });
+    assert.deepEqual(retriedIds, ['Question 1?']);
+
+    let searchAttempts = 0;
+    const transient = await run('transient', [true], {
+      query: async () => {
+        if (++searchAttempts === 1) throw new Error('search timed out');
+        return { results: [{}] };
+      }
+    });
+    assert.deepEqual(await transient.promise, { collected: 1, skipped: 0, resumed: 0 });
+    assert.deepEqual(transient.waits, [5000]);
+
+    let refusedCalls = 0;
+    const refused = await run('refused', [true, true, true], {
+      query: async () => {
+        refusedCalls++;
+        throw new Error('fetch failed', { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) });
+      }
+    });
+    await assert.rejects(refused.promise, /endpoint is unreachable: connection refused 3 times in a row/);
+    assert.equal(refusedCalls, 3);
+    assert.deepEqual(refused.waits, [5000, 3000]);
+    assert.equal(skips(refused.file).length, 2);
+    const sourceRefused = await run('source-refused', [true, true], {
+      readSources: async () => { throw Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }); }
+    });
+    assert.deepEqual(await sourceRefused.promise, { collected: 0, skipped: 2, resumed: 0 });
 
     process.env.SOVEREIGN_DATASET_DELAY_MS = '17';
     const configured = await run('configured', [true, true]);
