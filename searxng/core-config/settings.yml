@@ -17,3 +17,15 @@ server:
   limiter: false
   public_instance: false
   image_proxy: true
+
+# Merge with the installed defaults; preserve all existing engines.
+engines:
+  - name: wikipedia
+    disabled: false
+  - name: mojeek
+    disabled: false
+  - name: startpage
+    inactive: false
+    disabled: false
+  - name: qwant
+    disabled: false

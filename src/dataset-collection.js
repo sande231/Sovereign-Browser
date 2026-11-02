@@ -34,6 +34,10 @@ function completedIds(outputPath) {
 
 async function collectDataset({ questionsPath, outputPath, query, readSources,
   onProgress = async () => {}, wait = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
+  const delayMs = Number(process.env.SOVEREIGN_DATASET_DELAY_MS ?? 3000);
+  if (!Number.isFinite(delayMs) || delayMs < 0 || delayMs > 2147483647) {
+    throw new Error('SOVEREIGN_DATASET_DELAY_MS must be a non-negative number of milliseconds no greater than 2147483647.');
+  }
   const questions = fs.readFileSync(questionsPath, 'utf8').split(/\r?\n/).map(q => q.trim()).filter(Boolean);
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   const completed = completedIds(outputPath);
@@ -41,6 +45,12 @@ async function collectDataset({ questionsPath, outputPath, query, readSources,
   let skipped = 0;
   let resumed = 0;
   let attempted = false;
+  let emptyStreak = 0;
+  let checkingAfterPause = false;
+  const skip = (id, question, reason) => {
+    fs.appendFileSync(outputPath + '.skipped.txt', JSON.stringify({ id, question, reason }) + '\n');
+    skipped++;
+  };
   try {
     await onProgress(0, questions.length);
     for (let index = 0; index < questions.length; index++) {
@@ -49,16 +59,44 @@ async function collectDataset({ questionsPath, outputPath, query, readSources,
       if (completed.has(id)) {
         resumed++;
       } else {
-        if (attempted) await wait(3000);
+        if (attempted) await wait(delayMs);
         attempted = true;
         const requestId = `dataset-${Date.now()}-${id}`;
-        const response = await query({ requestId, query: question });
+        let response;
+        try {
+          response = await query({ requestId, query: question });
+        } catch (error) {
+          skip(id, question, error?.message || String(error));
+          throw error;
+        }
         if (!response.results?.length) {
-          fs.appendFileSync(outputPath + '.skipped.txt', JSON.stringify({ id, question }) + '\n');
-          skipped++;
+          skip(id, question, 'no_results');
+          emptyStreak++;
+          if (checkingAfterPause) {
+            throw new Error('search engines appear to be rate-limiting; try again later');
+          }
+          if (emptyStreak === 3 && index + 1 < questions.length) {
+            console.log('Three consecutive questions returned no search results; pausing for 10 minutes.');
+            await wait(10 * 60 * 1000);
+            checkingAfterPause = true;
+            emptyStreak = 0;
+          }
         } else {
-          const bundle = await readSources({ requestId, question, results: response.results });
-          const sources = bundle.sources;
+          emptyStreak = 0;
+          checkingAfterPause = false;
+          let bundle;
+          try {
+            bundle = await readSources({ requestId, question, results: response.results });
+          } catch (error) {
+            skip(id, question, error?.message || String(error));
+            throw error;
+          }
+          const sources = bundle?.sources;
+          if (!Array.isArray(sources) || !sources.length) {
+            skip(id, question, 'source_read_failed');
+            await onProgress(index + 1, questions.length);
+            continue;
+          }
           const row = {
             id, question,
             prompt_version: `${SEARCH_ANSWER_VERSION}-source-pages`,

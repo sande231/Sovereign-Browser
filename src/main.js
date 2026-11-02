@@ -974,7 +974,9 @@ function assignPrivacyReceiptToSender(sender, receiptId) {
   if (!sender?.id || !receiptId) {
     return;
   }
+  const alreadyTracked = activePrivacyReceiptsByWebContentsId.has(sender.id);
   activePrivacyReceiptsByWebContentsId.set(sender.id, String(receiptId));
+  if (alreadyTracked) return;
   sender.once?.('destroyed', () => {
     activePrivacyReceiptsByWebContentsId.delete(sender.id);
   });
