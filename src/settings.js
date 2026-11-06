@@ -146,7 +146,23 @@ saveChats.addEventListener('change', async () => {
     });
     const setup = await window.sovereign.modelSetup.getState();
     renderAiSettings(ai, setup);
-    setStatus('Chat history setting saved.');
+    let message = 'Chat history setting saved.';
+    if (!ai.saveChatsOnDevice) {
+      // Saving is off: offer to delete chats already on disk (Delete / Keep).
+      const result = await window.sovereign.chats.offerDeleteOnDisable();
+      if (result.cleared) {
+        const what = result.deleted > 0
+          ? `${result.deleted} saved ${result.deleted === 1 ? 'chat' : 'chats'} deleted`
+          : result.unreadable ? 'Unreadable saved chat history deleted' : 'Saved chat history deleted';
+        message = `Chat saving turned off. ${what} from Sovereign's storage. Chromium may keep fragments in its internal files until it cleans them up.`;
+        if (result.legacyPending) {
+          message += ' Chats saved by an older version could not be removed yet; Sovereign will try again the next time it starts.';
+        }
+      } else if (result.kept) {
+        message = 'Chat saving turned off. Saved chats were kept; delete them from Ask AI with Clear history.';
+      }
+    }
+    setStatus(message);
   } catch (error) {
     setStatus(error.message, true);
   } finally {

@@ -57,11 +57,16 @@ let lastModelMessages = [];
 let setupState = null;
 let chatId = messageId();
 let saveChatsOnDevice = false;
+let savedChatList = [];
+let savedChatsUnreadable = false;
+let closeDeletedChatWhenIdle = false;
+const deletedChatIds = new Set();
 let mediaTurns = [];
 let privacyReceiptList = [];
 let selectedPrivacyReceiptId = '';
 let userSelectedPrivacyReceipt = false;
-const CHAT_HISTORY_KEY = 'sovereign.ask.chats';
+// Old location of saved chats. Only read once, to move them into the main-process file.
+const LEGACY_CHAT_HISTORY_KEY = 'sovereign.ask.chats';
 const CONTEXT_CHAR_BUDGET = 9000;
 const MAX_ATTACHMENTS = 3;
 const MAX_NON_PDF_ATTACHMENT_BYTES = 5 * 1024 * 1024;
@@ -297,6 +302,9 @@ function setupPrivacyReceiptPanel() {
 
 function setRunning(nextRunning) {
   running = nextRunning;
+  if (!running && closeDeletedChatWhenIdle) {
+    closeDeletedChat();
+  }
   sendButton.disabled = running;
   stopButton.disabled = !running;
   chatInput.disabled = running;
@@ -1538,24 +1546,75 @@ async function refreshSettings() {
   renderChatHistory();
 }
 
-function savedChats() {
-  if (!saveChatsOnDevice) {
-    return [];
-  }
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(CHAT_HISTORY_KEY) || '[]');
-    return Array.isArray(parsed) ? parsed.slice(0, 50) : [];
-  } catch {
-    return [];
-  }
+// Saved chats live in one file owned by the main process (src/chat-store.js), not in
+// localStorage, so deleting a chat really removes it from disk. This is the in-memory copy.
+// Closes the open chat after it was deleted, and drops this page's other copies of it
+// (the thread, media turns, retry data and the last model input).
+function closeDeletedChat() {
+  closeDeletedChatWhenIdle = false;
+  chatId = messageId();
+  messages = [];
+  mediaTurns = [];
+  lastRequest = null;
+  lastModelMessages = [];
+  pendingQuestion = '';
+  pendingUserMessageId = '';
+  renderThread({ forceScroll: true });
 }
 
-function writeSavedChats(chats) {
-  if (!saveChatsOnDevice) {
+// snapshot: { chats, unreadable } from the main process.
+function applySavedChats(snapshot) {
+  const list = Array.isArray(snapshot) ? snapshot : snapshot?.chats;
+  const next = Array.isArray(list) ? list : [];
+  savedChatsUnreadable = Boolean(snapshot?.unreadable);
+  const nextIds = new Set(next.map(chat => chat.id));
+  for (const chat of savedChatList) {
+    if (!nextIds.has(chat.id)) {
+      deletedChatIds.add(chat.id);
+    }
+  }
+  savedChatList = next;
+  // The open chat was deleted (here, in another tab, or from Settings): close it so it is
+  // not saved again. While an answer is generating it is never re-saved, and it is closed as
+  // soon as generation ends (see setRunning).
+  if (deletedChatIds.has(chatId)) {
+    if (running) {
+      closeDeletedChatWhenIdle = true;
+    } else {
+      closeDeletedChat();
+    }
+  }
+  renderChatHistory();
+}
+
+async function loadSavedChats() {
+  applySavedChats(await window.sovereign.chats.list());
+}
+
+const CHATS_DELETED_TEXT = "Deleted from Sovereign's storage. Chromium may keep fragments in its internal files until it cleans them up.";
+const LEGACY_DELETE_PENDING_TEXT = ' Chats saved by an older version could not be removed yet; Sovereign will try again the next time it starts.';
+
+// One-time move of chats saved by older versions out of this page's localStorage, through
+// Chromium's own localStorage API. The key is removed even if its value is empty or unreadable.
+// If the user already deleted all chats, main imports nothing (deletion wins) and the key is
+// just removed. Chromium may keep fragments of the old value in its internal files.
+async function migrateLegacyChats() {
+  const raw = window.localStorage.getItem(LEGACY_CHAT_HISTORY_KEY);
+  if (raw === null) {
     return;
   }
-  const clean = Array.isArray(chats) ? chats.slice(0, 50) : [];
-  window.localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(clean));
+  let legacy = [];
+  try {
+    const parsed = JSON.parse(raw);
+    legacy = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    legacy = [];
+  }
+  applySavedChats(await window.sovereign.chats.importLegacy(legacy));
+  window.localStorage.removeItem(LEGACY_CHAT_HISTORY_KEY);
+  if (window.localStorage.getItem(LEGACY_CHAT_HISTORY_KEY) === null) {
+    await window.sovereign.chats.legacyRemoved();
+  }
 }
 
 const SAVED_MEDIA_FIELDS = [
@@ -1600,8 +1659,8 @@ function savedMessage(message) {
   return clean;
 }
 
-function persistCurrentChat() {
-  if (!saveChatsOnDevice || messages.length === 0) {
+async function persistCurrentChat() {
+  if (!saveChatsOnDevice || messages.length === 0 || deletedChatIds.has(chatId)) {
     return;
   }
   const now = new Date().toISOString();
@@ -1612,21 +1671,35 @@ function persistCurrentChat() {
     updatedAt: now,
     messages: messages.slice(-40).map(savedMessage)
   };
-  const next = [entry, ...savedChats().filter(chat => chat.id !== chatId)].slice(0, 50);
-  writeSavedChats(next);
-  renderChatHistory();
+  try {
+    applySavedChats(await window.sovereign.chats.save(entry));
+  } catch (error) {
+    setStatus(`Could not save this chat: ${error.message}`, true);
+  }
 }
 
 function renderChatHistory() {
   if (!chatHistoryPanel || !chatHistoryList) {
     return;
   }
-  chatHistoryPanel.hidden = !saveChatsOnDevice;
-  if (!saveChatsOnDevice) {
+  const chats = savedChatList;
+  // Shown with saving off too while saved chats (or an unreadable file) exist, so they can
+  // still be deleted.
+  chatHistoryPanel.hidden = !saveChatsOnDevice && chats.length === 0 && !savedChatsUnreadable;
+  if (chatHistoryPanel.hidden) {
     return;
   }
-  const chats = savedChats();
   chatHistoryList.replaceChildren();
+  if (savedChatsUnreadable) {
+    const notice = document.createElement('div');
+    notice.className = 'empty-state compact chat-history-unreadable';
+    notice.textContent = 'Some saved chat history on this device could not be read. Clear history deletes it.';
+    chatHistoryList.append(notice);
+  }
+  if (chats.length === 0 && savedChatsUnreadable) {
+    clearChatHistoryButton.disabled = false;
+    return;
+  }
   if (chats.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'empty-state compact';
@@ -1676,14 +1749,13 @@ function renderChatHistory() {
     remove.type = 'button';
     remove.className = 'secondary-action compact-action';
     remove.textContent = 'Delete';
-    remove.addEventListener('click', () => {
-      writeSavedChats(savedChats().filter(saved => saved.id !== chat.id));
-      if (chatId === chat.id) {
-        chatId = messageId();
-        messages = [];
-        renderThread({ forceScroll: true });
+    remove.addEventListener('click', async () => {
+      try {
+        applySavedChats(await window.sovereign.chats.delete(chat.id));
+        setStatus('Saved chat deleted.');
+      } catch (error) {
+        setStatus(`Could not delete the chat: ${error.message}`, true);
       }
-      renderChatHistory();
     });
     item.append(title, remove);
     chatHistoryList.append(item);
@@ -2576,14 +2648,21 @@ downloadModelButton.addEventListener('click', () => {
     setStatus(error.message, true);
   });
 });
-clearChatHistoryButton.addEventListener('click', () => {
-  if (!saveChatsOnDevice) {
-    return;
+clearChatHistoryButton.addEventListener('click', async () => {
+  clearChatHistoryButton.disabled = true;
+  try {
+    const result = await window.sovereign.chats.clear();
+    applySavedChats(result);
+    if (result.cleared) {
+      setStatus(`${CHATS_DELETED_TEXT}${result.legacyPending ? LEGACY_DELETE_PENDING_TEXT : ''}`);
+    }
+  } catch (error) {
+    setStatus(`Could not clear saved chats: ${error.message}`, true);
+  } finally {
+    renderChatHistory();
   }
-  window.localStorage.removeItem(CHAT_HISTORY_KEY);
-  renderChatHistory();
-  setStatus('Saved chat history cleared.');
 });
+window.sovereign.chats.onChanged(applySavedChats);
 window.sovereign.modelSetup.onState(handleModelSetupState);
 
 renderAttachments();
@@ -2591,6 +2670,8 @@ renderThread();
 setupPrivacyReceiptPanel();
 setRunning(false);
 refreshSettings()
+  .then(migrateLegacyChats)
+  .then(loadSavedChats)
   .then(refreshModelCacheState)
   .then(() => window.sovereign.modelSetup.getState())
   .then(handleModelSetupState)
