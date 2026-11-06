@@ -695,3 +695,160 @@ Each item is small and focused. One Codex task per line unless they are grouped.
 | 14 | P3, docs | Replace the "Read sources for a fuller answer" wording with a description of automatic source reading: with **Search the web** on, Ask AI reads up to the top 3 source pages and answers from them. The pages appear in the Privacy Receipt as `source-page` entries. Change only those lines | `README.md` (line 132, feature table row "Read more source material"), `docs/privacy-audit.md` (line 50: delete step 3 and fold it into step 2, e.g. "Run one Ask AI question with **Search the web** enabled; Sovereign reads the top 3 source pages automatically". Renumber the image step from 4 to 3. Check the expected-hosts part of the audit still matches, since the source-page hosts now come from step 2) | The docs describe a button that doesn't exist. No code change; `npm run check` must still pass |
 
 Each fix should come with an automated test where it's practical: pure functions (the address classifier, receipt summary, `addEntry`) in `tests/*.test.js`, which run under `npm run check`, and UI flows in the fixture Electron tests.
+
+## Task: Website permissions
+Status: ready for manual testing (not committed)
+
+### PLAN (Claude)
+This is item P1 #1 from the Feature test pass. Codex is out of usage today, so at Sandeep's request Claude both plans and implements this task, and also writes CHANGES.
+
+#### 1. Problem
+`src/main.js` never calls `setPermissionRequestHandler`, `setPermissionCheckHandler`, `setDevicePermissionHandler` or `setDisplayMediaRequestHandler`. Electron's defaults are:
+- Every permission request is granted, including camera, microphone, location, notifications and MIDI.
+- When a page asks for a Bluetooth device (`select-bluetooth-device`) and nothing handles it, **the first device is chosen automatically**.
+
+Web tabs (`createWebView`) and Sovereign's own pages (`createTrustedInternalView`, the UI, sidebar and model-setup views) all use `session.defaultSession`. So one set of handlers covers everything. The code tells web pages and Sovereign's pages apart by the requesting URL.
+
+#### 2. Policy
+| Group | Permissions (Electron names) | Web pages | Sovereign's own pages (`sovereign:`, `file:`) |
+|---|---|---|---|
+| **Ask the user** | `media` with `mediaTypes` containing `video` (camera) and/or `audio` (microphone), `geolocation`, `notifications`, `midi`, `midiSysex`, `clipboard-read`, `pointerLock`, `keyboardLock`, `idle-detection`, `window-management`, `storage-access`, `top-level-storage-access`, `speaker-selection` | Prompt: **Deny** (default, and also Esc) or **Allow once** | Deny, no prompt |
+| **Allowed without a prompt** | `fullscreen`, `clipboard-sanitized-write` | Allowed. Chromium only lets these run straight after a click or key press, and they read no user data (fullscreen for video players; writing text to the clipboard for "Copy" buttons). **Sandeep can veto this**: move them to "Ask the user" if wanted. | Deny |
+| **Always denied** | Everything else: `openExternal`, `mediaKeySystem`, `display-capture`, `fileSystem`, `hid`, `serial`, `usb`, `deprecated-sync-clipboard-read`, `unknown`, and any new name | Deny, no prompt | Deny |
+| **Device pickers** | `select-bluetooth-device` (web contents), `select-hid-device`, `select-serial-port`, `select-usb-device` (session); `setDevicePermissionHandler` | Cancel the picker / return `false` | Same |
+| **Screen capture** | `getDisplayMedia()`: Electron first sends `media` with an **empty** `mediaTypes` list (verified with a probe), then would call `setDisplayMediaRequestHandler` | Deny with no prompt, recorded as `screen capture`. Never shown as a camera/microphone prompt | Deny |
+
+**Sovereign's own pages need no website permissions.** I checked `src/*.js` and the AI bundle:
+- Clipboard writes go through IPC to `clipboard.writeText` in main, not through a browser permission.
+- Downloads go through IPC.
+- The local model uses WebGPU and origin-private storage (`navigator.gpu`, `navigator.storage`), neither of which is a permission.
+- No page uses `getUserMedia`, `Notification`, geolocation, MIDI or the browser clipboard.
+
+So every permission request from these pages is denied and recorded.
+
+**Check handler** (`setPermissionCheckHandler`, synchronous, used by `navigator.permissions.query` and the like): it returns `true` only for web pages asking about `fullscreen` or `clipboard-sanitized-write`, and `false` for everything else. **"Allow once" is never remembered:** the next request prompts again. Check-handler calls are not recorded, because they are status queries, not requests.
+
+#### 3. The prompt
+A native `dialog.showMessageBox` attached to the tab's window. If that window can't be found, it uses the focused window.
+- **Title:** `Website permission`
+- **Message:** `<site> wants to <action>.` Here `<site>` is the requesting origin (`URL.origin`, so internationalised domain names show in their `xn--` form, which makes look-alike spoofing harder), and `<action>` is one of:
+  - `use your camera`, `use your microphone`, `use your camera and microphone`
+  - `use your location`
+  - `show notifications`
+  - `use MIDI devices`, `use MIDI devices with full control (SysEx)`
+  - `read your clipboard`
+  - `hide and lock your mouse pointer`
+  - `capture all keyboard keys`
+  - `know when you are idle`
+  - `see your screens and place windows on them`
+  - `use its cookies while embedded in another site`
+  - `choose your audio output device`
+- **Detail:** if the request comes from an embedded frame, it adds `(inside <top-level origin>)`. It always adds: `Allow once grants this request only. Sovereign will ask again next time.`
+- **Buttons:** `Deny` (default, also on Esc / cancel) and `Allow once`.
+- **Order:** prompts are shown one at a time, in a queue.
+- **When the request no longer applies:** if the tab is closed, or has moved to a different origin, before the user answers, the request is denied.
+- **If the dialog fails:** the request is denied.
+
+#### 4. Privacy Receipt
+- Every request, and every device-picker or screen-capture attempt, is recorded with its decision in one receipt per app run: `Website permissions` (type `permissions`, id `website-permissions`).
+- **Entry fields:** category `permission`, method `PERMISSION`, url = the requesting origin. "What was sent" reads `Permission request: <name> – <decision>`, with `(embedded in <origin>)` when the request comes from a frame.
+- **Decisions:**
+  - `allowed once by you`
+  - `denied by you`
+  - `allowed automatically (needs a click or key press; reads no user data)`
+  - `denied automatically: not supported in Sovereign`
+  - `denied automatically: Sovereign's own pages need no website permissions`
+  - `denied: tab closed or page changed before you answered`
+  - `denied: unknown site`
+- **Summary:** `Website permission requests: N (M allowed)`.
+- Permission entries are not network requests, so they are left out of the cloud-AI host check.
+- The Ask AI and Search receipt panels must not jump to this receipt when it updates; they treat it like `background`.
+
+#### 5. Files
+| File | Change |
+|---|---|
+| `src/permission-policy.js` (**new**) | Pure logic with no Electron imports: the permission tables, `isInternalUrl`, `describePermission`, `classifyPermissionRequest`, `checkPermission`, and `createPermissionController({ prompt, record })`, which returns the `request` and `check` handlers (queue, re-check that the tab still exists and is on the same origin, deny on errors). |
+| `src/main.js` | `setupPermissionHandling(targetSession)`: wires the controller to `setPermissionRequestHandler` / `setPermissionCheckHandler`, adds `setDevicePermissionHandler(() => false)`, the `select-*-device` / `select-serial-port` handlers and `setDisplayMediaRequestHandler`, plus `select-bluetooth-device` on every web contents (`app.on('web-contents-created')`). The prompt uses `dialog.showMessageBox`. Called for `session.defaultSession` at startup and for any other session (`app.on('session-created')`), at most once per session. |
+| `src/privacy-receipt.js` | `permission` category, `addPermissionEntry()`, the summary line, and the cloud-check exclusion. |
+| `src/ask.js`, `src/search.js` | Don't auto-select a `permissions` receipt (treat it like `background`). One line each. |
+| `tests/permission-policy.test.js` (**new**) | See §6. |
+| `tests/privacy-receipt.test.js` | Permission entry, summary and cloud-check exclusion. |
+| `package.json` | Add `node --check src/permission-policy.js && node tests/permission-policy.test.js` to `check`. |
+
+#### 6. Tests (unit tests, run in `npm run check`)
+- Every "Ask the user" permission from a web origin is classified `prompt` with the correct action text. `media` gives camera, microphone or both. `media` with no `mediaTypes` (screen capture) is `deny`, with no prompt.
+- `fullscreen` and `clipboard-sanitized-write` are `allow` for web pages and `deny` for Sovereign's own pages.
+- `openExternal`, `display-capture`, `hid`, `usb`, `serial`, `unknown` and an invented permission name are `deny` with no prompt.
+- Sovereign's own pages (`sovereign://ask/`, `file:///…/index.html`) get `deny` for every permission, with no prompt.
+- An empty or unparseable origin gives `deny` ("unknown site").
+- **Controller:**
+  - "Allow once" calls back `true` exactly once.
+  - "Deny" calls back `false`.
+  - A prompt that throws gives `false`.
+  - A tab destroyed before the answer gives `false`.
+  - A page that moved to a different origin before the answer gives `false`.
+  - The prompt is **never** called for a denied or allowed-without-a-prompt permission.
+  - Callbacks are never `true` unless the prompt answered `allow` (or the permission is in the allowed-without-a-prompt group).
+  - Two requests at once are shown one after the other.
+  - Every request records exactly one receipt entry, with the right decision.
+  - The check handler returns `true` only for web pages asking about `fullscreen` or `clipboard-sanitized-write`.
+- **Receipt:** a permission entry has category `permission`. The summary counts requests and how many were allowed. An entry whose host is a cloud-AI host does not flag cloud AI.
+
+#### 7. Manual test steps (for Sandeep)
+1. `npm start`. Open `https://webcamtests.com` and click to test the camera. Expect the prompt `https://webcamtests.com wants to use your camera.`, with Deny selected by default.
+   - Press **Deny**: the site reports that access was denied or blocked.
+   - Reload and press **Allow once**: the camera works.
+   - Reload again: you are asked again.
+2. Open `https://browserleaks.com/geo`. Expect the location prompt. **Deny** means the site shows an error or denial.
+3. Microphone: `https://mictests.com`. Expect `wants to use your microphone`.
+4. Notifications: open the notification test page `https://www.bennish.net/web-notifications.html` (or any page that calls `Notification.requestPermission()`). Expect the prompt. With Deny, no notification appears.
+5. Clipboard read: open DevTools on any https page (View › Toggle Developer Tools) and run `navigator.clipboard.readText()`. Expect the `read your clipboard` prompt. With Deny, the promise rejects.
+6. Still on that page, run `navigator.permissions.query({ name: 'geolocation' }).then(s => s.state)`. It must **not** return `granted`, even after an earlier "Allow once".
+7. Fullscreen: play a YouTube video and click its fullscreen button. It goes fullscreen with no prompt (allowed without a prompt, as planned).
+8. Run `navigator.mediaDevices.getDisplayMedia()` in DevTools: it is rejected with no prompt.
+9. Open any Ask AI or Search tab, open the Privacy Receipt and choose **Website permissions** from the history list. Each request from steps 1–8 is listed with its site, the permission and the decision (`allowed once by you`, `denied by you`, `denied automatically…`). The summary reads `Website permission requests: N (M allowed)`, and the cloud-AI check still says ✓.
+10. While Ask AI generates an answer, open a permission prompt in another tab. The Ask AI receipt panel must stay on the Ask AI receipt and not jump to Website permissions.
+11. Ask for camera access, then close the tab while the prompt is open. Answer **Allow once**: nothing is granted, and the receipt shows `denied: tab closed or page changed before you answered`.
+12. Regression check: Ask AI (local and web), page summary, attachments, image search and downloads all still work, and none of them shows a permission prompt.
+
+### CHANGES (written by Claude at Sandeep's request, because Codex is out of usage today)
+Implemented on 2026-11-05. Nothing was committed.
+
+**Files changed**
+- `src/permission-policy.js` (**new**, no Electron imports):
+  - The permission tables (ask the user / allowed without a prompt / always denied).
+  - `classifyPermissionRequest`, `checkPermission`, `describePermission`, `promptText`, `isInternalUrl`, `webOrigin`.
+  - `createPermissionController({ prompt, record })`, which returns the `request` and `check` handlers plus `recordAutoDenied`. Prompts run one at a time in a queue. The request is denied if the tab closes or moves to another origin while the prompt is open, if the prompt throws, or if the answer is anything other than `allow`. Each request gets exactly one receipt entry, and a failing receipt never blocks the decision.
+- `src/main.js`:
+  - `setupPermissionHandling(session)`: request and check handlers, `setDevicePermissionHandler(() => false)`, cancelled HID/serial/USB pickers, `setDisplayMediaRequestHandler` that denies.
+  - `select-bluetooth-device` is cancelled on every web contents (Electron would otherwise pick the first device).
+  - Applied to `session.defaultSession` at startup and to any new session (`session-created`), at most once per session.
+  - The prompt is a native `dialog.showMessageBox` (`Deny` is the default and the cancel action, plus `Allow once`), attached to the tab's window.
+  - Test-only `SOVEREIGN_PERMISSION_TEST_ANSWER=allow|deny` skips the dialog, the same idea as `SOVEREIGN_MEDIA_TEST_FIXTURES`.
+- `src/privacy-receipt.js`: `permission` category; `addPermissionEntry()`, which writes to a single `Website permissions` receipt (id `website-permissions`, type `permissions`); the summary line `Website permission requests: N (M allowed)`; permission entries are left out of the cloud-AI check.
+- `src/ask.js`, `src/search.js`: the receipt panels no longer jump to the `permissions` receipt (treated like `background`). Two lines each.
+- `tests/permission-policy.test.js` (**new**): all of PLAN §6.
+- `tests/privacy-receipt.test.js`: permission entry, summary, cloud-check exclusion, one receipt per run, and no entries leaking into other receipts.
+- `tests/electron/permissions.test.js` (**new**, plus a `test:electron:permissions` script). In real Electron, with the prompt answered "Allow once", it checks:
+  - a website's `Notification.requestPermission()` is `granted` only through the prompt;
+  - `navigator.permissions.query` for notifications and geolocation is never `granted`;
+  - `getDisplayMedia()` is rejected;
+  - Sovereign's own UI page is `denied` with no prompt;
+  - all of it is in the receipt.
+- `package.json`: `check` runs `node --check src/permission-policy.js && node tests/permission-policy.test.js`, and `check:tests` syntax-checks the new Electron test.
+
+**Deviation from the PLAN, found while testing:** I probed Electron 38.8.6 directly. `getDisplayMedia()` sends a `media` permission request with **empty** `mediaTypes` before the display-media handler runs. The first build therefore showed screen-capture attempts as a "camera or microphone" prompt. Fixed: `media` with no `video`/`audio` is classed as `screen capture` and denied with no prompt. Tests were added (unit test, plus an Electron assertion that no "camera or microphone" entry appears). PLAN §2 and §6 are updated to match.
+
+**Decision for Sandeep:** `fullscreen` and `clipboard-sanitized-write` (writing text to the clipboard) are allowed for websites without a prompt, as PLAN §2 explains. Chromium only lets them run straight after a click or key press, and they read no user data. Every one is still recorded. If you would rather be asked, move them into `PROMPT_PERMISSIONS` in `src/permission-policy.js`. That is a one-line change, but the existing tests would need updating.
+
+**Test results**
+- `npm run check`: **exit 0**. It runs `permission-policy tests passed` and `privacy-receipt tests passed`, alongside the existing tests.
+- Mutation check: I copied the module to the scratchpad and made `geolocation` allowed without a prompt. `tests/permission-policy.test.js` failed with an assertion, which proves the tests catch an automatic grant.
+- `npm run test:electron:permissions`: **exit 0**. Receipt entries seen:
+  - `127.0.0.1:<port> | Permission request: notifications – allowed once by you`
+  - `… | screen capture – denied automatically: not supported in Sovereign`
+  - `sovereign | Permission request: notifications – denied automatically: Sovereign's own pages need no website permissions`
+- Regression: `test:electron:browser-features`, `media-chat`, `ui-smoke` and `downloads` all exit 0.
+- `git diff --check`: clean. No secrets were added.
+
+**Not verified automatically (needs PLAN §7 by hand):** the native dialog itself (wording, Deny as the default, Esc), real camera/microphone/location hardware, and `select-bluetooth-device` / HID / USB pickers, because no devices are available in tests. Run manual steps 1–12 in PLAN §7, especially steps 1, 2, 9 and 11.

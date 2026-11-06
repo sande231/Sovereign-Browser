@@ -221,7 +221,7 @@ function renderPrivacyReceipt(receipt) {
 }
 
 function defaultPrivacyReceiptId() {
-  return privacyReceiptList.find(receipt => receipt.type !== 'background')?.id || privacyReceiptList[0]?.id || '';
+  return privacyReceiptList.find(receipt => !['background', 'permissions'].includes(receipt.type))?.id || privacyReceiptList[0]?.id || '';
 }
 
 async function refreshPrivacyReceipts(preferredReceipt = null) {
@@ -229,7 +229,7 @@ async function refreshPrivacyReceipts(preferredReceipt = null) {
     return;
   }
   privacyReceiptList = await window.sovereign.privacy.getReceipts();
-  if (preferredReceipt?.id && preferredReceipt.type !== 'background' && !userSelectedPrivacyReceipt) {
+  if (preferredReceipt?.id && !['background', 'permissions'].includes(preferredReceipt.type) && !userSelectedPrivacyReceipt) {
     selectedPrivacyReceiptId = preferredReceipt.id;
   }
   if (!privacyReceiptList.some(receipt => receipt.id === selectedPrivacyReceiptId)) {

@@ -19,8 +19,11 @@ const VALID_CATEGORIES = new Set([
   'source-page',
   'image',
   'model-download',
+  'permission',
   'other'
 ]);
+
+const PERMISSION_RECEIPT_ID = 'website-permissions';
 
 let receipts = [];
 const listeners = new Set();
@@ -60,7 +63,8 @@ function cloudHostMatch(host) {
 }
 
 function cloudCheck(entries) {
-  const matches = [...new Set(entries.map(entry => cloudHostMatch(entry.host)).filter(Boolean))];
+  // Permission entries record a site's request, not a network request made by Sovereign.
+  const matches = [...new Set(entries.filter(entry => entry.category !== 'permission').map(entry => cloudHostMatch(entry.host)).filter(Boolean))];
   if (matches.length > 0) {
     return {
       ok: false,
@@ -93,6 +97,7 @@ function buildSummary(receipt) {
   const imageHosts = uniqueHosts(entries, 'image');
   const modelHosts = uniqueHosts(entries, 'model-download');
   const otherHosts = uniqueHosts(entries, 'other');
+  const permissionEntries = entries.filter(entry => entry.category === 'permission');
 
   if (searchHosts.length > 0) {
     parts.push(`Query sent to ${searchHosts.join(', ')} (SearXNG)`);
@@ -108,6 +113,10 @@ function buildSummary(receipt) {
   }
   if (otherHosts.length > 0) {
     parts.push(`Other trusted-app requests: ${otherHosts.join(', ')}`);
+  }
+  if (permissionEntries.length > 0) {
+    const allowed = permissionEntries.filter(entry => / – allowed /.test(entry.whatWasSent)).length;
+    parts.push(`Website permission requests: ${permissionEntries.length} (${allowed} allowed)`);
   }
   if (receipt.type === 'ask') {
     parts.push('AI generated locally');
@@ -229,6 +238,19 @@ function addBackgroundEntry(details = {}) {
   return addEntry(receipt.id, details);
 }
 
+function addPermissionEntry({ origin = '', name = '', decision = '', embeddedIn = '' } = {}) {
+  if (!getReceipt(PERMISSION_RECEIPT_ID)) {
+    createReceipt({ id: PERMISSION_RECEIPT_ID, type: 'permissions', label: 'Website permissions', query: '' });
+  }
+  const embedded = embeddedIn ? ` (embedded in ${safeString(embeddedIn, 200)})` : '';
+  return addEntry(PERMISSION_RECEIPT_ID, {
+    category: 'permission',
+    method: 'PERMISSION',
+    url: /^https?:\/\//i.test(origin) ? origin : origin === 'Sovereign' ? 'sovereign://sovereign/' : '',
+    whatWasSent: `Permission request: ${safeString(name, 60)} – ${safeString(decision, 200)}${embedded}`
+  });
+}
+
 async function fetchWithReceipt(fetchImpl, receiptId, url, options = {}, details = {}) {
   addEntry(receiptId, {
     category: details.category,
@@ -272,6 +294,8 @@ module.exports = {
   CLOUD_AI_HOSTS,
   addEntry,
   addBackgroundEntry,
+  addPermissionEntry,
+  PERMISSION_RECEIPT_ID,
   createReceipt,
   exportPayload,
   fetchWithReceipt,
