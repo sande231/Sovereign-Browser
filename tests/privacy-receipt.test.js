@@ -104,6 +104,24 @@ assert.equal(Array.isArray(payload.cloudAiHosts), true);
 assert.equal(payload.receipts.length, 20);
 assert.equal(payload.ignoredSchemes.includes('sovereign:'), true);
 
+receipts.resetForTests();
+const askBefore = receipts.createReceipt({ id: 'ask-before-permission', type: 'ask', label: 'Ask AI', query: 'q' });
+receipts.addPermissionEntry({ origin: 'https://webcamtests.com', name: 'camera', decision: 'allowed once by you' });
+receipts.addPermissionEntry({ origin: 'https://api.openai.com', name: 'location', decision: 'denied by you', embeddedIn: 'https://news.example' });
+receipts.addPermissionEntry({ origin: 'Sovereign', name: 'notifications', decision: "denied automatically: Sovereign's own pages need no website permissions" });
+const permissionReceipt = receiptById(receipts.PERMISSION_RECEIPT_ID);
+assert.equal(permissionReceipt.type, 'permissions');
+assert.equal(permissionReceipt.label, 'Website permissions');
+assert.equal(permissionReceipt.entries.length, 3);
+assert.ok(permissionReceipt.entries.every(entry => entry.category === 'permission' && entry.method === 'PERMISSION'));
+assert.deepEqual(permissionReceipt.entries.map(entry => entry.host), ['webcamtests.com', 'api.openai.com', 'sovereign']);
+assert.equal(permissionReceipt.entries[0].whatWasSent, 'Permission request: camera – allowed once by you');
+assert.match(permissionReceipt.entries[1].whatWasSent, /\(embedded in https:\/\/news\.example\)$/);
+assert.equal(permissionReceipt.summary, 'Website permission requests: 3 (1 allowed)');
+assert.equal(permissionReceipt.cloudAi.ok, true, 'a permission request from a cloud-AI site is not a cloud-AI call');
+assert.equal(receiptById(askBefore.id).entries.length, 0, 'permission entries never land in other receipts');
+assert.equal(receipts.getReceipts().filter(receipt => receipt.type === 'permissions').length, 1, 'one permissions receipt per run');
+
 // SearXNG forwarding disclosure.
 receipts.resetForTests();
 const webSearch = receipts.createReceipt({ id: 'fwd-search', type: 'search', label: 'Search', query: 'history of tea' });

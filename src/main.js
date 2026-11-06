@@ -30,6 +30,7 @@ const {
   readSourcePages
 } = require('./source-reader');
 const privacyReceipts = require('./privacy-receipt');
+const { createPermissionController } = require('./permission-policy');
 const datasetBatchEnabled = Boolean(process.env.SOVEREIGN_DATASET_BATCH);
 let datasetWindow = null;
 const {
@@ -4061,6 +4062,102 @@ function setupAiNetworkMonitor() {
   });
 }
 
+// Test-only: answer website permission prompts without a native dialog ('allow' or 'deny').
+const PERMISSION_TEST_ANSWER = ['allow', 'deny'].includes(process.env.SOVEREIGN_PERMISSION_TEST_ANSWER)
+  ? process.env.SOVEREIGN_PERMISSION_TEST_ANSWER
+  : '';
+const permissionSessions = new WeakSet();
+
+function permissionPromptWindow(contents) {
+  const { state } = findTabByWebContentsId(contents?.id);
+  if (state?.window && !state.window.isDestroyed()) {
+    return state.window;
+  }
+  const owner = contents && !contents.isDestroyed() ? BrowserWindow.fromWebContents(contents) : null;
+  return owner || BrowserWindow.getFocusedWindow() || null;
+}
+
+async function promptForWebsitePermission({ webContents: contents, message, detail }) {
+  if (PERMISSION_TEST_ANSWER) {
+    return PERMISSION_TEST_ANSWER;
+  }
+  const options = {
+    type: 'question',
+    title: 'Website permission',
+    message,
+    detail,
+    buttons: ['Deny', 'Allow once'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true
+  };
+  const parent = permissionPromptWindow(contents);
+  const result = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
+  return result.response === 1 ? 'allow' : 'deny';
+}
+
+const permissionController = createPermissionController({
+  prompt: promptForWebsitePermission,
+  record: entry => privacyReceipts.addPermissionEntry(entry)
+});
+
+function lastFunctionArgument(args) {
+  for (let index = args.length - 1; index >= 0; index -= 1) {
+    if (typeof args[index] === 'function') {
+      return args[index];
+    }
+  }
+  return null;
+}
+
+function contentsFromFrame(frame) {
+  try {
+    return frame ? webContents.fromFrame(frame) : null;
+  } catch {
+    return null;
+  }
+}
+
+function setupPermissionHandling(targetSession) {
+  if (!targetSession || permissionSessions.has(targetSession)) {
+    return;
+  }
+  permissionSessions.add(targetSession);
+  targetSession.setPermissionRequestHandler(permissionController.request);
+  targetSession.setPermissionCheckHandler(permissionController.check);
+  targetSession.setDevicePermissionHandler(() => false);
+  for (const eventName of ['select-hid-device', 'select-serial-port', 'select-usb-device']) {
+    targetSession.on(eventName, (event, ...args) => {
+      event.preventDefault();
+      const contents = args.find(arg => arg && typeof arg.getURL === 'function') || contentsFromFrame(args[0]?.frame);
+      permissionController.recordAutoDenied(contents, eventName.replace('select-', '').replace('-device', '').replace('-port', ''));
+      const callback = lastFunctionArgument(args);
+      if (callback) {
+        callback('');
+      }
+    });
+  }
+  targetSession.setDisplayMediaRequestHandler((request, callback) => {
+    permissionController.recordAutoDenied(contentsFromFrame(request?.frame), 'screen capture');
+    try {
+      callback({});
+    } catch {
+      // Declining without a stream is enough to reject getDisplayMedia().
+    }
+  });
+}
+
+// Electron picks the first Bluetooth device automatically unless this event is handled.
+app.on('web-contents-created', (_event, contents) => {
+  contents.on('select-bluetooth-device', (event, _devices, callback) => {
+    event.preventDefault();
+    permissionController.recordAutoDenied(contents, 'bluetooth');
+    callback('');
+  });
+});
+
+app.on('session-created', setupPermissionHandling);
+
 async function runDatasetCollection() {
   const { collectDataset, expandPath } = require('./dataset-collection');
   const outputPath = expandPath(process.env.SOVEREIGN_DATASET_OUT || '~/sovereign-finetune/data/collected.jsonl');
@@ -4099,6 +4196,7 @@ async function runDatasetCollection() {
 
 app.whenReady().then(async () => {
   app.setName('Sovereign');
+  setupPermissionHandling(session.defaultSession);
   loadPreferences();
   await setupAuditProxyForSession(session.defaultSession);
   setupInternalProtocol();

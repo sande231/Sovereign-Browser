@@ -519,6 +519,340 @@ Not re-checked in this pass, because it was out of scope: items 3, 4 and 6 (the 
 
 **Verdict for this pass:** items 1, 13, 14, 16 and 19 are fixed, with no MUST FIX left among them.
 
+## Feature test pass
+Status: planning (review only, no code changed)
+Reviewed by Claude on 2026-11-05, on branch `phase-0/feature-test`, after the merged image-retrieval fix (`d45bd99`).
+
+**How this was done:** I read the code for each feature and probed the pure functions with `node` from the scratchpad. I did not click through the running app, so every manual step below still needs Sandeep's hand test. "Bug" means something I can show from the code or a probe. "Risk" means something to watch for during the hand test.
+
+### 1. Browsing (address bar, navigation, popups, permissions)
+- **Files:** `src/main.js` (`classifyAddressInput`, `normalizeAddress`, `looksLikeNavigableAddress`, `navigateActive`, `createWebView`, `will-navigate`, `setWindowOpenHandler`), `src/renderer.js`, `src/index.html`, `src/preload.js`.
+- **Bug, address bar, `word:` treated as a URL scheme.** `classifyAddressInput` decides any input that starts with `letters:` is an unsupported scheme. Probe results:
+  - `Python: list comprehension` gives the error "Sovereign only opens http and https websites."
+  - `Note:buy milk` gives the same error.
+  - `example.com:8080/path` gives the same error, though `localhost:3000` and `192.168.1.1:8080` work.
+  - Expected: the first two run a search, and the third opens `https://example.com:8080/path`.
+- **Bug, privacy: no permission handler for websites.** There is no `setPermissionRequestHandler` or `setPermissionCheckHandler` anywhere in `main.js`. Electron's default **grants** permission requests (camera, microphone, geolocation, notifications, MIDI and others) without asking. Web tabs use `sandbox: true`, but that does not stop permission grants.
+- **Risk:** every `window.open` from a page becomes a new foreground tab. There is no popup limit, so pop-up-heavy sites will open many tabs.
+- **Hand test:**
+  1. Type `wikipedia.org`, then `localhost:8080`, then `Python: list comprehension`, then `example.com:8080`. Check each one opens or searches correctly; the last two currently fail.
+  2. Open `https://browserleaks.com/geo` and a webcam test page (for example `https://webcamtests.com`). Expected: a prompt, or a denial. Today the site probably gets access with no prompt. **This is the most important check in this pass.**
+  3. Back, Forward and Reload on a normal site. Then a link with `target=_blank`, which should open one new tab.
+
+### 2. Tabs (new, switch, close, reopen closed, detach, tab menu, find in page, bookmarks)
+- **Files:** `src/main.js` (`createTab`, `closeTab`, `reopenClosedTab`, `recentlyClosedTabs`, `detachTabToNewWindow`, `showTabContextMenu`, find-bar handlers, bookmarks IPC), `src/renderer.js`, `src/bookmarks.js` / `.html`, `src/newtab.js` / `.html`.
+- **Bugs:** none seen in the handlers I read.
+- **Risk:** `reopenClosedTab` reopens by `entry.url`. If you close an Ask AI tab and reopen it, the chat is not restored (unless chat saving is on). Expected, but users may be surprised.
+- **Hand test:**
+  1. Cmd+T, open three sites, then switch tabs by clicking and with the keyboard.
+  2. Close a tab, then reopen it with Cmd+Shift+T: the same URL comes back.
+  3. Drag a tab out of the window (detach). It moves to a new window and keeps working.
+  4. Right-click a tab and use the tab menu.
+  5. Cmd+F to find in page: Next, Previous, then Esc clears the highlight.
+  6. Bookmark the page, rename it, open it from the Bookmarks page, then remove it.
+
+### 3. Search page (Sovereign Search, results only)
+- **Files:** `src/search.js`, `src/search.html`, `src/search-backend.js` (`searchSearxng`, `normalizeSearxngEndpoint`), `src/main.js` (`handleSearchQuery`, `search:cancel`).
+- **Bugs:** none new. The endpoint is restricted to localhost or a private network (good).
+- **Known issue (1)** applies here: see Privacy Receipt.
+- **Hand test:**
+  1. Run SearXNG and search `history of tea`. Expect up to 5 results; clicking a title opens a new tab.
+  2. Press Cancel during a search; the status should say it was canceled.
+  3. Stop SearXNG and search again. Expect a clear error, not a hang. The error appears within about 8 seconds.
+
+### 4. Ask AI (local model chat, with or without web)
+- **Files:** `src/ask.js`, `src/ask.html`, `src/ai/ai-engine-entry.js` (bundled to `src/generated/ai-engine.bundle.js`), `src/model-setup.js` / `.html`, `src/main.js` (model-setup IPC, `ask-handoff:*`), `src/search-utils.js`.
+- **Known issue (2), the Search the web / Attach bar overlaps the end of the chat. Root cause found.**
+  - `.ask-page` (`src/styles.css` around line 1444) uses `grid-template-rows: auto auto auto auto minmax(0, 1fr) auto auto`.
+  - That row list assumes the receipt panel, the model-setup card and the saved-chats panel are all visible. All three are usually `hidden` (`display: none`), so they drop out of the grid and everything after them moves up.
+  - The `1fr` row then lands on `.chat-composer` instead of `.chat-thread`. The thread sits in an `auto` row and grows past the screen. With `overflow: hidden` on the page, the controls, attachment panel and composer get squeezed over the end of the conversation.
+  - Fix: pin the thread to the stretching row whatever is hidden. Either use a flex column with `.chat-thread { flex: 1 1 auto; min-height: 0 }`, or give each child an explicit `grid-row` / `grid-template-areas`. This is CSS only.
+- **Risk:** the local model needs WebGPU. If WebGPU is missing, check that the message is clear and that there is no cloud fallback. There is none in the code.
+- **Hand test:**
+  1. With web off, ask `What is photosynthesis?`. Expect a local answer, and a receipt saying "Nothing left this device".
+  2. Ask 6–8 more questions until the chat scrolls. The last message must be fully visible above the controls bar: this is the check for known issue (2). Resize the window narrow and wide and check again.
+  3. Press Stop during generation, then Retry, then Copy, and export Markdown and PDF.
+  4. Turn saving on in Settings, reload Ask AI, and reopen the chat from the history list.
+
+### 5. Citations (numbered `[n]` links in web answers)
+- **Files:** `src/search-utils.js` (`buildSourceAnswerMessages`, `finalizeSearchAnswerWithMeta`, `validCitationNumbers`, `citationSupportsSentence`), `src/ask.js` (`appendInlineMarkdown`, `renderSources`, `evidenceResultsForSources`).
+- **Bugs:** none seen. Citation numbers map to sources by result `id`, and invalid numbers are filtered out.
+- **Hand test:**
+  1. With web on, ask `When was the Eiffel Tower built?`. Every `[n]` should link to source n. Click each one: the right page opens.
+  2. Check that no `[n]` points past the end of the source list, and that a sentence with no source has no citation.
+
+### 6. Reading sources for a fuller answer
+- **Files:** `src/source-reader.js` (max 3 pages, 10 s timeout, 1.25 MB cap, manual redirects with each hop checked), `src/main.js` (`handleReadSources`, receipt label "Read sources"), `src/ask.js` (`streamWebAnswer`).
+- **Decided (Sandeep, 2026-11-05):** automatic reading of the top 3 sources is the intended behaviour. **No separate button.** With web on, Ask AI always reads the top 3 source pages and then answers. `README.md` (line 132) and `docs/privacy-audit.md` (line 50) still tell users to click "Read sources for a fuller answer"; see fix #14. The receipt label `Read sources` in `src/main.js` names the activity, not a button, so it stays.
+- **Good:** redirects are followed manually, so every hop appears in the receipt as `source-page`.
+- **Hand test:**
+  1. With web on, ask a question and open the receipt. Expect 1 SearXNG `search` entry plus up to 3 `source-page` entries, each with its host.
+  2. Ask about a page that redirects (for example an `http://` link). Each hop should be listed.
+  3. Check the answer's note says whether it is a full answer or source excerpts.
+
+### 7. Page summary (sidebar)
+- **Files:** `src/sidebar.js` / `.html`, `src/summary-utils.js`, `src/main.js` (`ai:extract-active-page-text`, `extractActivePageText`, `ai:update-tab-state`).
+- **Bugs:** none functional. Cleanup: `summarizePage()` still builds debugging `promptDiagnostics` (regexes for "compact/extensive standard library" left over from a test). They are harmless but unrelated code.
+- **Hand test:**
+  1. Open a long article and the sidebar. Load the model, then Summarize. A summary should stream in.
+  2. Switch tab mid-summary: the summary stays with the original tab.
+  3. Press Stop: the status shows stopped, not an error.
+  4. Summarize a page with little text (for example `about:blank`, or an image-only page). Expect a clear message.
+  5. Open the receipt: summarising sends nothing over the network.
+
+### 8. Document attach (PDF / TXT / MD / CSV)
+- **Files:** `src/ask.js` (`addFiles`, `validateAttachmentFile`, `reprocessAttachment`, `attachmentBlocker`; limits: 3 files, 25 MB PDF, 5 MB other, 60 MB total, 200,000 characters), `src/pdf-extract-worker.js` (bundled to `src/generated/`), `src/main.js` (`ask-handoff:*` for attachments from the home page).
+- **Bug, small: rejected files use up a slot.** A rejected file (wrong type or too big) is still pushed into `attachments` with status `error`, so it counts toward the 3-file limit until the user removes it.
+- **Bug, misleading text:** the drop zone says attachments are kept "if chat saving is enabled", but `savedMessage()` saves no attachment data. Fix the text or the behaviour.
+- **Hand test:**
+  1. Attach a text PDF and ask `Summarize this document`. Expect an answer from the file and a "Nothing left this device" receipt.
+  2. Attach a scanned (image-only) PDF. Expect the "No extractable PDF text" message.
+  3. Attach a `.docx`. It should be rejected, and you should still be able to add 3 valid files.
+  4. Attach a CSV and ask about one of its columns.
+  5. Drag and drop onto the drop zone. Attach from the home page, which hands the files over to Ask AI.
+
+### 9. Image search, download and copy link (Ask AI)
+- **Files:** `src/media-intent.js`, `src/ask.js` (`streamMediaAnswer`, `validatedMediaResults`, `renderMediaCards`, `answerMediaDownloadReference`), `src/search-backend.js` (`searchSearxngMedia`), `src/main.js` (`search:media`, `media:preflight`, `media:download`, `preflightDownloadUrl`), `src/privacy-attribution.js`.
+- **Still open from the image-retrieval REVIEW, item 4:** thumbnails still use `loading='lazy'` (`ask.js` around line 615). Thumbnails that load late can be logged in whichever receipt is active then.
+- **Bug, privacy: redirects during media checks aren't listed.** `preflightDownloadUrl` uses `redirect: 'follow'`, so when an image URL redirects to a different host, only the first host is listed in the receipt. The final host is contacted but not listed. (`media:download` does log the final URL.) Fix: when `response.url`'s host differs, add a receipt entry for it, or follow redirects manually as `source-reader.js` does.
+- **Hand test:** PLAN §8 steps 1–12 of "Fix Ask AI image retrieval", plus:
+  1. Click **Copy image URL** and paste it into the address bar: the image opens.
+  2. **Download** an image, and type `download the second image`.
+  3. In the receipt, look for any preflight to a URL that redirects (Wikimedia `Special:FilePath` links redirect). Compare the hosts you see in DevTools' Network panel with the ones in the receipt.
+
+### 10. Downloads
+- **Files:** `src/main.js` (`setupDownloadHandlingForSession`, `will-download`, `chooseSavePathForFilename`, `uniqueDownloadPath`, `downloads:*` IPC, context-menu "Save Image As…"), `src/downloads.js` / `.html`, the downloads popover in `src/renderer.js`.
+- **Risk, rare:** `uniqueDownloadPath` uses `existsSync` before any bytes are written. Two downloads with the same filename that start at the same moment can pick the same path, and one overwrites the other.
+- **Hand test:**
+  1. Download a large file and Pause / Resume / Cancel it.
+  2. Download the same file twice: you should get `name (1).ext`.
+  3. Use Show in folder and Open file.
+  4. Clear finished downloads.
+  5. Change the download folder in Settings and turn on "Ask where to save".
+  6. Right-click an image on a site, Save Image As, and check the file type is correct.
+
+### 11. Privacy Receipt
+- **Files:** `src/privacy-receipt.js` (`createReceipt`, `addEntry`, `buildSummary`, `fetchWithReceipt`, the cloud-AI host check), `src/privacy-attribution.js`, `src/main.js` (`recordPrivacyWebRequest`, `makeReceiptFetch`, `privacy:*` IPC), the receipt panels in `src/ask.js` and `src/search.js`.
+- **Known issue (1), the receipt doesn't say SearXNG forwards the query. Confirmed.**
+  - `buildSummary` writes "Query sent to 127.0.0.1:8080 (SearXNG)" and nothing else. SearXNG then sends the query, in full, to upstream engines (duckduckgo, bing, google cse, startpage, qwant, mojeek, wikipedia, …, from `searxng/core-config/settings.yml` plus the defaults).
+  - Those calls come from the SearXNG container, not Electron, so they can never show up as Electron requests.
+  - Fix, which needs no new network request: add a fixed disclosure line to search and image receipts, such as "SearXNG forwards this query to upstream search engines". Also list the engine names SearXNG reports in its JSON (`results[].engines`, `unresponsive_engines`). `normalizeResult` currently throws these away.
+- **Bug, wrong receipt:** if `addEntry` gets an unknown receipt id, it falls back to `receipts[0]`, the newest receipt, which may be a different activity. It should go to the Background receipt.
+- **Note:** receipts are kept in memory only and disappear on restart, by design (the export note says so). Export JSON is the only way to keep them.
+- **Hand test:**
+  1. Run a web answer and open the receipt. Today it shows only SearXNG; after the fix there should be an upstream-engines line.
+  2. A local-only answer should say "Nothing left this device".
+  3. Run an image search, then click Export JSON and open the file.
+  4. Check the cloud-AI check never fires during normal use (no `api.openai.com` or similar).
+
+### 12. Settings
+- **Files:** `src/settings.js` / `.html`, `src/theme.js`, `src/main.js` (`settings:*`, `search:update-settings`, `savePreferences`, `preferences.json` in the user-data folder).
+- **Bug, privacy: turning chat saving off keeps old chats.**
+  - Turning off "Save chats on this device" makes `savedChats()` / `writeSavedChats()` stop reading and writing, but the old chats stay in `localStorage` under `sovereign.ask.chats`.
+  - "Clear history" does nothing while saving is off, and its panel is hidden.
+  - So a user who turns saving off cannot delete old chats in the app, and they come back if saving is turned on again.
+  - The help text "When disabled, Ask AI chat history stays in memory" implies nothing is stored. Fix: when saving is turned off, offer "Delete saved chats now?" (or delete them), and let Clear history work in either state.
+- **Hand test:**
+  1. Change the theme.
+  2. Set the SearXNG endpoint to `https://searx.example.org`. It must be refused (public instance). Then try `192.168.1.10:8080`, which is accepted.
+  3. Change the model; start and cancel model setup.
+  4. Turn saving on, save two chats, turn saving off, then on again. Today the old chats come back.
+  5. Turn "Restore session" on, quit and relaunch: the tabs come back.
+
+### 13. Startup: Chromium database errors (known issue 3)
+- **Logs:** "Failed to delete the database: Database IO error" and "Could not open the quota database, resetting".
+- **Files:** `src/main.js` (startup: `SOVEREIGN_USER_DATA_DIR`, `app.whenReady`, dataset-collection mode `runDatasetCollection`). The profile is `~/Library/Application Support/sovereign-browser/` (`WebStorage/QuotaManager`).
+- **Likely cause:**
+  - Chromium's QuotaManager database couldn't be opened or locked, so it was rebuilt. `WebStorage/` on disk was recreated today at 21:15, which fits a reset.
+  - `main.js` has **no `app.requestSingleInstanceLock()`**. A second `npm start`, or dataset-collection mode (`SOVEREIGN_DATASET_BATCH`, which uses the default profile), running alongside the app means two processes share one profile, which causes exactly these errors.
+  - A force-quit or crash can do the same thing. The Electron tests are fine: all 12 set their own `SOVEREIGN_USER_DATA_DIR`.
+- **Impact:** usually harmless, because Chromium rebuilds the quota database. But a shared profile can also corrupt `localStorage`, which holds saved chats, and IndexedDB, which holds the cached model.
+- **Fix:**
+  - Add `app.requestSingleInstanceLock()`. A second launch then focuses the existing window and quits. Skip this in test and dataset modes, which should use their own user-data folder.
+  - Give dataset-collection mode its own profile folder.
+- **Hand test:**
+  1. Quit every Sovereign window (Cmd+Q) and check Activity Monitor shows no Electron left. Run `npm start` once and check whether the two log lines appear. If they do, note whether the previous session was force-quit.
+  2. While the app is running, run `npm start` again in a second terminal. Today you get two instances and the errors. After the fix the first window should just come to the front.
+
+### Prioritised fix list
+Each item is small and focused. One Codex task per line unless they are grouped.
+
+| # | Priority | Fix | Files | Why |
+|---|---|---|---|---|
+| 1 | **P1, privacy** | Deny website permission requests by default, or ask the user (`setPermissionRequestHandler` plus `setPermissionCheckHandler` on the web-tab session) | `src/main.js` | Today sites can silently get the camera, microphone or location |
+| 2 | **P1, privacy** | Receipt says SearXNG forwards the query upstream, and lists the engine names SearXNG reports (known issue 1) | `src/privacy-receipt.js`, `src/search-backend.js`, `src/main.js`, receipt UI in `src/ask.js` / `src/search.js` | The receipt currently understates where the query goes |
+| 3 | **P1, privacy** | Turning chat saving off offers to delete saved chats, and Clear history always works | `src/ask.js`, `src/settings.js` / `.html` | Chats stay on disk after the user opts out |
+| 4 | **P2, usability** | Fix the Ask AI grid so the thread always takes the free space and nothing overlaps (known issue 2) | `src/styles.css` | The end of every long chat is hidden |
+| 5 | **P2, bug** | Address bar: inputs with spaces, or `word:` with no `//`, are searches; `host:port` is a URL | `src/main.js` (`classifyAddressInput`) | Common searches give a false error |
+| 6 | **P2, privacy** | List every redirect host in media checks (log the final URL's host, or follow redirects manually) | `src/main.js` (`preflightDownloadUrl`) | A contacted host is missing from the receipt |
+| 7 | **P2, privacy** | Thumbnails load straight away instead of lazily (`loading='eager'`) (open image-review item 4) | `src/ask.js` | Late thumbnail loads are logged in the wrong receipt |
+| 8 | **P2, stability** | Single-instance lock, and a separate profile for dataset mode (known issue 3) | `src/main.js` | Shared-profile database errors and a risk of corrupting `localStorage` / IndexedDB |
+| 9 | P3 | `addEntry` with an unknown receipt id goes to Background, not the newest receipt | `src/privacy-receipt.js` | Entries can be attributed to the wrong activity |
+| 10 | P3 | Rejected attachments don't count toward the 3-file limit; fix the drop-zone wording about saving | `src/ask.js`, `src/ask.html` | Confusing limits and wording |
+| 11 | P3 | Make filenames unique for downloads that start at the same moment | `src/main.js` (`uniqueDownloadPath`) | Rare overwrite |
+| 12 | P3, cleanup | Remove the leftover `promptDiagnostics` debugging code | `src/sidebar.js` | Unrelated debugging code |
+| 13 | ~~Question~~ Answered | No separate "Read sources for a fuller answer" button. Automatic reading of the top 3 sources is the intended behaviour (Sandeep, 2026-11-05) | — | Closed; the docs follow-up is #14 |
+| 14 | P3, docs | Replace the "Read sources for a fuller answer" wording with a description of automatic source reading: with **Search the web** on, Ask AI reads up to the top 3 source pages and answers from them. The pages appear in the Privacy Receipt as `source-page` entries. Change only those lines | `README.md` (line 132, feature table row "Read more source material"), `docs/privacy-audit.md` (line 50: delete step 3 and fold it into step 2, e.g. "Run one Ask AI question with **Search the web** enabled; Sovereign reads the top 3 source pages automatically". Renumber the image step from 4 to 3. Check the expected-hosts part of the audit still matches, since the source-page hosts now come from step 2) | The docs describe a button that doesn't exist. No code change; `npm run check` must still pass |
+
+Each fix should come with an automated test where it's practical: pure functions (the address classifier, receipt summary, `addEntry`) in `tests/*.test.js`, which run under `npm run check`, and UI flows in the fixture Electron tests.
+
+## Task: Website permissions
+Status: ready for manual testing (not committed)
+
+### PLAN (Claude)
+This is item P1 #1 from the Feature test pass. Codex is out of usage today, so at Sandeep's request Claude both plans and implements this task, and also writes CHANGES.
+
+#### 1. Problem
+`src/main.js` never calls `setPermissionRequestHandler`, `setPermissionCheckHandler`, `setDevicePermissionHandler` or `setDisplayMediaRequestHandler`. Electron's defaults are:
+- Every permission request is granted, including camera, microphone, location, notifications and MIDI.
+- When a page asks for a Bluetooth device (`select-bluetooth-device`) and nothing handles it, **the first device is chosen automatically**.
+
+Web tabs (`createWebView`) and Sovereign's own pages (`createTrustedInternalView`, the UI, sidebar and model-setup views) all use `session.defaultSession`. So one set of handlers covers everything. The code tells web pages and Sovereign's pages apart by the requesting URL.
+
+#### 2. Policy
+| Group | Permissions (Electron names) | Web pages | Sovereign's own pages (`sovereign:`, `file:`) |
+|---|---|---|---|
+| **Ask the user** | `media` with `mediaTypes` containing `video` (camera) and/or `audio` (microphone), `geolocation`, `notifications`, `midi`, `midiSysex`, `clipboard-read`, `pointerLock`, `keyboardLock`, `idle-detection`, `window-management`, `storage-access`, `top-level-storage-access`, `speaker-selection` | Prompt: **Deny** (default, and also Esc) or **Allow once** | Deny, no prompt |
+| **Allowed without a prompt** | `fullscreen`, `clipboard-sanitized-write` | Allowed. Chromium only lets these run straight after a click or key press, and they read no user data (fullscreen for video players; writing text to the clipboard for "Copy" buttons). **Sandeep can veto this**: move them to "Ask the user" if wanted. | Deny |
+| **Always denied** | Everything else: `openExternal`, `mediaKeySystem`, `display-capture`, `fileSystem`, `hid`, `serial`, `usb`, `deprecated-sync-clipboard-read`, `unknown`, and any new name | Deny, no prompt | Deny |
+| **Device pickers** | `select-bluetooth-device` (web contents), `select-hid-device`, `select-serial-port`, `select-usb-device` (session); `setDevicePermissionHandler` | Cancel the picker / return `false` | Same |
+| **Screen capture** | `getDisplayMedia()`: Electron first sends `media` with an **empty** `mediaTypes` list (verified with a probe), then would call `setDisplayMediaRequestHandler` | Deny with no prompt, recorded as `screen capture`. Never shown as a camera/microphone prompt | Deny |
+
+**Sovereign's own pages need no website permissions.** I checked `src/*.js` and the AI bundle:
+- Clipboard writes go through IPC to `clipboard.writeText` in main, not through a browser permission.
+- Downloads go through IPC.
+- The local model uses WebGPU and origin-private storage (`navigator.gpu`, `navigator.storage`), neither of which is a permission.
+- No page uses `getUserMedia`, `Notification`, geolocation, MIDI or the browser clipboard.
+
+So every permission request from these pages is denied and recorded.
+
+**Check handler** (`setPermissionCheckHandler`, synchronous, used by `navigator.permissions.query` and the like): it returns `true` only for web pages asking about `fullscreen` or `clipboard-sanitized-write`, and `false` for everything else. **"Allow once" is never remembered:** the next request prompts again. Check-handler calls are not recorded, because they are status queries, not requests.
+
+#### 3. The prompt
+A native `dialog.showMessageBox` attached to the tab's window. If that window can't be found, it uses the focused window.
+- **Title:** `Website permission`
+- **Message:** `<site> wants to <action>.` Here `<site>` is the requesting origin (`URL.origin`, so internationalised domain names show in their `xn--` form, which makes look-alike spoofing harder), and `<action>` is one of:
+  - `use your camera`, `use your microphone`, `use your camera and microphone`
+  - `use your location`
+  - `show notifications`
+  - `use MIDI devices`, `use MIDI devices with full control (SysEx)`
+  - `read your clipboard`
+  - `hide and lock your mouse pointer`
+  - `capture all keyboard keys`
+  - `know when you are idle`
+  - `see your screens and place windows on them`
+  - `use its cookies while embedded in another site`
+  - `choose your audio output device`
+- **Detail:** if the request comes from an embedded frame, it adds `(inside <top-level origin>)`. It always adds: `Allow once grants this request only. Sovereign will ask again next time.`
+- **Buttons:** `Deny` (default, also on Esc / cancel) and `Allow once`.
+- **Order:** prompts are shown one at a time, in a queue.
+- **When the request no longer applies:** if the tab is closed, or has moved to a different origin, before the user answers, the request is denied.
+- **If the dialog fails:** the request is denied.
+
+#### 4. Privacy Receipt
+- Every request, and every device-picker or screen-capture attempt, is recorded with its decision in one receipt per app run: `Website permissions` (type `permissions`, id `website-permissions`).
+- **Entry fields:** category `permission`, method `PERMISSION`, url = the requesting origin. "What was sent" reads `Permission request: <name> – <decision>`, with `(embedded in <origin>)` when the request comes from a frame.
+- **Decisions:**
+  - `allowed once by you`
+  - `denied by you`
+  - `allowed automatically (needs a click or key press; reads no user data)`
+  - `denied automatically: not supported in Sovereign`
+  - `denied automatically: Sovereign's own pages need no website permissions`
+  - `denied: tab closed or page changed before you answered`
+  - `denied: unknown site`
+- **Summary:** `Website permission requests: N (M allowed)`.
+- Permission entries are not network requests, so they are left out of the cloud-AI host check.
+- The Ask AI and Search receipt panels must not jump to this receipt when it updates; they treat it like `background`.
+
+#### 5. Files
+| File | Change |
+|---|---|
+| `src/permission-policy.js` (**new**) | Pure logic with no Electron imports: the permission tables, `isInternalUrl`, `describePermission`, `classifyPermissionRequest`, `checkPermission`, and `createPermissionController({ prompt, record })`, which returns the `request` and `check` handlers (queue, re-check that the tab still exists and is on the same origin, deny on errors). |
+| `src/main.js` | `setupPermissionHandling(targetSession)`: wires the controller to `setPermissionRequestHandler` / `setPermissionCheckHandler`, adds `setDevicePermissionHandler(() => false)`, the `select-*-device` / `select-serial-port` handlers and `setDisplayMediaRequestHandler`, plus `select-bluetooth-device` on every web contents (`app.on('web-contents-created')`). The prompt uses `dialog.showMessageBox`. Called for `session.defaultSession` at startup and for any other session (`app.on('session-created')`), at most once per session. |
+| `src/privacy-receipt.js` | `permission` category, `addPermissionEntry()`, the summary line, and the cloud-check exclusion. |
+| `src/ask.js`, `src/search.js` | Don't auto-select a `permissions` receipt (treat it like `background`). One line each. |
+| `tests/permission-policy.test.js` (**new**) | See §6. |
+| `tests/privacy-receipt.test.js` | Permission entry, summary and cloud-check exclusion. |
+| `package.json` | Add `node --check src/permission-policy.js && node tests/permission-policy.test.js` to `check`. |
+
+#### 6. Tests (unit tests, run in `npm run check`)
+- Every "Ask the user" permission from a web origin is classified `prompt` with the correct action text. `media` gives camera, microphone or both. `media` with no `mediaTypes` (screen capture) is `deny`, with no prompt.
+- `fullscreen` and `clipboard-sanitized-write` are `allow` for web pages and `deny` for Sovereign's own pages.
+- `openExternal`, `display-capture`, `hid`, `usb`, `serial`, `unknown` and an invented permission name are `deny` with no prompt.
+- Sovereign's own pages (`sovereign://ask/`, `file:///…/index.html`) get `deny` for every permission, with no prompt.
+- An empty or unparseable origin gives `deny` ("unknown site").
+- **Controller:**
+  - "Allow once" calls back `true` exactly once.
+  - "Deny" calls back `false`.
+  - A prompt that throws gives `false`.
+  - A tab destroyed before the answer gives `false`.
+  - A page that moved to a different origin before the answer gives `false`.
+  - The prompt is **never** called for a denied or allowed-without-a-prompt permission.
+  - Callbacks are never `true` unless the prompt answered `allow` (or the permission is in the allowed-without-a-prompt group).
+  - Two requests at once are shown one after the other.
+  - Every request records exactly one receipt entry, with the right decision.
+  - The check handler returns `true` only for web pages asking about `fullscreen` or `clipboard-sanitized-write`.
+- **Receipt:** a permission entry has category `permission`. The summary counts requests and how many were allowed. An entry whose host is a cloud-AI host does not flag cloud AI.
+
+#### 7. Manual test steps (for Sandeep)
+1. `npm start`. Open `https://webcamtests.com` and click to test the camera. Expect the prompt `https://webcamtests.com wants to use your camera.`, with Deny selected by default.
+   - Press **Deny**: the site reports that access was denied or blocked.
+   - Reload and press **Allow once**: the camera works.
+   - Reload again: you are asked again.
+2. Open `https://browserleaks.com/geo`. Expect the location prompt. **Deny** means the site shows an error or denial.
+3. Microphone: `https://mictests.com`. Expect `wants to use your microphone`.
+4. Notifications: open the notification test page `https://www.bennish.net/web-notifications.html` (or any page that calls `Notification.requestPermission()`). Expect the prompt. With Deny, no notification appears.
+5. Clipboard read: open DevTools on any https page (View › Toggle Developer Tools) and run `navigator.clipboard.readText()`. Expect the `read your clipboard` prompt. With Deny, the promise rejects.
+6. Still on that page, run `navigator.permissions.query({ name: 'geolocation' }).then(s => s.state)`. It must **not** return `granted`, even after an earlier "Allow once".
+7. Fullscreen: play a YouTube video and click its fullscreen button. It goes fullscreen with no prompt (allowed without a prompt, as planned).
+8. Run `navigator.mediaDevices.getDisplayMedia()` in DevTools: it is rejected with no prompt.
+9. Open any Ask AI or Search tab, open the Privacy Receipt and choose **Website permissions** from the history list. Each request from steps 1–8 is listed with its site, the permission and the decision (`allowed once by you`, `denied by you`, `denied automatically…`). The summary reads `Website permission requests: N (M allowed)`, and the cloud-AI check still says ✓.
+10. While Ask AI generates an answer, open a permission prompt in another tab. The Ask AI receipt panel must stay on the Ask AI receipt and not jump to Website permissions.
+11. Ask for camera access, then close the tab while the prompt is open. Answer **Allow once**: nothing is granted, and the receipt shows `denied: tab closed or page changed before you answered`.
+12. Regression check: Ask AI (local and web), page summary, attachments, image search and downloads all still work, and none of them shows a permission prompt.
+
+### CHANGES (written by Claude at Sandeep's request, because Codex is out of usage today)
+Implemented on 2026-11-05. Nothing was committed.
+
+**Files changed**
+- `src/permission-policy.js` (**new**, no Electron imports):
+  - The permission tables (ask the user / allowed without a prompt / always denied).
+  - `classifyPermissionRequest`, `checkPermission`, `describePermission`, `promptText`, `isInternalUrl`, `webOrigin`.
+  - `createPermissionController({ prompt, record })`, which returns the `request` and `check` handlers plus `recordAutoDenied`. Prompts run one at a time in a queue. The request is denied if the tab closes or moves to another origin while the prompt is open, if the prompt throws, or if the answer is anything other than `allow`. Each request gets exactly one receipt entry, and a failing receipt never blocks the decision.
+- `src/main.js`:
+  - `setupPermissionHandling(session)`: request and check handlers, `setDevicePermissionHandler(() => false)`, cancelled HID/serial/USB pickers, `setDisplayMediaRequestHandler` that denies.
+  - `select-bluetooth-device` is cancelled on every web contents (Electron would otherwise pick the first device).
+  - Applied to `session.defaultSession` at startup and to any new session (`session-created`), at most once per session.
+  - The prompt is a native `dialog.showMessageBox` (`Deny` is the default and the cancel action, plus `Allow once`), attached to the tab's window.
+  - Test-only `SOVEREIGN_PERMISSION_TEST_ANSWER=allow|deny` skips the dialog, the same idea as `SOVEREIGN_MEDIA_TEST_FIXTURES`.
+- `src/privacy-receipt.js`: `permission` category; `addPermissionEntry()`, which writes to a single `Website permissions` receipt (id `website-permissions`, type `permissions`); the summary line `Website permission requests: N (M allowed)`; permission entries are left out of the cloud-AI check.
+- `src/ask.js`, `src/search.js`: the receipt panels no longer jump to the `permissions` receipt (treated like `background`). Two lines each.
+- `tests/permission-policy.test.js` (**new**): all of PLAN §6.
+- `tests/privacy-receipt.test.js`: permission entry, summary, cloud-check exclusion, one receipt per run, and no entries leaking into other receipts.
+- `tests/electron/permissions.test.js` (**new**, plus a `test:electron:permissions` script). In real Electron, with the prompt answered "Allow once", it checks:
+  - a website's `Notification.requestPermission()` is `granted` only through the prompt;
+  - `navigator.permissions.query` for notifications and geolocation is never `granted`;
+  - `getDisplayMedia()` is rejected;
+  - Sovereign's own UI page is `denied` with no prompt;
+  - all of it is in the receipt.
+- `package.json`: `check` runs `node --check src/permission-policy.js && node tests/permission-policy.test.js`, and `check:tests` syntax-checks the new Electron test.
+
+**Deviation from the PLAN, found while testing:** I probed Electron 38.8.6 directly. `getDisplayMedia()` sends a `media` permission request with **empty** `mediaTypes` before the display-media handler runs. The first build therefore showed screen-capture attempts as a "camera or microphone" prompt. Fixed: `media` with no `video`/`audio` is classed as `screen capture` and denied with no prompt. Tests were added (unit test, plus an Electron assertion that no "camera or microphone" entry appears). PLAN §2 and §6 are updated to match.
+
+**Decision for Sandeep:** `fullscreen` and `clipboard-sanitized-write` (writing text to the clipboard) are allowed for websites without a prompt, as PLAN §2 explains. Chromium only lets them run straight after a click or key press, and they read no user data. Every one is still recorded. If you would rather be asked, move them into `PROMPT_PERMISSIONS` in `src/permission-policy.js`. That is a one-line change, but the existing tests would need updating.
+
+**Test results**
+- `npm run check`: **exit 0**. It runs `permission-policy tests passed` and `privacy-receipt tests passed`, alongside the existing tests.
+- Mutation check: I copied the module to the scratchpad and made `geolocation` allowed without a prompt. `tests/permission-policy.test.js` failed with an assertion, which proves the tests catch an automatic grant.
+- `npm run test:electron:permissions`: **exit 0**. Receipt entries seen:
+  - `127.0.0.1:<port> | Permission request: notifications – allowed once by you`
+  - `… | screen capture – denied automatically: not supported in Sovereign`
+  - `sovereign | Permission request: notifications – denied automatically: Sovereign's own pages need no website permissions`
+- Regression: `test:electron:browser-features`, `media-chat`, `ui-smoke` and `downloads` all exit 0.
+- `git diff --check`: clean. No secrets were added.
+
+**Not verified automatically (needs PLAN §7 by hand):** the native dialog itself (wording, Deny as the default, Esc), real camera/microphone/location hardware, and `select-bluetooth-device` / HID / USB pickers, because no devices are available in tests. Run manual steps 1–12 in PLAN §7, especially steps 1, 2, 9 and 11.
+
 ## Task: Receipt: SearXNG forwarding
 Status: ready for manual testing (not committed)
 
