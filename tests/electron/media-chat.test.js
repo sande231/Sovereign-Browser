@@ -212,13 +212,17 @@ async function main() {
     (async () => {
       await window.sovereign.settings.updateAi({ saveChatsOnDevice: true });
       await refreshSettings();
-      persistCurrentChat();
-      const saved = JSON.parse(localStorage.getItem('sovereign.ask.chats'))[0];
+      await persistCurrentChat();
+      if (localStorage.getItem('sovereign.ask.chats') !== null) {
+        throw new Error('Chats must no longer be written to localStorage');
+      }
+      const saved = (await window.sovereign.chats.list()).chats[0];
       const media = saved.messages.find(message => message.mediaResults?.length);
       if (!media.action || media.action.type !== 'answer-text' || media.mediaResults[0].content !== undefined) {
         throw new Error('Saved media serialization lost its action or retained snippets');
       }
       newChat();
+      await new Promise(resolve => setTimeout(resolve, 200));
       document.querySelector('.chat-history-title').click();
     })()
   `, true);

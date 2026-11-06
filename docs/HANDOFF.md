@@ -693,6 +693,7 @@ Each item is small and focused. One Codex task per line unless they are grouped.
 | 12 | P3, cleanup | Remove the leftover `promptDiagnostics` debugging code | `src/sidebar.js` | Unrelated debugging code |
 | 13 | ~~Question~~ Answered | No separate "Read sources for a fuller answer" button. Automatic reading of the top 3 sources is the intended behaviour (Sandeep, 2026-11-05) | — | Closed; the docs follow-up is #14 |
 | 14 | P3, docs | Replace the "Read sources for a fuller answer" wording with a description of automatic source reading: with **Search the web** on, Ask AI reads up to the top 3 source pages and answers from them. The pages appear in the Privacy Receipt as `source-page` entries. Change only those lines | `README.md` (line 132, feature table row "Read more source material"), `docs/privacy-audit.md` (line 50: delete step 3 and fold it into step 2, e.g. "Run one Ask AI question with **Search the web** enabled; Sovereign reads the top 3 source pages automatically". Renumber the image step from 4 to 3. Check the expected-hosts part of the audit still matches, since the source-page hosts now come from step 2) | The docs describe a button that doesn't exist. No code change; `npm run check` must still pass |
+| 15 | P3, usability | If removing older-version chats fails again on a later startup, the pending cleanup is not shown to the user again (deleted chats still cannot return). Follow-up: show the pending notice whenever cleanup is still pending, with a regression test. | `src/main.js`, `src/ask.js`, `src/settings.js`, `tests/electron/chat-deletion.test.js` | A cleanup that keeps failing is invisible to the user |
 
 Each fix should come with an automated test where it's practical: pure functions (the address classifier, receipt summary, `addEntry`) in `tests/*.test.js`, which run under `npm run check`, and UI flows in the fixture Electron tests.
 
@@ -976,3 +977,443 @@ Implemented on 2026-11-05 on branch `phase-0/receipt-searxng`, which was created
 - `git diff --check`: clean. No secrets.
 
 **Manual tests:** PLAN §7, steps 1–6.
+
+## Task: Saved chat deletion
+Status: done
+
+### PLAN (Claude)
+This is item P1 #3 from the Feature test pass. At Sandeep's request, Claude plans and implements this task and also writes CHANGES.
+
+#### 1. Problem
+- Saved chats live in the Ask AI page's `localStorage` (origin `sovereign://ask`, key `sovereign.ask.chats`). On disk that is Chromium's LevelDB in `<userData>/Local Storage/leveldb/`.
+- **`localStorage.removeItem` does not erase the data from disk.** LevelDB is append-only: a delete adds a tombstone to the `.log` file, and the old value stays in `.log` / `.ldb` files until LevelDB compacts them, which may be never.
+- Turning off "Save chats on this device" makes `savedChats()` / `writeSavedChats()` return early, so old chats stay, can't be cleared (the panel is hidden and **Clear history** returns early), and come back when saving is turned on again.
+- Settings (`sovereign://settings`) is a different origin, so it can't reach the Ask page's `localStorage` at all.
+- No other place writes chats: the main process never receives them, session restore stores tab URLs only, and the dataset mode writes its own files. Attachment text is not saved (`savedMessage` keeps content, sources, note, action and media fields).
+
+#### 2. Design: one file owned by the main process
+- New `src/chat-store.js` (pure Node, no Electron imports, testable under `npm run check`): `createChatStore({ directory })` with `list`, `count`, `save(entry)`, `remove(id)`, `clear()`, `importLegacy(chats)`.
+- Storage: `<userData>/saved-chats.json`, mode `0600`.
+  - Writes go to `saved-chats.json.tmp`, then `rename` over the real file, so a crash never leaves a half-written file.
+  - When the list becomes empty (last chat deleted, or Clear), the file is **unlinked**, not rewritten as `[]`.
+  - `clear()` also removes any leftover `.tmp` file. Opening the store removes a stale `.tmp` too, because it may hold chat text after a crash.
+- Validation in the store, so a misbehaving page can't write anything else: at most 50 chats, 40 messages each, plain JSON objects only, string ids, and at most 1 MB per chat.
+- `src/main.js` IPC, accepted **only** from Ask AI tabs (`tab.kind === 'ask'`), plus Settings for the disable flow. Web tabs have no preload, and the sender check is a second guard:
+  - `chats:list`, `chats:save` (refused unless saving is on), `chats:delete`, `chats:clear` (asks first), `chats:import-legacy`, `chats:offer-delete-on-disable` (Settings only).
+  - After any change, main sends `chats:changed` with the new list to every Ask AI tab, so open tabs update at once.
+- Confirmation dialogs are native `dialog.showMessageBox`, attached to the tab's window:
+  - Turning saving off with N > 0 chats: **"Also delete the N saved chats on this device?"** with **Delete** / **Keep**. Keep is the default and the Esc action, so nothing is lost by accident. Sandeep can veto this and make Delete the default.
+  - Clear history: **"Delete all N saved chats on this device?"** with **Delete** / **Cancel** (Cancel is the default).
+  - Test-only `SOVEREIGN_CHAT_DELETE_TEST_ANSWER=delete|keep` skips the dialog, the same idea as `SOVEREIGN_PERMISSION_TEST_ANSWER`.
+- `src/ask.js`:
+  - Keeps an in-memory copy of the list from main; `persistCurrentChat`, delete and clear go through IPC.
+  - The saved-chats panel shows whenever saving is on **or** saved chats exist, so Clear history and Delete work with saving off.
+  - When the open chat is deleted (here, in another tab or from Settings), it is closed and its id is never saved again from this tab.
+  - **One-time migration of old data:** on load, if `localStorage` still has `sovereign.ask.chats`, the chats are moved into the file (they were saved chats, so they stay saved chats the user can now delete), then the key is removed.
+- `src/settings.js` / `.html`: after saving is turned off, call `chats:offer-delete-on-disable`, then report "N saved chats deleted" or "Saved chats kept". Update the help text so it says what happens.
+
+#### 3. Old data in Chromium's localStorage (revised again after Codex REVIEW round 3)
+*Round 2 opened Chromium's LevelDB directly with `classic-level` and compacted it. Codex showed that another running instance could still hold that database, so the approach was withdrawn in round 4. The dependency, the startup child process and all direct file access are removed.*
+- **Rule:** Sovereign never opens or edits Chromium's files. Legacy chats (key `sovereign.ask.chats` on `sovereign://ask`) are read and removed **only through Chromium's `localStorage` API**, from a renderer on that origin:
+  - **The Ask AI page** moves them into `saved-chats.json` when it opens.
+  - **Main process, for a bulk delete:** a hidden, empty page (`src/legacy-chat-probe.html`, CSP `default-src 'none'`) on the same origin calls `getItem` / `removeItem`.
+- **Why not `session.clearStorageData`:** the `sovereign://ask` origin also holds the theme and, in IndexedDB, the cached AI model (the model-setup page is on the same origin). Clearing by origin is too broad, so only the one key is removed.
+- **Deletion always wins:**
+  - Every delete is written first to `<userData>/chat-deletions.json` (mode 0600). It holds only the deleted chat ids, which are random, plus `legacyDeletePending`.
+  - Bulk delete runs in this order:
+    1. A read-only peek at the legacy key, so the dialog can count those chats. It never writes `saved-chats.json`.
+    2. The user confirms.
+    3. The deletion is recorded: ids plus `legacyDeletePending: true`.
+    4. `saved-chats.json` is unlinked.
+    5. The key is removed with `removeItem`, and a read-back confirms it is gone. Only then is `legacyDeletePending` cleared.
+  - While a legacy delete is pending, `importLegacy` imports nothing and records the blocked ids as deleted. A deleted id is never imported or saved again; the id list is never capped, and the ids still in the key when it is removed are recorded in the same write that clears the pending flag (round 5). A failed or later scan therefore cannot restore anything.
+  - A pending delete is finished on the next start (in `whenReady`), or when Ask AI next opens.
+  - An unreadable deletion record is treated as "pending".
+- **Wording:** "Deleted from Sovereign's storage. Chromium may keep fragments in its internal files until it cleans them up." It appears in the dialog detail, the Clear history status, the Settings status and the Settings help text, plus the existing note about exports and backups. If the key could not be removed, the status adds: "Chats saved by an older version could not be removed yet; Sovereign will try again the next time it starts." (Round 5 wording: startup retries, it does not guarantee.)
+- **Known limit (accepted):** `removeItem` is a supported delete, but Chromium's LevelDB keeps the old bytes in its own `.log` / `.ldb` files until Chromium compacts them. Sovereign does not force that. The Electron test reports these fragments rather than failing on them. Sovereign's own files (`saved-chats.json`, `chat-deletions.json`) never contain deleted chat text.
+
+#### 4. Privacy Receipt
+No network requests are added. Everything is local file I/O, so the receipt is unchanged.
+
+#### 5. Tests
+- `tests/chat-store.test.js` (new, added to `npm run check`), in a temp directory:
+  - Save → the file exists with mode 0600. Delete one → that chat's unique marker text is gone from **every file in the directory**, while the other chat remains. Delete the last → the file is gone.
+  - `clear()` → the directory has no `saved-chats*` files and no file contains any marker text; a stale `.tmp` is removed on clear and on open.
+  - Validation: junk entries are ignored, the 50/40 limits hold, an oversized chat is refused, and `importLegacy` skips duplicate ids.
+  - Deletion always wins (round 4): deleted ids are never saved or imported again, and a pending legacy delete blocks every import, also after a restart.
+- `tests/electron/media-chat.test.js`: switch its saved-chat check from `localStorage` to the new API.
+- New `tests/electron/chat-deletion.test.js` (`npm run test:electron:chat-deletion`): with a real Ask tab and `SOVEREIGN_CHAT_DELETE_TEST_ANSWER`, save chats, delete one, Clear with saving off, disable-with-Delete from Settings, and legacy migration. After each step it scans the profile's `saved-chats*` files for the marker text and checks the `localStorage` key is gone. Round 4 adds a failed legacy removal followed by a later scan (from Ask AI, and on the next start), and checks that the model cache (IndexedDB), the theme, New Tab shortcuts and settings are untouched. See CHANGES round 4.
+
+#### 6. Manual tests
+1. Settings: turn on **Save chats on this device**. In Ask AI, ask two questions in two chats (use **New chat**). Both appear under Saved chats.
+2. Check the file `~/Library/Application Support/sovereign-browser/saved-chats.json` exists and contains both questions.
+3. Press **Delete** on one chat. It disappears, and `grep` for its question in `saved-chats.json` finds nothing.
+4. Settings: turn saving **off**. Expect "Also delete the 1 saved chats on this device?" Press **Keep**: the chat is still listed in Ask AI, and **Clear history** is visible.
+5. With saving still off, press **Clear history** in Ask AI. Expect a confirmation; press **Cancel**, and nothing changes. Press it again and choose **Delete**: the list is empty and `saved-chats.json` no longer exists.
+6. Turn saving on, save one chat, turn saving off, and choose **Delete**. The file is gone. Turn saving on again: no old chats come back.
+7. Open two Ask AI tabs. Delete a chat in one: it disappears from the other tab straight away.
+8. Old data: on a profile that had chats before this change, open Ask AI once. The chats now appear from `saved-chats.json`, and in DevTools for the Ask tab `localStorage.getItem('sovereign.ask.chats')` returns `null`.
+9. Regression: with saving off, a new chat is never written (no `saved-chats.json` appears). Reopening a saved chat, including its image previews, still works.
+
+### CHANGES (written by Claude at Sandeep's request)
+Implemented on 2026-11-06 on branch `phase-0/chat-deletion`. Nothing was committed.
+
+**Files changed**
+- `src/chat-store.js` (**new**, no Electron imports): `createChatStore({ directory })` with `list`, `count`, `save`, `remove`, `clear`, `importLegacy`, plus `sanitizeChat`.
+  - The file is `<userData>/saved-chats.json`, mode 0600. Writes go to a `.tmp` file, then `rename`.
+  - An empty list or `clear()` **unlinks** the file and any `.tmp`. A stale `.tmp` is removed whenever the store is opened.
+  - Limits: 50 chats, 40 messages, 1 MB per chat, plain JSON only.
+- `src/main.js`:
+  - IPC `chats:list|save|delete|clear|import-legacy`, accepted only from Ask AI tabs, checked by both tab kind and `sovereign://ask/` URL. `chats:offer-delete-on-disable` is accepted from Settings only.
+  - `chats:save` is refused while saving is off.
+  - Every change is pushed to all Ask AI tabs as `chats:changed`.
+  - The native confirmations: **Keep / Delete** when turning saving off, and **Cancel / Delete** for Clear history. The non-destructive button is the default and the Esc action. `SOVEREIGN_CHAT_DELETE_TEST_ANSWER` is test-only and read on each call.
+- `src/preload.js`: `window.sovereign.chats` (list, save, delete, clear, importLegacy, offerDeleteOnDisable, onChanged).
+- `src/ask.js`:
+  - `localStorage` reads and writes are replaced by IPC, with an in-memory `savedChatList` and `applySavedChats()`. `persistCurrentChat` is now async; it builds the entry synchronously, so `newChat()` still saves the right messages.
+  - The saved-chats panel shows when saving is on **or** chats exist. Clear history always works and asks first.
+  - A deleted chat that is open gets closed, and its id is never saved again from that tab. If an answer is generating, it stays on screen but is not saved.
+  - `migrateLegacyChats()` runs once on load: it moves `sovereign.ask.chats` from `localStorage` into the file and removes the key.
+- `src/settings.js` / `src/settings.html`: after saving is turned off, the user is offered deletion, and the status reads "N saved chats deleted" or "kept". The help text is updated.
+- `package.json`: `node --check src/chat-store.js && node tests/chat-store.test.js` added to `check`, `chat-deletion.test.js` added to `check:tests`, and a new `test:electron:chat-deletion` script.
+- `tests/chat-store.test.js` (**new**): each step reads **every file in the temp folder** and checks the deleted chat's marker text is gone. It covers single delete, deleting the last chat (file removed), clear, the stale `.tmp`, a restart, the limits, a corrupt file and legacy import.
+- `tests/electron/chat-deletion.test.js` (**new**), on a real Ask AI tab and Settings tab:
+  - Saving writes only to the file, never to `localStorage`.
+  - A single Delete removes the chat from disk, and the deleted open chat can't be re-saved.
+  - Turning saving off with Keep keeps the chats, which stay visible.
+  - Clear history with saving off: Cancel keeps the chats, Delete leaves no `saved-chats*` file.
+  - Nothing is written while saving is off.
+  - Turning saving off with Delete removes the file, and the chats don't come back when saving is turned on again.
+  - Legacy migration, then clear.
+- `tests/electron/media-chat.test.js`: the saved-chat round trip now reads through `window.sovereign.chats.list()` and asserts nothing is in `localStorage`.
+
+**Privacy Receipt:** no network requests were added; this is local file I/O only.
+
+**Verified**
+- `npm run check`: exit 0. All unit tests pass, including the new `chat-store tests passed`.
+- `npm run test:electron:chat-deletion`: exit 0, ends with `"ok": true`. Afterwards, a `grep` of the **whole test profile** (including Chromium's `Local Storage`, `Session Storage`, caches and `Code Cache`) found none of the deleted chats' marker texts.
+- Regression: `test:electron:media-chat`, `ui-smoke` and `stage1-usability` exit 0 and print their final result JSON. The `media:preflight` / `search:media` handler errors in the media-chat log come from its negative fixtures (non-image links, a refused endpoint) and are not new.
+- `git diff --check`: clean. No secrets.
+
+**Not proven automatically (superseded by round 2 below):** PLAN §3 (first version), LevelDB keeping old bytes of chats saved **before** this change. In the Electron test, the legacy key was written and removed within one storage commit, so it never reached LevelDB, and the test can't show either way whether old real data lingers. Sandeep, after manual step 8, you can check with the app closed: `LC_ALL=C grep -rla '<a word from an old chat>' ~/Library/Application\ Support/sovereign-browser/Local\ Storage`.
+
+**Manual tests:** PLAN §6, steps 1–9. For step 8, you need a profile that has chats saved by the previous build.
+
+
+**Round 2: fixes for Codex REVIEW (2026-11-06)**
+
+MUST FIX:
+1. **Legacy chats missed when Settings is used first.** The legacy migration now runs at app startup, in the main process, before any page opens (PLAN §3). So `chats:offer-delete-on-disable` counts them even if Ask AI has never been opened, and Delete erases them. Ask AI opening later re-imports nothing, because the key is gone.
+2. **Corrupt file survives Clear history.** `chat-store` has `status()` → `{ count, unreadable, hasData }`, where `unreadable` means a file exists but isn't a valid chat list.
+   - `chats:clear` and the disable offer now delete whenever `hasData` is true. The prompts name "the unreadable saved chat history".
+   - Ask AI shows a notice ("Some saved chat history on this device could not be read. Clear history deletes it.") with Clear history enabled.
+   - All chat IPC now returns `{ chats, unreadable }`.
+3. **Legacy LevelDB data.** Implemented as in PLAN §3, with the new `src/legacy-chat-storage.js` and the `classic-level` dependency. The wording is changed in the dialog detail, the Settings status and the Settings help text: "deleted from Sovereign's storage on this device", and exported copies and system backups are not affected.
+
+SHOULD FIX:
+4. **In-memory copies.**
+   - A deleted chat that is open while generating is now closed as soon as generation ends (`setRunning(false)`). `closeDeletedChat()` also drops `lastModelMessages`, pending question data and retry data.
+   - **Deletion boundary:** saved-chat files and the legacy localStorage copy. These are **not** deleted:
+     - Privacy receipts, which are in memory only and gone on quit; they hold queries and URLs, not answers.
+     - The WebLLM engine's internal conversation, which is replaced on the next question.
+     - Exports the user saved (Markdown/PDF/receipt JSON).
+     - OS backups.
+5. **Coverage.** `tests/electron/chat-deletion.test.js` now runs as 4 launches on one profile (residue seed, legacy seed, main run, plus the orchestrator):
+   - The legacy data is written by real Chromium from a `sovereign://ask` page without this build's Ask code, flushed and closed, with an older overwritten value on disk.
+   - The main launch opens Settings before Ask AI and covers: single delete; deletion from a second Ask tab while the first is "generating"; Keep and Delete; Clear with Cancel and Delete; a truncated file from Ask and from Settings; nothing saved while off; and refused callers (Settings, the browser UI, and Ask calling the Settings-only handler).
+   - After the profile is closed, the orchestrator scans **every file under the profile, recursively** (LevelDB, caches, everything, Latin-1 and UTF-16) for 10 deleted markers. It also checks that an unrelated localStorage value is kept and that Chromium still reads it.
+   - Not covered: real model state and web/media caches. The test injects messages rather than running the model.
+
+**Files changed in round 2**
+- `src/legacy-chat-storage.js` (**new**): migration, key/value decoding, marker file, child-process entry and `runBeforeStartup()`.
+- `src/chat-store.js`: `status()`, and an unreadable-file check that also catches valid JSON which isn't a list.
+- `src/main.js`:
+  - Calls the startup migration right after `userData` is set.
+  - Chat IPC returns snapshots, deletes even when the file is unreadable, and uses the new wording.
+  - `chats:import-legacy` marks the profile for compaction on the next start.
+- `src/ask.js`: `closeDeletedChat()`, closing a deleted chat after generation, and the unreadable notice.
+- `src/settings.js`, `src/settings.html`: wording.
+- `package.json` / `package-lock.json`: the `classic-level` ^3.0.0 dependency, and `node tests/legacy-chat-storage.test.js` added to `check`.
+- `tests/legacy-chat-storage.test.js` (**new**), on a Chromium-shaped LevelDB:
+  - Legacy and residue text are gone from every file, while other keys survive and the database still reads.
+  - Covers UTF-16 values, residue-only compaction, the fallback marker, unreadable legacy JSON, a failed import keeping the key, a locked database and a brand-new profile.
+- `tests/chat-store.test.js`: unreadable-file status and clear.
+- `tests/electron/chat-deletion.test.js`: rewritten as above.
+- `tests/electron/media-chat.test.js`: uses `.chats` from the snapshot.
+
+**Verified (round 2)**
+- `npm run check`: exit 0, including `chat-store tests passed` and `legacy-chat-storage tests passed`.
+- `npm run test:electron:chat-deletion`: exit 0, `"ok": true`.
+  - The main launch logged `legacy saved chats: migrated, imported 2`.
+  - The final recursive scan found none of the 10 markers. The kept value was in `Local Storage/leveldb/000007.ldb`.
+  - Chromium reopened the compacted database: a new log was written and the kept key was read. All LevelDB files are mode 0600.
+  - The `chats:*` "can only be managed from Ask AI and Settings" errors in the log are the expected refusals.
+- Regression: `test:electron:media-chat`, `ui-smoke`, `stage1-usability` and `permissions` exit 0 with their final result JSON.
+- `npm audit` reports only the existing Electron advisories, nothing from `classic-level`. No secrets.
+
+**Notes for Sandeep**
+- **Your real profile:** an earlier check found the key in `~/Library/Application Support/sovereign-browser/Local Storage/leveldb/000038.log`. The first `npm start` with this build will move those chats into `saved-chats.json` and compact that database once. Back up the folder first if you want to keep a copy.
+- **Packaging (later):** `classic-level` is native, so an installer needs `asarUnpack` for it. The `RunAsNode` fuse must stay enabled, or the startup step needs another way to run.
+- **Running an older build again** on the same profile can re-add the key. The Ask-page fallback moves it, and the next start compacts it.
+
+**Manual tests (round 2), in addition to PLAN §6**
+1. Use a copy of a profile with chats from the previous build. Start the app and open **Settings first**, then turn saving off. Expect "Also delete the N saved chats on this device?". Choose Delete, quit, and run `LC_ALL=C grep -rla '<a word from an old chat>' <profile>`: nothing is found. Relaunch: no chats come back.
+2. Quit, put `[{"id":"x","title":"broken` into `saved-chats.json`, and start the app. Ask AI shows the unreadable notice. **Clear history** → Delete removes the file.
+3. Two Ask tabs with the same saved chat: start a long answer in tab 1 and delete the chat in tab 2. Tab 1 keeps the answer on screen until it finishes, then closes the chat. It never reappears in the list.
+4. The dialogs read "…from Sovereign's storage on this device" and mention exports and backups. Nothing claims secure erase.
+
+#### Round 3: fixes for Codex re-review (2026-11-06)
+
+**1. A cleanup marker no longer hides legacy chats**
+- `runBeforeStartup` no longer returns early when `legacy-chat-storage.json` says `cleaned`. Whenever the profile has a localStorage database, the child process opens it and looks the legacy key up.
+  - With the marker present and no key, it only does the lookup, with no compaction. That costs about 55 ms per launch (measured).
+  - If the key is there (an older build ran since), it is moved, deleted and compacted.
+- On delete, Sovereign always scans as well, whatever startup reported (locked, failed or clean):
+  - Clear history and the Settings turn-off offer first load a hidden, empty page (`src/legacy-chat-probe.html`) on the `sovereign://ask` origin and read the key.
+  - Any chats found are moved into `saved-chats.json` before the dialog, so the count and the delete cover them.
+  - The key is then removed, even if its value is empty or not valid JSON.
+  - If moving the chats into the file fails, the key is kept.
+  - This is local only and adds no network request, so nothing is added to the Privacy Receipt.
+
+**2. Invalid or corrupt chat data is always deletable**
+- `chat-store.js`: if any entry in the list is not a valid chat (for example it has no id), the file is marked `unreadable`.
+- `hasData` is now "a chat file or temp file exists", so deletion never depends on parsing. Any rewrite drops the invalid entries from disk.
+
+**3. The fallback tells the user, and the next start finishes the job**
+- Whenever a legacy key is removed while Sovereign runs, by the delete-time scan or the Ask page fallback, the marker is removed first. The Ask fallback now reports the key even when its value is empty or malformed.
+  - While the marker is missing, cleanup is pending.
+  - The next start compacts the database, even when no key is left to find.
+- While cleanup is pending:
+  - Delete, Clear history and the Settings offer return `pendingRestart`.
+  - Ask AI shows: **"Deleted. Some data will be fully removed when Sovereign restarts."**
+  - Settings shows: "Chat saving turned off. Deleted. Some data will be fully removed when Sovereign restarts."
+  - The confirmation dialog adds the same sentence.
+- Test-only: `SOVEREIGN_TEST_LEGACY_STARTUP=locked` skips the startup step, as if another instance held the database. It is used by the Electron test, both to simulate the lock and to make seed launches behave like an older build.
+
+**Files (round 3)**
+- `src/legacy-chat-storage.js`: runs on every start, and exports `parseLegacyChats`.
+- `src/chat-store.js`: the invalid-entry and file-presence checks.
+- `src/main.js`: the delete-time scan (`scanLegacyChats`), `pendingRestart` and the test hook.
+- `src/legacy-chat-probe.html` (**new**): an empty page with `default-src 'none'`.
+- `src/ask.js`, `src/settings.js`: the restart message, and the fallback always reports the key.
+- `tests/chat-store.test.js`: invalid entries, mixed lists and an empty-list file.
+- `tests/legacy-chat-storage.test.js`, each case through the real `runBeforeStartup` child process:
+  - A marker exists and an older build then writes chats: they are migrated and erased.
+  - Empty, non-JSON, non-list and no-id legacy values are removed and compacted.
+  - Fallback residue is still in LevelDB before restart and gone after.
+- `tests/electron/chat-deletion.test.js`, new launches on the same profile:
+  - `seed-again` → `marker-kept`: the marker exists, an older build saves a chat, and Settings-first deletes it.
+  - `seed-fallback` → `fallback`: startup is locked out and Settings-first scans and deletes. Expected:
+    - The pending text appears in Settings, and also after a single delete in Ask AI.
+    - A malformed key re-arms the cleanup.
+  - Then `restart`.
+  - The orchestrator checks that before the restart, the fallback text exists only in Local Storage and the cleanup is pending. After the restart, a full-profile scan finds none of the 15 markers, the cleanup is marked done, and unrelated localStorage is kept.
+  - The main phase adds the no-id chat list, cleared from Ask AI and from Settings.
+
+**Verified (round 3)**
+- `npm run check`: exit 0.
+- `npm run test:electron:chat-deletion`: exit 0, `"ok": true`.
+  - Logs: `migrated, imported 2`, then `migrated, imported 1` (marker-kept), then `locked (simulated by test)`, then `compacted` at restart.
+  - Before the restart, the fallback text was in `Local Storage/leveldb/000011.log`. After it, none of the 15 markers were found anywhere. The kept value was in `000019.ldb`.
+- Regression: `test:electron:media-chat`, `ui-smoke`, `stage1-usability` and `permissions` exit 0.
+
+**Known limits**
+- If the startup step can never run (for example `classic-level` is missing from a package), cleanup stays pending. Deletions will then keep saying data is removed at restart, and a restart will not do it. The console logs `legacy saved chats: failed`.
+- The hidden probe window is created only for Clear history and the Settings offer, not for single deletes. A single delete can only target chats already in the file.
+
+**Manual tests (round 3)**
+1. Run the app once, quit, then run an older build (or `git stash` and run `main`) and save a chat. Quit, start this build, open **Settings first** and turn saving off with Delete. Expect "1 saved chat deleted…". Quit, then `LC_ALL=C grep -rla '<word from that chat>' <profile>` finds nothing.
+2. Quit, write `[{"title":"x","messages":[]}]` to `saved-chats.json`, and start. Ask AI shows the unreadable notice. Clear history → Delete removes the file. Repeat, then turn saving off in Settings → Delete.
+3. Fallback: start with `SOVEREIGN_TEST_LEGACY_STARTUP=locked npm start` on a profile that still has old chats, then turn saving off in Settings → Delete. The status reads "…Deleted. Some data will be fully removed when Sovereign restarts." Quit: grep still finds the text under `Local Storage/leveldb`. Run `npm start` normally, quit, and grep again: nothing.
+
+#### Round 4: supported APIs only (after Codex REVIEW round 3, 2026-11-06)
+**Supersedes rounds 2–3 wherever they mention `classic-level`, compaction, the startup child process, `legacy-chat-storage.json` or "fully removed when Sovereign restarts".** PLAN §3 describes the current design.
+
+**1. classic-level and direct LevelDB access removed**
+- `npm uninstall classic-level`: `package-lock.json` is back to identical with `main`, and `package.json` lost the dependency and its test entries.
+- Deleted: `src/legacy-chat-storage.js` and `tests/legacy-chat-storage.test.js`.
+- Removed from `src/main.js`: the pre-ready startup block, `SOVEREIGN_TEST_LEGACY_STARTUP` (it existed only for that), the marker file logic and `pendingRestart`.
+- This also resolves Codex's items 4 (concurrent access to a Chromium-held database) and 5 (pinning).
+
+**2. Legacy chats only through Chromium's localStorage API**
+- `src/main.js`:
+  - `withLegacyProbe` loads the hidden `sovereign://ask/legacy-chat-probe.html` (one at a time).
+  - `peekLegacyChats` (`getItem`) and `removeLegacyChatKey` (`removeItem` plus a read-back check).
+  - `deleteAllSavedChats` is shared by Clear history and the Settings offer.
+- `src/ask.js`: the on-open migration remains. After `removeItem` it checks the key is gone and calls the new `chats:legacy-removed`, which is accepted from Ask only.
+- `session.clearStorageData` is not used, because the same origin holds the theme and the model cache.
+
+**3. Deletion always wins**
+- `src/chat-store.js` gains the deletion record (`chat-deletions.json`): `recordDeletion`, `isDeleted`, `legacyDeletePending`, `legacyDeleteDone`. `remove` and `clear` record before touching data. `save` and `importLegacy` refuse deleted ids, and `importLegacy` imports nothing while a legacy delete is pending.
+- Codex's failure (a failed probe followed by restore at restart) can no longer happen. The deletion is recorded before the scan, and the next start only removes the key.
+- Test-only `SOVEREIGN_TEST_LEGACY_REMOVE=fail` makes the main-process removal fail after the user confirmed.
+
+**4. Wording**
+- Uses "Deleted from Sovereign's storage. Chromium may keep fragments in its internal files until it cleans them up." in `src/ask.js`, `src/settings.js`, `src/settings.html` and the dialog detail in `src/main.js`.
+- Single delete still says "Saved chat deleted.", because it touches only Sovereign's own file.
+
+**5. Tests**
+- `tests/chat-store.test.js`:
+  - Deleted ids are never saved or imported again. The deletion record holds no chat text and is mode 0600.
+  - `clear({ legacy: true })` blocks imports across a store restart until `legacyDeleteDone`, and ids stay deleted after it.
+  - An unreadable record means pending. `parseLegacyChats` is covered too.
+- `tests/electron/chat-deletion.test.js`, rewritten:
+  - **Seed:** legacy chats with an overwritten older value, plus data that must survive: `probe.keep` and the theme (`sovereign.theme`) on the Ask origin, an IndexedDB database on the Ask origin (where WebLLM's `cacheBackend: 'indexeddb'` model cache lives), and New Tab shortcuts.
+  - **main:** checks nothing is imported at startup, then Settings-first deletes the 2 legacy chats with the exact wording. All earlier cases are kept, and the Clear history status wording is checked.
+  - **Failed removal, twice** (`seed-legacy` → `fail-remove` with `SOVEREIGN_TEST_LEGACY_REMOVE=fail`):
+    - Settings reports the delete plus "…removed the next time Sovereign starts", and the record has the id with `legacyDeletePending: true`.
+    - (a) Ask AI then opens: it restores nothing, removes the key and clears pending.
+    - (b) Quit with the delete still pending: the next start (`verify`) removes the key and restores nothing.
+  - **verify:** the legacy key is gone. `probe.keep`, the theme, the IndexedDB "model cache" entry and New Tab shortcuts are all still readable, and model setup state still loads.
+  - **Orchestrator:**
+    - `preferences.json` `search`, `downloads`, `bookmarks`, `startup` and `ai` (except `saveChatsOnDevice`) are unchanged.
+    - No deleted marker is in any file outside `Local Storage/`.
+    - `chat-deletions.json` contains no chat text.
+    - Chromium's localStorage fragments are reported as `chromiumFragments`.
+  - The Cache API was not used as a fixture, because Chromium refuses it for the `sovereign:` scheme. The model cache is IndexedDB.
+
+**Verified (round 4)**
+- `npm run check`: exit 0.
+- `npm run test:electron:chat-deletion`: exit 0, `"ok": true`, 13 markers scanned.
+  - No deleted text in Sovereign's files.
+  - `chromiumFragments`: the 5 legacy markers are still in `Local Storage/leveldb/000003.log`. This is the accepted limit, disclosed in the wording.
+  - The `chats:*` refusal errors and the two "legacy removal failed (test)" lines in the log are expected.
+- Regression: `test:electron:media-chat`, `ui-smoke`, `stage1-usability` and `permissions` exit 0.
+- `git diff --check` is clean. No new network requests: the probe page is served by the local `sovereign:` protocol.
+
+**Known limits (updated)**
+- **Chromium fragments:** chats from older builds are removed with `localStorage.removeItem`. Chromium's LevelDB may keep pieces of the old value in its `.log` / `.ldb` files until Chromium compacts them. Sovereign does not open or force-compact Chromium's files. The user-facing text says this.
+- **Backups:** exported copies, Time Machine, APFS snapshots and SSD remnants are out of scope. Nothing claims secure erase.
+- **Deletion record:** `chat-deletions.json` keeps every deleted chat id (random `time-random` strings, no content), with no cap since round 5, so a deleted chat can never come back.
+- **If the hidden probe fails before the dialog:** the dialog says "…and any chats saved by older versions", and the delete is recorded as pending.
+- **Old build later:** running an older build can again save chats to localStorage. If a legacy delete is still pending, those are deleted rather than imported (deletion wins).
+- **Single delete** never needs the probe, because only chats already in `saved-chats.json` are listed.
+- **Dev profiles:** a profile started with a round 2–3 build may contain a leftover `legacy-chat-storage.json`. Nothing reads it now, and it holds no chat data.
+- **Repeated cleanup failure:** If removing older-version chats fails again on a later startup, the pending cleanup is not shown to the user again (deleted chats still cannot return). Follow-up: show the pending notice whenever cleanup is still pending, with a regression test. (Feature test pass fix list #15, P3.)
+
+**Manual tests (round 4; replace rounds 2–3)**
+1. On a copy of a profile with chats from an older build, open **Settings first** and turn saving off. Expect "Also delete the N saved chats on this device?". Choose Delete. The status reads "Chat saving turned off. N saved chats deleted from Sovereign's storage. Chromium may keep fragments…". Open Ask AI: no chats. In DevTools, `localStorage.getItem('sovereign.ask.chats')` returns `null`, and the theme and downloaded model are still there.
+2. Same with `SOVEREIGN_TEST_LEGACY_REMOVE=fail npm start`: the status adds "Chats saved by an older version could not be removed yet; Sovereign will try again the next time it starts." (round 5 wording) `chat-deletions.json` shows `"legacyDeletePending":true`. Quit and run `npm start` normally: pending becomes `false`, the key is `null` and no chat is restored.
+3. Clear history in Ask AI shows "Deleted from Sovereign's storage. Chromium may keep fragments in its internal files until it cleans them up."
+4. After any delete, the model still shows as downloaded in Settings / Ask AI, and other settings are unchanged.
+
+#### Round 5: final fixes from Codex REVIEW round 4 (2026-11-06)
+
+**1. Deleted ids never expire or get dropped** (REVIEW item 2)
+- `src/chat-store.js`:
+  - The 2,000-id cap is removed, so `chat-deletions.json` keeps every deleted id. Ids are random `time-random` strings of about 25 bytes, so 10,000 deletions is about 250 KB.
+  - While a legacy delete is pending, `importLegacy` records the ids it blocks as deleted, for example a late import from a tab that read the key before the delete.
+  - `legacyDeleteDone(ids)` records the given ids in the same write that clears the pending flag.
+- `src/main.js`, in `removeLegacyChatKey`: reads the key before `removeItem` and passes its chat ids to `legacyDeleteDone`. A failed peek therefore can't leave ids unrecorded when cleanup completes.
+- New export: `legacyChatIds`.
+
+**2. Test hooks ignored in packaged builds** (REVIEW item 3)
+- New `src/test-hooks.js`: `testHook(name, { isPackaged })` returns the environment value only when `isPackaged === false`. An unknown state counts as packaged.
+- `src/main.js` reads `SOVEREIGN_TEST_LEGACY_REMOVE` through it with `app.isPackaged`. I also put `SOVEREIGN_CHAT_DELETE_TEST_ANSWER` through it: it auto-confirms deletion, so it should not work in an installed app either.
+- Other features' test hooks, such as `SOVEREIGN_PERMISSION_TEST_ANSWER`, are out of scope and unchanged.
+
+**3. Wording** (REVIEW item 5)
+- After a failed removal, Ask AI and Settings now say: "Chats saved by an older version could not be removed yet; Sovereign will try again the next time it starts."
+- The fragments sentence is unchanged. It describes Chromium's internal files after a successful removal, which is a different situation from a live key still waiting to be removed.
+
+**Tests (round 5)**
+- `tests/chat-store.test.js`:
+  - 2,101 deletions followed by a restart: the first deleted id still can't be imported, or saved by a stale tab.
+  - Pending delete with an unseen id, then an import blocked while pending, then `legacyDeleteDone(['seen-at-removal'])`, then a restart. Both ids are refused, and a new legacy chat can still be imported.
+  - `legacyChatIds` is covered.
+- New `tests/test-hooks.test.js`, added to `npm run check`. A development build honours the hooks. A packaged build, and an unknown packaging state, ignore them.
+- `tests/electron/chat-deletion.test.js`: the expected pending wording is updated.
+
+**About the model-cache check**
+The Electron test checks an **IndexedDB fixture** (`sovereign-test-model-cache`) on the `sovereign://ask` origin, where WebLLM keeps its cache (`cacheBackend: 'indexeddb'`). It does not download a real model or run inference. **The real model cache must be checked manually:**
+1. With a downloaded model, delete chats (Clear history, and the Settings offer).
+2. Restart.
+3. Confirm the model still shows as downloaded and answers a question without downloading again. Ideally, check this with the network off.
+
+**Not done in this round:** REVIEW item 5 also suggests a persistent visible notice while a legacy delete stays pending across repeated failed starts. The one-time status message is reworded, but no permanent notice was added. It would be a small follow-up if wanted.
+
+**Verified (round 5)**
+- `npm run check`: exit 0, including `chat-store tests passed` and `test-hooks tests passed`.
+- `npm run test:electron:chat-deletion`: exit 0, `"ok": true`, 13 markers.
+- Regression: `test:electron:media-chat`, `ui-smoke`, `stage1-usability` and `permissions` exit 0.
+- `git diff --check` is clean.
+
+**Files (round 5):**
+- New: `src/test-hooks.js`, `tests/test-hooks.test.js`
+- Changed: `src/chat-store.js`, `src/main.js`, `src/ask.js`, `src/settings.js`, `package.json`, `tests/chat-store.test.js`, `tests/electron/chat-deletion.test.js`
+
+### REVIEW (Codex, at Sandeep's explicit request)
+
+#### Quick re-check — round 5 (2026-11-06)
+Scope limited to the three MUST FIX findings from round 4 (items 2, 3 and 5) and `npm run check`. Included the relevant untracked store, hook helper and tests. These verdicts supersede those three earlier verdicts. Only REVIEW edited.
+
+- **Item 2: OK — The two reproduced deletion-record failures are fixed.** Deleted ids are no longer capped. Imports blocked while cleanup is pending now record their ids, and main reads ids from the legacy key before removal and records them when clearing pending. The tests cover 2,101 deletions, reopening, stale saves/imports, blocked unseen ids and ids discovered at removal. These tests passed under `npm run check`.
+- **Item 3: OK — Packaged builds ignore the failure hook.** Main calls `testHook` with `app.isPackaged`; the helper enables hooks only when that value is exactly false. Tests verify development, packaged and unknown states. The auto-confirm deletion hook is gated too. Tests passed.
+- **Item 5: MUST FIX — Retry wording is corrected, but the requested visible status after another failed startup is still missing.** Ask and Settings now correctly say Sovereign will *try again*, rather than guarantee removal. However, `finishPendingLegacyChatDelete()` still runs the safe removal without publishing its failed result; failure only logs to the console, and `savedChatSnapshot()` does not expose pending cleanup. On reopening Settings after another failed startup, the previous status message is gone although the legacy key remains. Round 5 CHANGES explicitly acknowledges this was not implemented. Expose the persisted pending state in the UI after restart and cover two consecutive failed attempts followed by success. No permanent banner is specifically required; a visible status retained until completion is sufficient. The repeated-failure/restart test requested in the earlier finding is also absent.
+
+**Verification:** `npm run check` exited 0, including `chat-store tests passed` and `test-hooks tests passed`. This quick check did not rerun the Electron suite or expand review to other issues. No code changes or commits.
+
+
+#### Final review — round 4, supported-API approach (2026-11-06)
+These verdicts supersede earlier rounds. Reviewed the tracked changes and all four untracked files: `src/chat-store.js`, `src/legacy-chat-probe.html`, `tests/chat-store.test.js`, and `tests/electron/chat-deletion.test.js`. Only REVIEW edited; no code/test/dependency edits or commits.
+
+1. **OK — No direct Chromium storage access; classic-level removed.** Production migration/deletion uses `localStorage.getItem/removeItem` through Chromium and the hidden probe. No direct LevelDB open, compaction, or broad `clearStorageData` operation remains. The former storage module and its tests are absent. No `classic-level` reference remains in application source or dependency manifests. Compared to local `main`: dependency/devDependency declarations match exactly and `package-lock.json` is byte-identical. `package.json` differs only in the intended test/check scripts, so it is not literally identical as a whole. Tests read disposable Chromium files for verification; production does not manipulate them.
+
+2. **MUST FIX — “Deletion always wins” still has two reproducible holes.**
+   - **Deletion ids expire.** `src/chat-store.js:161` keeps only the last 2,000 ids. In a disposable directory, `remove('first-deleted')` followed by 2,000 other removals and reopening the store made `isDeleted('first-deleted')` false; `importLegacy` then restored that id. A stale tab can likewise save an expired id. Do not discard deletion protection while an old copy can still arrive. Add a boundary/restart test that exceeds the current cap.
+   - **Previously unknown ids are forgotten when pending cleanup finishes.** After a failed initial peek, `clear({ legacy: true })` cannot record ids it did not see. `importLegacy` refuses those chats while pending but does not record their ids, and `legacyDeleteDone()` clears the only remaining barrier. Reproduced with the real store: clear with legacy pending → import an unseen id (blocked) → mark cleanup done → reopen → import the same id (restored). This permits a delayed cross-tab import that read the old key before another probe/tab removed it, or a later old copy, to resurrect chats covered by the bulk delete. The probe queue does not serialize Ask-page migration IPC with cleanup completion. Retain a durable rejection rule for pre-delete legacy data, including unknown/in-flight imports; do not let a key-removal acknowledgement reopen that path. Add a failed-peek plus delayed-import test across cleanup completion/restart and two tabs. Existing tests cover failed removal *after a successful peek*, when the ids are already known; they miss this case.
+
+3. **MUST FIX — Failure hook is active in packaged builds.** `legacyRemovalTestFailure()` (`src/main.js:4973`) checks only `process.env.SOVEREIGN_TEST_LEGACY_REMOVE === 'fail'`. There is no `!app.isPackaged` or equivalent development/test guard. Evaluating the exact function with `app.isPackaged = true` and that variable set still throws `legacy removal failed (test)`. Gate the hook explicitly and test both packaged and development branches. A comment saying “Test-only” does not enforce it.
+
+4. **OK — Other storage is preserved, within the tested scope.** The only Chromium key removed is `sovereign.ask.chats`; no origin-wide cleanup or IndexedDB deletion is present. The passing multi-launch Electron regression confirms the Ask-origin theme and unrelated localStorage, New Tab shortcuts, an IndexedDB cache sentinel, and unrelated preferences survive all tested deletions/restarts. Model setup state still loads. This tests an IndexedDB fixture in the model-cache origin, not a downloaded WebLLM model or successful inference; the code inspection supports preservation, but a real downloaded-model round trip was not performed.
+
+5. **MUST FIX — Fragment disclosure is accurate; the next-start promise is too strong.** The new Chromium-fragment and export/backup wording matches the accepted boundary and the test results (old bytes remain in LevelDB). However, `src/ask.js:1595` and `src/settings.js:159` promise old chats “will be removed the next time Sovereign starts.” Startup only calls `removeLegacyChatKeySafely()` and can fail again; on failure it logs and leaves pending, with no guaranteed removal. Say cleanup remains pending and Sovereign will retry on startup (and distinguish a live legacy key awaiting removal from fragments after removal). Retain a visible pending/failure status if the next attempt fails. Add a repeated-failure/restart wording check. This concerns the live legacy key, not the explicitly disclosed LevelDB fragments.
+
+6. **OK — Checks pass.** `npm run check` exited 0, including the new chat-store tests and Electron-test syntax checks. `npm run test:electron:chat-deletion` exited 0 with final `"ok": true`, 13 markers scanned, no deleted text outside Chromium Local Storage, and five legacy markers reported in `Local Storage/leveldb/000003.log`. The expected denied-IPC and injected-removal errors occurred. Additional isolated Node probes reproduced both finding 2 cases and the packaged-hook failure in finding 3. Those cases are not covered by the passing repository tests.
+
+
+#### Final re-review — round 3 (2026-11-06)
+Current verdicts below supersede earlier reviews. Scope: the three prior MUST FIX items, exclusive startup access to Chromium storage, dependency pinning, and checks. Inspected all six untracked files, including the empty CSP-restricted `src/legacy-chat-probe.html`, the two storage modules and their three test files. Only REVIEW edited; no implementation/test changes or commits.
+
+1. **OK — Existing cleanup markers no longer hide legacy chats.** `runBeforeStartup()` now checks the database on every launch; a found key is imported, deleted and compacted even with a clean marker. Clear and Settings also use the Chromium-backed probe before counting chats. Unit tests exercise the real startup child with a retained marker; the Electron `seed-again` / `marker-kept` phases pass with Settings opened first. Discovery failures are covered by the remaining finding 3 below.
+
+2. **OK — Invalid chat arrays and corrupt files are deletable.** `load()` flags rejected entries as unreadable; `status().hasData` uses file existence. Tests cover missing-id arrays, mixed valid/invalid entries, truncated/non-list JSON and an empty-list file. The Electron test verifies missing-id data can be removed from both Ask and Settings.
+
+3. **MUST FIX — Normal fallback now reports pending cleanup, but a failed probe can resurrect chats after reported deletion.** Valid, empty and malformed legacy keys now schedule compaction; successful fallback returns `pendingRestart`, displays the restart message, and the multi-launch test verifies residue disappears after restart. However, `scanLegacyChatsSafely()` catches probe/import failures and returns false while bulk deletion continues. It records only “cleanup needed,” not a durable request to delete the undiscovered legacy chats. Reproduced using the actual extracted IPC handlers in a disposable-profile Node harness with a failing probe: Clear returned `{ deleted: 1, cleared: true, chats: [], pendingRestart: true }`; the next real `runBeforeStartup()` returned `{ status: 'migrated', imported: 1 }` and restored the live legacy chat to `saved-chats.json`. Thus “fully removed when Sovereign restarts” is false on this supported error path. Propagate the discovery failure and do not report bulk deletion complete, or persist an explicit deletion intent that startup honors instead of importing those chats. Add a probe/import-failure regression through deletion and restart.
+
+4. **MUST FIX — Pre-startup ordering is correct for this process, but real Chromium-held database exclusion is not safe.** The sole production `classic-level` call runs synchronously at `src/main.js:239`, before `app.whenReady()` and window/session setup. The hidden runtime probe uses Chromium localStorage, not `classic-level`. Nevertheless, another running instance can already own this profile: there is no `requestSingleInstanceLock` guard before migration, and the assumed LevelDB lock refusal does not protect against real Chromium in this environment. A disposable Electron harness opened `sovereign://ask`, wrote/flushed legacy localStorage, kept its window alive, then called the real startup child. `lsof` showed Chromium still holding `LOG`, `LOCK`, `MANIFEST-000001` and `000003.log`; the child returned **`{ status: 'migrated', imported: 1 }`**, not `locked`. Reproduced twice. This demonstrates concurrent mutation of a live Chromium database; no claim of actual corruption is made, but the required exclusion guarantee fails. The repository lock test only holds another ClassicLevel handle, and the Electron fallback test simulates `locked`; neither establishes Chromium interoperability. Prevent migration whenever another instance/session owns the profile, using an ownership guard acquired before the child starts, and add a real Chromium-held-profile regression. The direct migration path is limited to `Local Storage/leveldb` and does not address the IndexedDB model-cache directory, but that path separation does not make concurrent Local Storage mutation safe. Do not sign off on other-data safety until this is fixed. The temporary harness/profile used no real user data or downloaded model.
+
+5. **MUST FIX — Dependency is normal but not pinned.** `package.json:39` declares `"classic-level": "^3.0.0"` under `dependencies`. The lockfile resolves 3.0.0, but the caret still permits later 3.x releases. Use an exact version (for example `"3.0.0"`) in package.json and update the lockfile root dependency declaration consistently. No dependency files were changed during review.
+
+6. **OK — Required checks pass.** `npm run check` exited 0, including chat-store and legacy-chat-storage tests. `npm run test:electron:chat-deletion` exited 0 with `"ok": true`: 15 deleted markers absent after restart, fallback residue observed beforehand in `Local Storage/leveldb/000011.log`, unrelated localStorage retained in `000019.ldb`. These successes do not cover the failing probe/restart and real Chromium exclusion reproductions above. The real-lock diagnostic correctly failed its expected-`locked` assertion.
+
+
+#### Re-review of the three MUST FIX items (2026-11-06)
+Scope: only original findings 1–3. Inspected their tracked changes and all five untracked implementation/test files, including `src/legacy-chat-storage.js` and its tests. No code or tests edited. The verdicts below supersede the original findings 1–3; the earlier review is retained as history.
+
+1. **MUST FIX — Settings-first legacy discovery is fixed for a first upgrade, but still skipped when a cleanup marker already exists.** Startup migration now precedes page creation, and the multi-launch Electron test proves Settings can delete two legacy chats without opening Ask. However, `src/legacy-chat-storage.js:150–153` returns immediately on `cleaned: true` without checking for a new legacy key. Reproduced in a disposable profile: run startup once (writes the marker), write a Chromium-format legacy chat as an older build would, then call `runBeforeStartup` again. Result: `{ status: 'clean', imported: 0 }`, the live legacy key remains, and the Settings store reports `{ count: 0, unreadable: false, hasData: false }`. Thus the documented older-build reuse path still reproduces the original Settings-first bug. Check for a live legacy key even with a marker (the lower-level migration already supports this), and add a regression that retains the marker. The current Electron test explicitly removes the marker before its main launch. Also surface incomplete discovery when startup migration fails instead of treating a zero file count as proof that there are no legacy chats.
+
+2. **MUST FIX — Truncated JSON is fixed, but invalid chat arrays still bypass deletion.** The new unreadable status, UI notice and both deletion handlers correctly handle malformed JSON and non-array JSON; the Electron test passes those cases. `src/chat-store.js:88` nevertheless marks every parsed array readable after filtering rejected entries, and `status()` at line 122 ignores existence of the main file. Reproduced with `[{"title":"REVIEW-INVALID-CHAT-TEXT","messages":[{"role":"user","content":"REVIEW-INVALID-CHAT-TEXT"}]}]` (missing id): status is `{ count: 0, unreadable: false, hasData: false }` while the marker remains on disk. Clear still returns without unlinking, and Settings offers nothing. Treat rejected on-disk entries as unreadable and base physical-cleanup availability on file presence; add this case through the IPC/UI path, not only direct `store.clear()`.
+
+3. **MUST FIX — Normal LevelDB compaction and narrower wording pass, but the fallback still reports deletion before legacy residue is removed.** The new startup compaction genuinely removes live and overwritten legacy marker text from the closed test profile while preserving unrelated localStorage. The dialog correctly excludes exports/backups and no longer promises irrecoverability. However, after skipped/failed startup cleanup, `chats:import-legacy` (`src/main.js:4975–4982`) only removes the cleanup marker for a future restart; Ask then calls `removeItem`. Deleting the imported chat in that same run removes only the JSON file and still reports deletion from Sovereign's storage, while LevelDB residue remains until a successful subsequent startup. Moreover, unreadable or empty legacy JSON never invokes `importLegacy` (`src/ask.js:1601–1611`), so with an existing clean marker it does not even schedule compaction. Track and disclose pending legacy cleanup in deletion results/UI, and always schedule cleanup when removing any legacy key, including malformed/empty values. Add fallback-path tests with persisted LevelDB data and an existing marker, checking both before and after restart. The successful first-upgrade test alone does not cover this path.
+
+**Verification:** `npm run check` passed, including both new store/migration test suites. `npm run test:electron:chat-deletion` passed with final `"ok": true`: 10 markers absent from the recursively scanned closed profile, and the unrelated value retained in `Local Storage/leveldb/000007.ldb`. The two additional disposable-profile Node probes reproduced findings 1 and 2 above without modifying repository files. These results confirm the normal-path fixes but do not close all three findings.
+
+#### Original review (historical)
+Reviewed 2026-11-06. Read AGENTS.md, this task's PLAN and CHANGES, the entire tracked diff, and all three untracked files (`src/chat-store.js`, `tests/chat-store.test.js`, `tests/electron/chat-deletion.test.js`). Only this REVIEW was edited; implementation and tests were not changed.
+
+**MUST FIX**
+1. **Disabling saving before opening Ask AI misses legacy chats.** `src/main.js` `chats:offer-delete-on-disable` counts only `saved-chats.json`; migration happens only on Ask-page load (`src/ask.js:1573`). On an upgraded profile, open Settings first and turn saving off: count is zero, no deletion offer appears, and the live legacy key remains. Opening Ask later imports those chats even with saving off. Migrate/discover legacy storage before deciding there is nothing to delete, and ensure the disable-with-Delete operation covers it. Test with a legacy profile flushed and closed before launching the new build, with Settings opened first.
+2. **Clear history can report success while leaving chat bytes in a corrupt file.** `src/chat-store.js` treats malformed JSON as an empty list; `src/main.js` `chats:clear` returns immediately when count is zero without calling `clear()`. The disable handler likewise skips it. A truncated file containing chat text therefore survives; the UI hides/disables the way to remove it. Route explicit deletion through physical cleanup even when parsing produces no valid chats, and provide a recovery path for an unreadable history. The existing corrupt-file unit case calls the store directly and misses this IPC/UI bug. Add an integration case with truncated JSON containing a unique marker.
+3. **The deletion guarantee shown to users is false for legacy data.** The confirmation says “Deleted chats are removed from this device and cannot be recovered,” but PLAN §3 correctly acknowledges that migrated text can remain in LevelDB logs/tables; `removeItem` does not erase those bytes. No deletion path clears that legacy storage. This is a known design limitation rather than an implementation deviation, but it prevents signing off on complete deletion. Either implement safe legacy cleanup or narrow the user-facing guarantee and explain the residual legacy-data cleanup requirement in the product. Do not describe unlink/rename as secure erasure; filesystem snapshots and backups also remain outside this operation.
+
+**SHOULD FIX**
+4. **In-memory copies and generated replies survive deletion.** `applySavedChats()` clears `messages`, `mediaTurns` and `lastRequest` only when not running. If deletion happens during generation, the completion path merely skips saving; it never closes the deleted conversation after generation finishes. Even for an idle deletion, `lastModelMessages` retains the previous model input, and the model engine resets its conversation only on the next `summarize()` call. Privacy receipts independently retain prompt/query text and URLs in memory, and user-exported receipt JSON is not deleted. Define the deletion boundary explicitly; clear relevant runtime references and close the deleted conversation when generation finishes. Test deletion during generation and deletion from another Ask tab. User-created exports and OS backups should not be silently removed.
+5. **Coverage does not establish deletion across caches or upgrades.** The Electron test scans only top-level `saved-chats*` files and injects messages directly, so it never populates real model state or web/media caches. Its legacy key is written and removed in the same running session. Add a two-launch legacy fixture, a recursive profile scan (including LevelDB and caches), multi-tab propagation/concurrent save-delete tests, and denied-sender IPC tests. A passing marker scan of this synthetic profile does not prove deletion of pre-existing flushed data or cached media. The prior CHANGES already acknowledges the migration-test limitation; it remains unresolved.
+
+**OK**
+- Normal store operations match the file design: mode 0600, temporary-file rename, no application-created backup, unlink on last deletion, and stale temporary-file cleanup when the store opens. Unit tests inspect all files in their isolated store directory. No additional chat-body persistence was found in the inspected source; session restore strips Ask query parameters, and the model's configured IndexedDB cache is for model assets. This does not prove forensic erasure or removal of cached media/source responses.
+- The changed implementation adds local IPC/file operations, with no new network request or cloud-AI fallback. Existing restored media can still load thumbnails through the existing receipt path. Ask/Settings checks guard the new IPC; save is refused when saving is disabled; destructive dialogs default to Keep/Cancel.
+- `npm run check`: passed (including chat-store unit tests and Electron-test syntax checks). `npm run test:electron:chat-deletion`: passed with final `"ok": true` after running outside the sandbox; the sandboxed GUI launch aborted with SIGABRT. `git diff --check`: passed before this documentation update. These passing tests do not cover the MUST FIX cases above.
+
+**Manual verification for fixes:** use a disposable old-version profile with persisted legacy chats; launch Settings before Ask and disable saving; verify the deletion offer and absence of reimport after restart. Separately seed a malformed saved-chats file containing a marker and verify explicit Clear removes it. Open the same saved conversation in two Ask tabs, delete it while one is generating, and verify both close it after completion and it never returns. Inspect the closed profile recursively for legacy markers, and distinguish remaining legacy/cache/export data from the new saved-chat file.

@@ -98,6 +98,20 @@ contextBridge.exposeInMainWorld('sovereign', {
     updateAi: patch => ipcRenderer.invoke('settings:update-ai', patch),
     chooseDownloadDirectory: () => ipcRenderer.invoke('settings:choose-download-directory')
   },
+  chats: {
+    list: () => ipcRenderer.invoke('chats:list'),
+    save: chat => ipcRenderer.invoke('chats:save', chat),
+    delete: id => ipcRenderer.invoke('chats:delete', id),
+    clear: () => ipcRenderer.invoke('chats:clear'),
+    importLegacy: chats => ipcRenderer.invoke('chats:import-legacy', chats),
+    legacyRemoved: () => ipcRenderer.invoke('chats:legacy-removed'),
+    offerDeleteOnDisable: () => ipcRenderer.invoke('chats:offer-delete-on-disable'),
+    onChanged: callback => {
+      const listener = (_event, chats) => callback(chats);
+      ipcRenderer.on('chats:changed', listener);
+      return () => ipcRenderer.removeListener('chats:changed', listener);
+    }
+  },
   modelSetup: {
     getState: () => ipcRenderer.invoke('model-setup:get-state'),
     start: () => ipcRenderer.invoke('model-setup:start'),

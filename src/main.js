@@ -31,6 +31,8 @@ const {
 } = require('./source-reader');
 const privacyReceipts = require('./privacy-receipt');
 const { createPermissionController } = require('./permission-policy');
+const { createChatStore, legacyChatIds, parseLegacyChats } = require('./chat-store');
+const { testHook } = require('./test-hooks');
 const datasetBatchEnabled = Boolean(process.env.SOVEREIGN_DATASET_BATCH);
 let datasetWindow = null;
 const {
@@ -4212,6 +4214,7 @@ app.whenReady().then(async () => {
   if (!restoreSavedSessionWindows()) {
     createWindow();
   }
+  finishPendingLegacyChatDelete();
 
   app.on('activate', () => {
     if (windows.size === 0) {
@@ -4852,6 +4855,269 @@ ipcMain.handle('settings:update-downloads', (_event, patch) => updateDownloadSet
 ipcMain.handle('settings:update-startup', (_event, patch) => updateStartupSettings(patch));
 
 ipcMain.handle('settings:update-ai', (_event, patch) => updateAiSettings(patch));
+
+// Saved Ask AI chats: one file in the user-data folder, owned by the main process.
+// Local file I/O only; no network request, so nothing to add to the Privacy Receipt.
+let savedChatStore = null;
+
+function chatStore() {
+  if (!savedChatStore) {
+    savedChatStore = createChatStore({ directory: app.getPath('userData') });
+  }
+  return savedChatStore;
+}
+
+// What Ask AI pages get: the valid chats, plus whether an unreadable file is on disk.
+function savedChatSnapshot() {
+  const status = chatStore().status();
+  return { chats: chatStore().list(), unreadable: status.unreadable };
+}
+
+function chatSenderTab(event, kinds) {
+  const { state, tab } = findTabBySender(event.sender);
+  const url = String(event.sender.getURL() || '');
+  if (!tab || !kinds.includes(tab.kind) || !kinds.some(kind => url.startsWith(`sovereign://${kind}/`))) {
+    throw new Error('Saved chats can only be managed from Ask AI and Settings.');
+  }
+  return { state, tab };
+}
+
+function broadcastSavedChats() {
+  const snapshot = savedChatSnapshot();
+  for (const state of windows.values()) {
+    for (const tab of state.tabs.values()) {
+      if (tab.kind === 'ask' && !tab.view.webContents.isDestroyed()) {
+        tab.view.webContents.send('chats:changed', snapshot);
+      }
+    }
+  }
+  return snapshot;
+}
+
+// Returns true only when the user picked Delete. Every other answer keeps the chats.
+async function confirmChatDeletion(state, { message, keepLabel }) {
+  // Test-only (ignored when packaged): skip the dialog. Read on every call so one test can
+  // answer both ways.
+  const testAnswer = testHook('SOVEREIGN_CHAT_DELETE_TEST_ANSWER', { isPackaged: app.isPackaged });
+  if (['delete', 'keep'].includes(testAnswer)) {
+    return testAnswer === 'delete';
+  }
+  const options = {
+    type: 'question',
+    title: 'Saved chats',
+    message,
+    // Honest scope: Sovereign removes its own copy. Chromium's own files and the disk are
+    // outside its control, so there is no promise of secure erase.
+    detail: "They will be deleted from Sovereign's storage. Chromium may keep fragments in its internal files until it cleans them up. Copies you exported, and system backups or snapshots, are not affected.",
+    buttons: [keepLabel, 'Delete'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true
+  };
+  const parent = state?.window && !state.window.isDestroyed() ? state.window : null;
+  const result = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
+  return result.response === 1;
+}
+
+function savedChatsText(status) {
+  const legacy = status.legacyUnknown ? ' and any chats saved by older versions' : '';
+  if (status.count === 0) {
+    return `${status.unreadable ? 'the unreadable saved chat history' : 'the saved chat history'}${legacy}`;
+  }
+  const chats = `${status.count} saved ${status.count === 1 ? 'chat' : 'chats'}`;
+  return status.unreadable ? `${chats} and the unreadable saved chat history${legacy}` : `the ${chats}${legacy}`;
+}
+
+// ---- Chats saved by older versions in the Ask page's localStorage ----
+// Older builds kept saved chats under one localStorage key on the sovereign://ask origin.
+// Sovereign only reads and removes that key through Chromium's own localStorage API, from a
+// hidden empty page on that origin; it never opens Chromium's files. Only this one key is
+// touched: the same origin also holds the theme and the AI model cache (IndexedDB), so
+// session.clearStorageData is not used. removeItem is a supported delete, but Chromium may keep
+// fragments of the old value in its internal files until it cleans them up itself.
+// Local only; no network request.
+const LEGACY_CHAT_KEY = 'sovereign.ask.chats';
+let legacyProbeQueue = Promise.resolve();
+
+// Runs fn(webContents) with a hidden page on the sovereign://ask origin, one at a time.
+function withLegacyProbe(fn) {
+  const run = legacyProbeQueue.then(async () => {
+    const probe = new BrowserWindow({
+      show: false,
+      webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true }
+    });
+    try {
+      await probe.loadURL('sovereign://ask/legacy-chat-probe.html');
+      return await fn(probe.webContents);
+    } finally {
+      probe.destroy();
+    }
+  });
+  legacyProbeQueue = run.catch(() => {});
+  return run;
+}
+
+function readLegacyChatKey(contents) {
+  return contents.executeJavaScript(`window.localStorage.getItem(${JSON.stringify(LEGACY_CHAT_KEY)})`);
+}
+
+// Read only: { found, chats }. Never writes saved-chats.json, so it cannot restore anything.
+function peekLegacyChats() {
+  return withLegacyProbe(async contents => {
+    const raw = await readLegacyChatKey(contents);
+    return raw === null || raw === undefined
+      ? { found: false, chats: [] }
+      : { found: true, chats: parseLegacyChats(String(raw)) };
+  });
+}
+
+// Test-only (ignored when packaged): make the removal fail, to prove a failed removal never
+// restores deleted chats.
+function legacyRemovalTestFailure() {
+  if (testHook('SOVEREIGN_TEST_LEGACY_REMOVE', { isPackaged: app.isPackaged }) === 'fail') {
+    throw new Error('legacy removal failed (test)');
+  }
+}
+
+// Removes the key and checks it is gone; only then is the pending legacy delete cleared.
+async function removeLegacyChatKey() {
+  return withLegacyProbe(async contents => {
+    legacyRemovalTestFailure();
+    // Note which chats were still in the key: they are recorded as deleted when the pending
+    // delete is cleared, so a late or repeated copy of them is never imported.
+    const before = await readLegacyChatKey(contents);
+    const ids = before === null || before === undefined ? [] : legacyChatIds(parseLegacyChats(String(before)));
+    await contents.executeJavaScript(`window.localStorage.removeItem(${JSON.stringify(LEGACY_CHAT_KEY)}); true`);
+    const after = await readLegacyChatKey(contents);
+    if (after !== null && after !== undefined) {
+      throw new Error('the old chat key is still present');
+    }
+    chatStore().legacyDeleteDone(ids);
+    return true;
+  });
+}
+
+// Returns false if the key could not be removed; the delete stays recorded as pending, and
+// the next start (or the next time Ask AI opens) removes the key without importing it.
+async function removeLegacyChatKeySafely() {
+  try {
+    return await removeLegacyChatKey();
+  } catch (error) {
+    console.log(`[Sovereign] could not remove chats saved by an older version: ${error.message}`);
+    return false;
+  }
+}
+
+// After startup: finish a legacy delete that could not complete earlier.
+function finishPendingLegacyChatDelete() {
+  if (chatStore().legacyDeletePending()) {
+    removeLegacyChatKeySafely();
+  }
+}
+
+// Shared by Clear history and the Settings offer. The order makes deletion win:
+//   1. read-only peek, so the dialog can count chats from older versions;
+//   2. the user confirms;
+//   3. the deletion (ids, and "delete legacy chats") is recorded before any data is touched;
+//   4. saved-chats.json is removed;
+//   5. the legacy key is removed. If that fails, nothing is restored: it stays pending.
+async function deleteAllSavedChats(state, { message, keepLabel }) {
+  let legacy = { found: false, chats: [] };
+  let legacyUnknown = false;
+  try {
+    legacy = await peekLegacyChats();
+  } catch (error) {
+    console.log(`[Sovereign] could not check for chats saved by an older version: ${error.message}`);
+    legacyUnknown = true;
+  }
+  const fileStatus = chatStore().status();
+  const legacyIds = legacy.chats.map(chat => (chat && typeof chat.id === 'string' ? chat.id : '')).filter(Boolean);
+  const savedIds = new Set(chatStore().list().map(chat => chat.id));
+  const legacyCount = new Set(legacyIds.filter(id => !savedIds.has(id))).size;
+  const status = {
+    count: fileStatus.count + legacyCount,
+    unreadable: fileStatus.unreadable,
+    legacyUnknown,
+    hasData: fileStatus.hasData || legacy.found || legacyUnknown || chatStore().legacyDeletePending()
+  };
+  if (!status.hasData) {
+    return { status, confirmed: false };
+  }
+  if (!(await confirmChatDeletion(state, { message: message(status), keepLabel }))) {
+    return { status, confirmed: false };
+  }
+  chatStore().clear({ legacy: true, extraIds: legacyIds });
+  broadcastSavedChats();
+  const legacyRemoved = await removeLegacyChatKeySafely();
+  return { status, confirmed: true, legacyPending: !legacyRemoved };
+}
+
+ipcMain.handle('chats:list', event => {
+  chatSenderTab(event, ['ask']);
+  return savedChatSnapshot();
+});
+
+ipcMain.handle('chats:save', (event, chat) => {
+  chatSenderTab(event, ['ask']);
+  if (!aiSettings.saveChatsOnDevice) {
+    throw new Error('Saving chats is turned off.');
+  }
+  chatStore().save(chat);
+  return broadcastSavedChats();
+});
+
+ipcMain.handle('chats:delete', (event, id) => {
+  chatSenderTab(event, ['ask']);
+  chatStore().remove(id);
+  return broadcastSavedChats();
+});
+
+// Clear history: always physical cleanup once confirmed, even if the file cannot be parsed.
+ipcMain.handle('chats:clear', async event => {
+  const { state } = chatSenderTab(event, ['ask']);
+  const result = await deleteAllSavedChats(state, {
+    message: status => `Delete ${savedChatsText(status)} from Sovereign's storage?`,
+    keepLabel: 'Cancel'
+  });
+  if (!result.confirmed) {
+    return { deleted: 0, canceled: result.status.hasData, ...savedChatSnapshot() };
+  }
+  return { deleted: result.status.count, cleared: true, legacyPending: result.legacyPending, ...broadcastSavedChats() };
+});
+
+// The Ask page found the legacy key itself (it opened before any bulk delete). Imports nothing
+// while a legacy delete is pending, and never a deleted id (see chat-store.js).
+ipcMain.handle('chats:import-legacy', (event, chats) => {
+  chatSenderTab(event, ['ask']);
+  chatStore().importLegacy(Array.isArray(chats) ? chats : []);
+  return broadcastSavedChats();
+});
+
+// The Ask page removed the legacy key with removeItem and checked it is gone.
+ipcMain.handle('chats:legacy-removed', event => {
+  chatSenderTab(event, ['ask']);
+  if (chatStore().legacyDeletePending()) {
+    chatStore().legacyDeleteDone();
+  }
+  return true;
+});
+
+// Called by Settings right after "Save chats on this device" is turned off.
+ipcMain.handle('chats:offer-delete-on-disable', async event => {
+  const { state } = chatSenderTab(event, ['settings']);
+  if (aiSettings.saveChatsOnDevice) {
+    return { count: 0, deleted: 0 };
+  }
+  const result = await deleteAllSavedChats(state, {
+    message: status => `Also delete ${savedChatsText(status)} on this device?`,
+    keepLabel: 'Keep'
+  });
+  const { count, unreadable, hasData } = result.status;
+  if (!result.confirmed) {
+    return { count, unreadable, kept: hasData, deleted: 0 };
+  }
+  return { count, unreadable, deleted: count, cleared: true, legacyPending: result.legacyPending };
+});
 
 ipcMain.handle('settings:choose-download-directory', event => {
   const state = findWindowStateBySender(event.sender);
