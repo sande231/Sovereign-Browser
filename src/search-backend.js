@@ -115,7 +115,9 @@ function validateResultUrl(value) {
 const MEDIA_QUERY_STOP_WORDS = new Set([
   'the', 'and', 'for', 'with', 'from', 'show', 'find', 'give', 'get',
   'picture', 'pictures', 'photo', 'photos', 'image', 'images', 'video',
-  'videos', 'clip', 'clips', 'media'
+  'videos', 'clip', 'clips', 'media',
+  'can', 'could', 'would', 'you', 'want', 'see', 'like', 'look', 'some',
+  'pic', 'pics', 'photograph', 'please', 'me'
 ]);
 
 function mediaQueryTerms(query) {
@@ -193,6 +195,8 @@ function normalizeMediaResult(result, index, type) {
     type,
     title,
     sourceUrl,
+    pageUrl: pageUrl || '',
+    hasSourcePage: Boolean(pageUrl),
     mediaUrl: directUrl,
     originalMediaUrl: directUrl,
     thumbnailUrl: thumbnailUrl || directUrl,
@@ -328,9 +332,11 @@ async function searchSearxngMedia({ query, type = 'images', endpoint = DEFAULT_S
   url.searchParams.set('categories', mediaType);
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let timedOut = false;
+  const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
   const abort = () => controller.abort();
-  signal?.addEventListener('abort', abort, { once: true });
+  if (signal?.aborted) controller.abort();
+  else signal?.addEventListener('abort', abort, { once: true });
 
   const startedAt = Date.now();
   try {
@@ -352,11 +358,20 @@ async function searchSearxngMedia({ query, type = 'images', endpoint = DEFAULT_S
       query: checkedQuery,
       endpoint: checkedEndpoint,
       category: mediaType,
+      unresponsiveEngines: (Array.isArray(payload.unresponsive_engines) ? payload.unresponsive_engines : [])
+        .map(item => Array.isArray(item) ? item[0] : item)
+        .filter(name => typeof name === 'string')
+        .map(name => name.trim())
+        .filter(Boolean)
+        .slice(0, 10),
       results: normalizeSearxngMediaResults(payload, mediaType, MAX_MEDIA_RESULTS, checkedQuery),
       durationMs: Date.now() - startedAt
     };
   } catch (error) {
     if (error?.name === 'AbortError') {
+      if (timedOut && !signal?.aborted) {
+        throw new Error('SearXNG did not respond within 8 seconds. Try again.');
+      }
       throw new DOMException('Media search was canceled.', 'AbortError');
     }
     throw error;

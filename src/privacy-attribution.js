@@ -98,7 +98,14 @@ function classifyPrivacyRequest(details = {}, context = {}) {
   return { action: 'debug-skip', reason: candidates.length === 0 ? 'unattributed' : 'unknown-origin' };
 }
 
+function receiptCategoryForAppRequest({ resourceType, tabKind, baseCategory }) {
+  return resourceType === 'image' && ['ask', 'search'].includes(tabKind) && baseCategory !== 'model-download'
+    ? 'image'
+    : baseCategory;
+}
+
 module.exports = {
+  receiptCategoryForAppRequest,
   IGNORED_SCHEMES,
   classifyPrivacyRequest,
   isHttpUrl,

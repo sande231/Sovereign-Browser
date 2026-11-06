@@ -2633,3 +2633,24 @@ button:disabled {
     justify-content: start;
   }
 }
+
+.media-source {
+  display: block;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.chat-inline-link {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}
+
+.chat-inline-link:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

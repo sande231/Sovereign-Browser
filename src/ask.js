@@ -50,6 +50,7 @@ let currentRequestId = null;
 let activeAssistantId = null;
 let pendingQuestion = '';
 let pendingWebEnabled = false;
+let pendingAnswerOptions = {};
 let pendingUserMessageId = '';
 let lastRequest = null;
 let lastModelMessages = [];
@@ -144,6 +145,7 @@ function receiptHostCount(receipt) {
 }
 
 function receiptTypeLabel(receipt) {
+  if (receipt?.label === 'Saved chat image previews') return receipt.label;
   if (receipt?.type === 'ask') return 'Ask AI';
   if (receipt?.type === 'background') return 'Background';
   if (receipt?.type === 'search') return 'Search';
@@ -300,6 +302,7 @@ function setRunning(nextRunning) {
   chatInput.disabled = running;
   webToggle.disabled = running;
   attachmentInput.disabled = running;
+  chatThread.querySelectorAll('.chat-inline-action').forEach(button => { button.disabled = running; });
   retryButton.disabled = running || !lastRequest;
   copyButton.disabled = running || !lastAssistantMessage();
   exportMarkdownButton.disabled = running || !lastAssistantMessage();
@@ -612,6 +615,7 @@ function renderMediaCards(container, message) {
       image.loading = 'lazy';
       image.decoding = 'async';
       image.referrerPolicy = 'no-referrer';
+      image.addEventListener('error', () => { preview.textContent = 'Preview unavailable'; }, { once: true });
       preview.append(image);
     } else {
       preview.textContent = item.type === 'videos' ? 'Video' : 'Preview unavailable';
@@ -623,7 +627,20 @@ function renderMediaCards(container, message) {
     title.textContent = `${index + 1}. ${item.title || 'Untitled media result'}`;
     const meta = document.createElement('span');
     meta.className = 'media-meta';
-    meta.textContent = `${mediaSourceLabel(item)} · ${item.creator ? `Creator: ${item.creator}` : 'Creator unknown'} · ${item.license || 'License unknown'}`;
+    meta.textContent = `${item.creator ? `Creator: ${item.creator}` : 'Creator unknown'} · ${item.license || 'License unknown'}`;
+    const sourceLine = document.createElement('div');
+    sourceLine.className = 'media-source';
+    if (item.pageUrl) {
+      sourceLine.append(document.createTextNode('Source: '));
+      const domain = document.createElement('button');
+      domain.type = 'button';
+      domain.className = 'chat-inline-link';
+      domain.textContent = mediaSourceLabel({ sourceUrl: item.pageUrl });
+      domain.addEventListener('click', () => window.sovereign.newTab(item.pageUrl));
+      sourceLine.append(domain);
+    } else {
+      sourceLine.textContent = `${item.type === 'videos' ? 'Media' : 'Image'} host: ${mediaSourceLabel({ mediaUrl: item.mediaUrl || item.thumbnailUrl })}`;
+    }
     const detail = document.createElement('span');
     detail.className = 'media-detail';
     detail.textContent = item.type === 'videos'
@@ -638,9 +655,9 @@ function renderMediaCards(container, message) {
     source.type = 'button';
     source.className = 'secondary-action compact-action';
     source.textContent = item.type === 'videos' ? 'Watch / Open source' : 'Open source page';
-    source.disabled = !item.sourceUrl && !item.mediaUrl;
+    source.hidden = !item.pageUrl;
     source.addEventListener('click', () => {
-      const target = item.sourceUrl || item.mediaUrl;
+      const target = item.pageUrl;
       if (target) {
         window.sovereign.newTab(target);
       }
@@ -699,7 +716,7 @@ function renderMediaCards(container, message) {
     });
     actions.append(download);
 
-    body.append(title, meta, detail, actions);
+    body.append(title, sourceLine, meta, detail, actions);
     card.append(preview, body);
     wrap.append(card);
   });
@@ -726,14 +743,19 @@ function renderMessage(message) {
   }
   renderSources(body, message.sources || []);
   renderMediaCards(body, message);
-  if (message.action?.type === 'search-media') {
+  if (['search-media', 'answer-text'].includes(message.action?.type)) {
     const action = document.createElement('button');
     action.type = 'button';
-    action.className = 'primary-action compact-action chat-inline-action';
-    action.textContent = message.action.mediaType === 'videos' ? 'Search web for videos' : 'Search web for images';
-    action.addEventListener('click', async () => {
-      action.disabled = true;
-      await runInlineMediaSearch(message);
+    const textAction = message.action.type === 'answer-text';
+    const emptyMedia = textAction && !message.mediaResults?.length;
+    const consent = !textAction && window.SovereignMediaIntent.isMediaRequest(message.action.question);
+    action.className = `${emptyMedia || consent ? 'primary-action compact-action' : 'chat-inline-link'} chat-inline-action`;
+    action.textContent = textAction
+      ? (emptyMedia ? 'Answer with text instead' : 'Search text instead')
+      : `${consent ? 'Search web for' : 'Show'} ${message.action.mediaType === 'videos' ? 'videos' : 'images'}`;
+    action.disabled = running;
+    action.addEventListener('click', () => {
+      runInlineMediaSearch(message).catch(error => setStatus(error.message, true));
     });
     body.append(action);
   }
@@ -834,25 +856,6 @@ function isExplicitAttachmentQuestion(question) {
 function isWholeDocumentQuestion(question) {
   return /\b(summarize|summary|overview|all the important|important data|key findings?|whole document|entire document|main points?|extract all|give me all)\b/i
     .test(String(question || ''));
-}
-
-function isMediaRequest(question) {
-  return /\b(show|find|give|get|search|picture|photo|image|map|video|clip|media|download)\b/i.test(String(question || '')) &&
-    /\b(picture|pictures|photo|photos|image|images|map|maps|video|videos|clip|clips|media)\b/i.test(String(question || ''));
-}
-
-function mediaTypeForQuestion(question) {
-  return /\b(video|videos|clip|clips|watch)\b/i.test(String(question || '')) ? 'videos' : 'images';
-}
-
-function mediaQueryForQuestion(question) {
-  return String(question || '')
-    .replace(/\b(show|find|get|give|me|please|search|for|download|open|the|a|an|picture|pictures|photo|photos|image|images|video|videos|clip|clips|media)\b/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/^(?:of|about)\s+/i, '')
-    .replace(/[?.!]+$/g, '')
-    .slice(0, 180) || String(question || '').slice(0, 180);
 }
 
 function downloadReferenceFromQuestion(question) {
@@ -1555,6 +1558,48 @@ function writeSavedChats(chats) {
   window.localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(clean));
 }
 
+const SAVED_MEDIA_FIELDS = [
+  'id', 'stableId', 'type', 'title', 'pageUrl', 'hasSourcePage', 'sourceUrl',
+  'sourceDomain', 'mediaUrl', 'originalMediaUrl', 'thumbnailUrl', 'creator',
+  'license', 'downloadable', 'downloadKind', 'downloadUrl', 'downloadError'
+];
+const SAVED_MEDIA_URL_FIELDS = new Set([
+  'pageUrl', 'sourceUrl', 'mediaUrl', 'originalMediaUrl', 'thumbnailUrl', 'downloadUrl'
+]);
+
+function savedMessage(message) {
+  const clean = {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    sources: (Array.isArray(message.sources) ? message.sources : []).filter(source => source && typeof source === 'object').map(source => ({
+      ...source,
+      ...(source.url ? { url: safeMarkdownUrl(source.url) } : {})
+    })),
+    note: message.note || ''
+  };
+  if (['answer-text', 'search-media'].includes(message.action?.type)) {
+    clean.action = {
+      type: message.action.type,
+      question: String(message.action.question || ''),
+      mediaType: message.action.mediaType === 'videos' ? 'videos' : 'images'
+    };
+  }
+  if (Array.isArray(message.mediaResults)) {
+    clean.mediaResults = message.mediaResults.slice(0, 5).filter(item => item && typeof item === 'object').map(item => {
+      const media = {};
+      for (const field of SAVED_MEDIA_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(item, field)) {
+          media[field] = SAVED_MEDIA_URL_FIELDS.has(field) ? safeMarkdownUrl(item[field]) : item[field];
+        }
+      }
+      media.hasSourcePage = Boolean(media.pageUrl);
+      return media;
+    });
+  }
+  return clean;
+}
+
 function persistCurrentChat() {
   if (!saveChatsOnDevice || messages.length === 0) {
     return;
@@ -1565,13 +1610,7 @@ function persistCurrentChat() {
     id: chatId,
     title: String(title).slice(0, 120),
     updatedAt: now,
-    messages: messages.map(message => ({
-      id: message.id,
-      role: message.role,
-      content: message.content,
-      sources: message.sources || [],
-      note: message.note || ''
-    })).slice(-40)
+    messages: messages.slice(-40).map(savedMessage)
   };
   const next = [entry, ...savedChats().filter(chat => chat.id !== chatId)].slice(0, 50);
   writeSavedChats(next);
@@ -1604,14 +1643,34 @@ function renderChatHistory() {
     title.type = 'button';
     title.className = 'chat-history-title';
     title.textContent = chat.title || 'Saved chat';
-    title.addEventListener('click', () => {
+    title.addEventListener('click', async () => {
+      if (running) return;
+      const restored = (Array.isArray(chat.messages) ? chat.messages : []).slice(-40)
+        .filter(message => message && typeof message === 'object').map(savedMessage);
+      let receiptError = false;
+      if (restored.some(message => message.mediaResults?.some(item => item.thumbnailUrl))) {
+        const requestId = messageId();
+        try {
+          await window.sovereign.privacy.startActivity({
+            requestId, type: 'ask', purpose: 'saved-chat-media', query: '', localOnly: false
+          });
+          selectPrivacyReceiptForActivity(requestId);
+        } catch {
+          receiptError = true;
+        }
+      }
       chatId = chat.id || messageId();
-      messages = Array.isArray(chat.messages) ? chat.messages : [];
+      messages = restored;
+      mediaTurns = restored.filter(message => message.action?.type === 'answer-text' && message.mediaResults?.length).slice(-8).map(message => ({
+        id: message.id,
+        type: message.mediaResults[0].type,
+        results: message.mediaResults
+      }));
       lastRequest = null;
       pendingQuestion = '';
       pendingUserMessageId = '';
       renderThread({ forceScroll: true });
-      setStatus('Saved chat loaded.');
+      setStatus(receiptError ? 'Could not start a privacy receipt for saved images.' : 'Saved chat loaded.', receiptError);
     });
     const remove = document.createElement('button');
     remove.type = 'button';
@@ -1727,7 +1786,7 @@ async function loadModel() {
       pendingWebEnabled = false;
       pendingUserMessageId = '';
       setRunning(true);
-      await answerQuestion(question, { webEnabled, appendUser: false });
+      await answerQuestion(question, { ...pendingAnswerOptions, webEnabled, appendUser: false });
     }
   } catch (error) {
     logAsk('model setup failed', describeError(error));
@@ -1747,6 +1806,7 @@ async function ensureModelReady(question, options = {}) {
   if (!modelCached) {
     pendingQuestion = question;
     pendingWebEnabled = Boolean(options.webEnabled);
+    pendingAnswerOptions = { forceText: Boolean(options.forceText), forceMedia: Boolean(options.forceMedia) };
     chatInput.value = question;
     modelSetupCard.hidden = false;
     const status = setupState?.status || 'idle';
@@ -1919,48 +1979,43 @@ async function validatedMediaResults(results, type) {
 }
 
 async function runInlineMediaSearch(message) {
-  if (running) {
-    return;
+  if (running || !message.action) return;
+  const { question, type } = message.action;
+  const forceMedia = type === 'search-media';
+  if (forceMedia) {
+    // This explicit click is consent to use web retrieval.
+    webToggle.checked = true;
+    webToggle.dispatchEvent(new Event('change', { bubbles: true }));
   }
-  const question = message?.action?.question || message?.content || '';
+  lastRequest = { question, webEnabled: webToggle.checked, forceMedia, forceText: !forceMedia };
   setRunning(true);
-  webToggle.disabled = false;
-  webToggle.checked = true;
-  webToggle.dispatchEvent(new Event('change', { bubbles: true }));
-  updateAssistant(message.id, {
-    content: `Searching the web for ${message?.action?.mediaType === 'videos' ? 'videos' : 'images'}...`,
-    action: null,
-    note: 'Media retrieval contacts the configured SearXNG endpoint and upstream websites. AI inference remains local.'
-  });
-  try {
-    await streamMediaAnswer(question, message.id);
-  } catch (error) {
-    const canceled = error?.name === 'AbortError' || /canceled|cancelled|aborted|interrupt/i.test(error?.message || '');
-    updateAssistant(message.id, {
-      content: canceled ? 'Stopped.' : `I could not retrieve media: ${error.message}`,
-      mediaResults: [],
-      note: ''
-    });
-    setStatus(canceled ? 'Stopped.' : error.message, !canceled);
-  } finally {
-    currentRequestId = null;
-    setRunning(false);
-  }
+  await answerQuestion(question, { ...lastRequest, appendUser: false });
 }
 
 async function streamMediaAnswer(question, assistantId) {
-  const type = mediaTypeForQuestion(question);
-  const query = mediaQueryForQuestion(question);
+  const type = window.SovereignMediaIntent.mediaTypeForQuestion(question);
+  const query = window.SovereignMediaIntent.mediaQueryForQuestion(question);
   currentRequestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   selectPrivacyReceiptForActivity(currentRequestId);
   setStatus(`Searching ${type === 'videos' ? 'videos' : 'images'}...`);
   const searchSettings = await window.sovereign.search.getSettings();
-  const response = await window.sovereign.search.media({
-    requestId: currentRequestId,
-    query,
-    type,
-    endpoint: searchSettings.settings.endpoint
-  });
+  let response;
+  try {
+    response = await window.sovereign.search.media({
+      requestId: currentRequestId,
+      query,
+      type,
+      endpoint: searchSettings.settings.endpoint
+    });
+  } catch (error) {
+    if (/fetch failed|ECONNREFUSED|ERR_CONNECTION_REFUSED/i.test(error.message || '')) {
+      throw new Error(`I couldn't reach your local SearXNG at ${searchSettings.settings.endpoint}. Start it (docker compose up in searxng/) or check the endpoint in Settings.`);
+    }
+    if (/SearXNG did not respond within 8 seconds/i.test(error.message || '')) {
+      throw new Error('SearXNG did not respond within 8 seconds. Try again.');
+    }
+    throw error;
+  }
   const results = await validatedMediaResults(response.results, type);
   mediaTurns.push({
     id: assistantId,
@@ -1972,10 +2027,12 @@ async function streamMediaAnswer(question, assistantId) {
 
   if (!results.length) {
     updateAssistant(assistantId, {
-      content: `I could not find usable ${type === 'videos' ? 'video' : 'image'} results for "${query}".`,
-      mediaResults: []
+      content: `I couldn't find usable ${type === 'videos' ? 'videos' : 'images'} for "${query}".` +
+        (response.unresponsiveEngines?.length ? ` These ${type === 'videos' ? 'video' : 'image'} engines did not respond: ${response.unresponsiveEngines.join(', ')}.` : ''),
+      mediaResults: [],
+      action: { type: 'answer-text', question, mediaType: type }
     });
-    setStatus('Media search returned no usable results.');
+    setStatus(messages.find(message => message.id === assistantId)?.content || 'Media search returned no usable results.');
     return;
   }
   const downloadableCount = results.filter(item => item.downloadable).length;
@@ -1990,6 +2047,7 @@ async function streamMediaAnswer(question, assistantId) {
         : 'No direct downloadable media file was verified from these results.'
     ].join('\n\n'),
     mediaResults: results,
+    action: { type: 'answer-text', question, mediaType: type },
     note: 'Media retrieval contacts the configured SearXNG endpoint and upstream media sources. AI generation remains local.'
   });
   setStatus('Media results ready.');
@@ -2000,7 +2058,7 @@ async function answerMediaDownloadReference(question, assistantId) {
   if (!index) {
     return false;
   }
-  const type = mediaTypeForQuestion(question);
+  const type = window.SovereignMediaIntent.mediaTypeForQuestion(question);
   const items = lastMediaItems(type);
   const item = items[index - 1];
   if (!item) {
@@ -2037,6 +2095,7 @@ async function answerMediaDownloadReference(question, assistantId) {
 
 async function answerQuestion(question, options = {}) {
   const useWeb = Boolean(options.webEnabled);
+  const useMedia = options.forceMedia || (!options.forceText && window.SovereignMediaIntent.isMediaRequest(question));
   let appendedUserId = '';
   const attachedFiles = attachmentSnapshot();
   if (!options.appendUser) {
@@ -2074,8 +2133,8 @@ async function answerQuestion(question, options = {}) {
     }
   }
 
-  const handlesWithoutModel = isMediaRequest(question) || Boolean(downloadReferenceFromQuestion(question));
-  if (!handlesWithoutModel && !(await ensureModelReady(question, { webEnabled: useWeb }))) {
+  const handlesWithoutModel = useMedia || Boolean(downloadReferenceFromQuestion(question));
+  if (!handlesWithoutModel && !(await ensureModelReady(question, { ...options, webEnabled: useWeb }))) {
     pendingUserMessageId = appendedUserId || pendingUserMessageId;
     renderThread();
     setRunning(false);
@@ -2096,26 +2155,31 @@ async function answerQuestion(question, options = {}) {
   try {
     if (await answerMediaDownloadReference(question, assistantId)) {
       // The assistant message was updated by the media download helper.
-    } else if (isMediaRequest(question)) {
+    } else if (useMedia) {
       if (!useWeb) {
         updateAssistant(assistantId, {
           content: 'I can retrieve real image results in this conversation when you allow web retrieval.',
-          action: { type: 'search-media', question, mediaType: mediaTypeForQuestion(question) },
+          action: { type: 'search-media', question, mediaType: window.SovereignMediaIntent.mediaTypeForQuestion(question) },
           note: 'Media retrieval contacts your configured SearXNG endpoint and upstream websites. Local-only mode cannot retrieve external pictures, maps, photos, or videos.'
         });
         setStatus('Enable web search to find media.', true);
       } else {
         await streamMediaAnswer(question, assistantId);
       }
-    } else if (useWeb) {
-      await streamWebAnswer(question, assistantId);
     } else {
-      await streamLocalAnswer(question, assistantId);
+      if (useWeb) await streamWebAnswer(question, assistantId);
+      else await streamLocalAnswer(question, assistantId);
+      if (!window.SovereignMediaIntent.isMediaRequest(question) && window.SovereignMediaIntent.mentionsMedia(question)) {
+        updateAssistant(assistantId, {
+          action: { type: 'search-media', question, mediaType: window.SovereignMediaIntent.mediaTypeForQuestion(question) }
+        });
+      }
     }
   } catch (error) {
     const canceled = error?.name === 'AbortError' || /canceled|cancelled|aborted|interrupt/i.test(error?.message || '');
     updateAssistant(assistantId, {
-      content: canceled ? 'Stopped.' : `I could not complete that answer: ${error.message}`,
+      content: canceled ? 'Stopped.' : useMedia ? error.message : `I could not complete that answer: ${error.message}`,
+      action: null,
       note: ''
     });
     setStatus(canceled ? 'Stopped.' : error.message, !canceled);
@@ -2184,7 +2248,7 @@ async function retryLast() {
   }
   setRunning(true);
   await answerQuestion(lastRequest.question, {
-    webEnabled: lastRequest.webEnabled,
+    ...lastRequest,
     appendUser: false
   });
 }
@@ -2364,7 +2428,7 @@ async function runPendingQuestionIfReady() {
   pendingWebEnabled = false;
   pendingUserMessageId = '';
   setRunning(true);
-  await answerQuestion(question, { webEnabled, appendUser: false });
+  await answerQuestion(question, { ...pendingAnswerOptions, webEnabled, appendUser: false });
 }
 
 function handleModelSetupState(state) {

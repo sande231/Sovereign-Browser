@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const {
   classifyPrivacyRequest,
+  receiptCategoryForAppRequest,
   originFromUrl
 } = require('../src/privacy-attribution');
 
@@ -124,4 +125,10 @@ const webWorkerRequest = classifyPrivacyRequest(
 assert.equal(webWorkerRequest.action, 'ignore');
 assert.equal(webWorkerRequest.reason, 'web-origin');
 
+for (const tabKind of ['ask', 'search']) {
+  assert.equal(receiptCategoryForAppRequest({ url: 'https://images.example/a.jpg', resourceType: 'image', tabKind, baseCategory: 'other' }), 'image');
+  assert.equal(receiptCategoryForAppRequest({ resourceType: 'image', tabKind, baseCategory: 'model-download' }), 'model-download');
+  assert.equal(receiptCategoryForAppRequest({ resourceType: 'script', tabKind, baseCategory: 'other' }), 'other');
+}
+assert.equal(receiptCategoryForAppRequest({ resourceType: 'image', tabKind: 'web', baseCategory: 'other' }), 'other');
 console.log('privacy-attribution tests passed');
