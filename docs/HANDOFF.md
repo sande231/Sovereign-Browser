@@ -518,3 +518,127 @@ Results:
 Not re-checked in this pass, because it was out of scope: items 3, 4 and 6 (the video card label and fixture, the timing of receipt attribution for lazy thumbnails, and the Electron tests D1–D5), and `npm run test:electron:media-chat`. Their status above is unchanged.
 
 **Verdict for this pass:** items 1, 13, 14, 16 and 19 are fixed, with no MUST FIX left among them.
+
+## Task: Receipt: SearXNG forwarding
+Status: ready for manual testing (not committed)
+
+### PLAN (Claude)
+This is item P1 #2 from the Feature test pass (known issue 1; that section is on branch `phase-0/feature-test`). Claude plans and implements this task at Sandeep's request.
+
+#### 1. Problem
+`buildSummary()` (`src/privacy-receipt.js`) writes only `Query sent to 127.0.0.1:8080 (SearXNG)`. SearXNG then sends the query to upstream engines, and the receipt never says so. Those upstream calls come from the SearXNG container, not Electron, so they can never be recorded as Electron requests.
+
+Image search is worse: its SearXNG request is recorded with category `image`, so SearXNG is listed under "Image/media hosts contacted", with no hint that it is a search engine front end.
+
+#### 2. What SearXNG reports (checked against the local instance)
+In its JSON response:
+- `results[].engine` (string) and `results[].engines` (array): the engines that returned results;
+- `infoboxes[].engine(s)` and `answers[].engine`;
+- `unresponsive_engines`: `[name, reason]` pairs.
+
+From a live check:
+- **Text search:** `startpage, google cse, duckduckgo`, plus infobox `wikipedia, wikidata`. Unresponsive: `brave` (`too many requests`), `mojeek` and `qwant` (`access denied`).
+- **Image search:** `duckduckgo images, google cse images, flickr, pexels, …`. Unresponsive: `bing images` (`HTTP connection error`), `brave.images` (**`Suspended: too many requests`**), `unsplash` (`parsing error`).
+
+Rules for the list of engines the query was **forwarded to**:
+- **Included:** every engine named in results, infoboxes or answers, plus unresponsive engines (the query was sent to them; they then failed).
+- **Excluded:** unresponsive engines whose reason starts with `Suspended`. SearXNG skipped those, so the query was **not** sent.
+- **Limits:** names are de-duplicated, trimmed and sorted A–Z, at most 25 shown (then `and N more`), and HTML is stripped.
+- **Known limit:** engines that were asked but returned nothing are not reported by SearXNG, so they can't be listed. The receipt row says so.
+
+#### 3. What the receipt says
+**Summary line** (replaces `Query sent to X (SearXNG)`):
+- When the names are known: `Query sent to 127.0.0.1:8080 (SearXNG), which forwarded it to: brave, duckduckgo, google cse, …`
+- When they aren't (an empty list, a failed or cancelled request, or a request still running): `Query sent to 127.0.0.1:8080 (SearXNG), which forwarded it to upstream search engines (names not reported)`
+- If one receipt has several SearXNG queries (for example a search after Retry), the names are combined for that host.
+
+**Receipt row** (the existing SearXNG entry, no new row): once the response arrives, its "what was sent" text gets ` – SearXNG forwarded it to: <names> (engines SearXNG reported; engines that returned nothing are not listed)`, or ` – SearXNG forwarded it to upstream search engines (names not reported)`.
+
+**Applies to:**
+- web search (Search tab), via `handleSearchQuery`;
+- Ask AI with web retrieval, which uses the same handler;
+- image and video search, via `search:media`.
+
+Image search's SearXNG request is now recorded with category **`search`** (text `Image search query: …`), so the summary shows it as a query to SearXNG rather than an image host. Thumbnails and preflights stay `image`.
+
+**No new network requests:** the names come only from the JSON SearXNG already returns.
+
+#### 4. Files
+| File | Change |
+|---|---|
+| `src/search-backend.js` | `reportedSearxngEngines(payload)`, which applies the rules in §2 and is exported. `searchSearxng` and `searchSearxngMedia` return `upstreamEngines` (array) with each result. |
+| `src/privacy-receipt.js` | `recordSearxngForwarding(receiptId, { url, engines })` stores the names per SearXNG host on the receipt and adds the note to the most recent matching SearXNG entry; `buildSummary` uses the new wording; the snapshot includes `forwarding`. |
+| `src/main.js` | After `searchSearxng` / `searchSearxngMedia` succeeds, call `recordSearxngForwarding`. Change the media SearXNG request's receipt category from `image` to `search`. No other changes. |
+| `tests/search-backend-engines.test.js` (**new**) | Engine-name extraction (§6). |
+| `tests/privacy-receipt.test.js` | Summary and row wording (§6). |
+| `package.json` | Add the new test to `check`. |
+
+#### 5. Error handling
+- **SearXNG unreachable, timed out or cancelled:** the request entry exists but has no names, so the summary says `forwarded it to upstream search engines (names not reported)`. That is correct, because we can't know whether SearXNG forwarded it.
+- **Unusual JSON** (missing arrays, non-string names, a huge list): ignored or capped; it never throws.
+- **Recording errors:** caught, so a search never fails because of the receipt.
+
+#### 6. Tests
+**`tests/search-backend-engines.test.js`:**
+- `engine` and `engines` fields;
+- infobox and answer engines;
+- unresponsive engines included, but `Suspended…` ones excluded;
+- duplicates and whitespace removed, sorted;
+- HTML stripped;
+- non-strings ignored;
+- the cap of 25;
+- empty or missing payload gives `[]`;
+- `searchSearxng` and `searchSearxngMedia` return `upstreamEngines`, using a fake fetch.
+
+**`tests/privacy-receipt.test.js`:**
+- the exact example `Query sent to 127.0.0.1:8080 (SearXNG), which forwarded it to: bing, duckduckgo, startpage`;
+- the names-unknown wording (before a response, and for an empty list);
+- the row note text;
+- two queries in one receipt combine their names;
+- image-search wording (category `search`);
+- an unknown receipt id does nothing;
+- forwarding names never trigger the cloud-AI check.
+
+#### 7. Manual test steps (for Sandeep)
+1. Start SearXNG and run `npm start`. In **Search**, search `history of tea`. Open the Privacy Receipt:
+   - the summary reads `Query sent to 127.0.0.1:8080 (SearXNG), which forwarded it to: …`, followed by engine names (for example `duckduckgo, google cse, startpage, …`);
+   - the SearXNG row ends with `– SearXNG forwarded it to: … (engines SearXNG reported; …)`.
+2. Cross-check: open `http://127.0.0.1:8080/search?q=history+of+tea&format=json` in a browser tab. Every engine in `results[].engines` and every unresponsive engine **not** marked `Suspended` should appear in the receipt.
+3. In **Ask AI**, turn on **Search the web** and ask `When was the Eiffel Tower built?`. The receipt shows the same forwarding wording, followed by the source-page count and "AI generated locally".
+4. In Ask AI, type `pictures of Mount Everest`. The receipt summary shows `Query sent to 127.0.0.1:8080 (SearXNG), which forwarded it to: …` with image engines (for example `duckduckgo images, flickr, pexels, …`), and `127.0.0.1:8080` is **not** listed under "Image/media hosts contacted". Thumbnail hosts still are.
+5. Stop SearXNG (`docker compose stop`) and search again. The summary says `… (SearXNG), which forwarded it to upstream search engines (names not reported)`.
+6. In a local-only Ask AI question (web off), the receipt still says `Nothing left this device: answer generated locally`, with no SearXNG wording.
+
+### CHANGES (written by Claude at Sandeep's request)
+Implemented on 2026-11-05 on branch `phase-0/receipt-searxng`, which was created from `main`. Nothing was committed. The Feature test pass and Website permissions sections are on their own branches and are not in this branch's HANDOFF.
+
+**Files changed**
+- `src/search-backend.js`: new exported `reportedSearxngEngines(payload)`. It takes names from `results[].engine/engines`, `infoboxes`, `answers` and `unresponsive_engines`; leaves out engines whose reason starts with `Suspended`; and de-duplicates, trims, strips HTML, sorts and caps the list (at most 50 kept). `searchSearxng` and `searchSearxngMedia` return `upstreamEngines`. No extra requests.
+- `src/privacy-receipt.js`:
+  - `recordSearxngForwarding(receiptId, { url, engines })` stores the names per SearXNG host (`receipt.forwarding`, also in snapshots and exports) and adds the forwarding note to the matching SearXNG row, once per row.
+  - The `buildSummary` wording is `Query sent to <host> (SearXNG), which forwarded it to: <names>`, or `…, which forwarded it to upstream search engines (names not reported)`. At most 25 names are shown, then `and N more`.
+  - Unknown receipt ids return `null`.
+- `src/main.js`:
+  - `recordSearxngForwardingSafely()` is called after a successful `searchSearxng`, which covers the Search tab, Ask AI web retrieval and dataset mode, and after `searchSearxngMedia`, which covers image and video search. It never fails the search.
+  - Image and video search's SearXNG request is now recorded as category `search` (was `image`).
+- `tests/search-backend-engines.test.js` (**new**), and the extra cases in `tests/privacy-receipt.test.js`: everything in PLAN §6.
+- `package.json`: `check` also runs `node tests/search-backend-engines.test.js`.
+
+**Decisions to note**
+- **Wording when names are unavailable.** The summary reads `…(SearXNG), which forwarded it to upstream search engines (names not reported)`. It contains the requested phrase, in the same sentence form as the example.
+- **The fallback also covers a SearXNG that never answered.** That applies when SearXNG is unreachable or times out, where the query probably was **not** forwarded. I kept it as specified because it errs towards disclosure. If you'd like, a failed request could say instead `SearXNG did not answer; the query may not have been forwarded`. That's a small change in `buildSummary`, using the existing error status.
+- **The list is "engines SearXNG reported".** Engines that were asked but returned nothing are not in SearXNG's JSON. The row says so explicitly; the summary uses the exact requested format.
+
+**Test results**
+- `npm run check`: **exit 0**, including `search-backend-engines tests passed` and `privacy-receipt tests passed`.
+- Mutation checks (broken copies in the scratchpad):
+  - listing `Suspended` engines makes `search-backend-engines` fail (exit 1);
+  - dropping the "names not reported" fallback makes `privacy-receipt` fail (exit 1).
+- **Live end-to-end** (real Electron, the real IPC handlers, local SearXNG, receipts read from the main process):
+  - **Text** `history of tea`: `Query sent to 127.0.0.1:8080 (SearXNG), which forwarded it to: duckduckgo, google cse, startpage, wikidata · AI generated locally`. Row: `search | 127.0.0.1:8080 | Search query: history of tea – SearXNG forwarded it to: … (engines SearXNG reported; engines that returned nothing are not listed)`.
+  - **Image** `Mount Everest`: the summary lists `artic, bing images, duckduckgo images, flickr, google cse images, lucide, pexels, pinterest, unsplash, wikicommons.images`, and the row category is `search`. The suspended `brave.images` is correctly left out.
+  - **Unreachable endpoint** (`127.0.0.1:8099`): `… (SearXNG), which forwarded it to upstream search engines (names not reported)`.
+- Regression: `test:electron:media-chat`, `ui-smoke` and `stage1-usability` exit 0. Their logs have no assertion failures or timeouts; I checked the logs because these tests' exit codes are unreliable.
+- `git diff --check`: clean. No secrets.
+
+**Manual tests:** PLAN §7, steps 1–6.

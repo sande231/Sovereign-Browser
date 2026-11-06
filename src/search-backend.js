@@ -250,6 +250,41 @@ function normalizeSearxngMediaResults(payload, type, limit = MAX_MEDIA_RESULTS, 
     }));
 }
 
+const MAX_REPORTED_ENGINES = 50;
+
+function engineNamesFrom(item) {
+  const names = [];
+  if (!item || typeof item !== 'object') return names;
+  if (typeof item.engine === 'string') names.push(item.engine);
+  if (Array.isArray(item.engines)) names.push(...item.engines);
+  return names;
+}
+
+// Upstream engines SearXNG says it sent the query to, from the JSON it already returned.
+// Engines that answered are named in results/infoboxes/answers; engines that failed are in
+// unresponsive_engines. "Suspended" engines were skipped by SearXNG, so they are left out.
+function reportedSearxngEngines(payload) {
+  const names = [];
+  for (const key of ['results', 'infoboxes', 'answers']) {
+    const items = Array.isArray(payload?.[key]) ? payload[key] : [];
+    for (const item of items) names.push(...engineNamesFrom(item));
+  }
+  const unresponsive = Array.isArray(payload?.unresponsive_engines) ? payload.unresponsive_engines : [];
+  for (const item of unresponsive) {
+    const [name, reason] = Array.isArray(item) ? item : [item, ''];
+    if (/^\s*suspended\b/i.test(String(reason || ''))) continue;
+    names.push(name);
+  }
+  const clean = new Set();
+  for (const name of names) {
+    if (typeof name !== 'string') continue;
+    const value = stripHtml(name).slice(0, 60);
+    if (value) clean.add(value);
+    if (clean.size >= MAX_REPORTED_ENGINES) break;
+  }
+  return [...clean].sort((left, right) => left.localeCompare(right));
+}
+
 function requestActivityEntry({ endpoint, query, status = 'started', resultCount = null, durationMs = null, error = '' }) {
   let parsed;
   try {
@@ -307,6 +342,7 @@ async function searchSearxng({ query, endpoint = DEFAULT_SEARXNG_ENDPOINT, fetch
       query: checkedQuery,
       endpoint: checkedEndpoint,
       results,
+      upstreamEngines: reportedSearxngEngines(payload),
       durationMs: Date.now() - startedAt
     };
   } catch (error) {
@@ -358,6 +394,7 @@ async function searchSearxngMedia({ query, type = 'images', endpoint = DEFAULT_S
       query: checkedQuery,
       endpoint: checkedEndpoint,
       category: mediaType,
+      upstreamEngines: reportedSearxngEngines(payload),
       unresponsiveEngines: (Array.isArray(payload.unresponsive_engines) ? payload.unresponsive_engines : [])
         .map(item => Array.isArray(item) ? item[0] : item)
         .filter(name => typeof name === 'string')
@@ -390,6 +427,7 @@ module.exports = {
   normalizeSearxngEndpoint,
   normalizeSearxngResults,
   normalizeSearxngMediaResults,
+  reportedSearxngEngines,
   requestActivityEntry,
   searchSearxng,
   searchSearxngMedia,

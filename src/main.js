@@ -4460,6 +4460,18 @@ ipcMain.handle('search:update-settings', (_event, patch) => {
   return searchSettingsSnapshot();
 });
 
+// Adds the upstream engines SearXNG reported to the receipt. Never fails the search.
+function recordSearxngForwardingSafely(receiptId, result) {
+  try {
+    privacyReceipts.recordSearxngForwarding(receiptId, {
+      url: result?.endpoint || '',
+      engines: result?.upstreamEngines || []
+    });
+  } catch (error) {
+    console.warn('Could not record SearXNG forwarding in the privacy receipt:', error?.message || error);
+  }
+}
+
 async function handleSearchQuery(event, request) {
   const tab = datasetWindow && event.sender === datasetWindow.webContents
     ? { kind: 'ask' }
@@ -4499,6 +4511,7 @@ async function handleSearchQuery(event, request) {
       signal: controller.signal,
       fetchImpl: makeReceiptFetch(receipt.id, 'search', `Search query: ${query}`)
     });
+    recordSearxngForwardingSafely(receipt.id, result);
     pushSearchActivity(requestActivityEntry({
       endpoint,
       query: result.query,
@@ -4572,8 +4585,9 @@ ipcMain.handle('search:media', async (event, request) => {
       type: category,
       endpoint: input.endpoint || searchSettings.endpoint,
       signal: controller.signal,
-      fetchImpl: makeReceiptFetch(receipt.id, 'image', `${category === 'videos' ? 'Video' : 'Image'} search query: ${query}`)
+      fetchImpl: makeReceiptFetch(receipt.id, 'search', `${category === 'videos' ? 'Video' : 'Image'} search query: ${query}`)
     });
+    recordSearxngForwardingSafely(receipt.id, result);
     pushSearchActivity(requestActivityEntry({
       endpoint: result.endpoint,
       query: result.query,

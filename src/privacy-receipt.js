@@ -82,6 +82,22 @@ function uniqueHosts(entries, category) {
     .filter(Boolean))];
 }
 
+const MAX_FORWARDING_NAMES_SHOWN = 25;
+const FORWARDING_UNKNOWN = 'upstream search engines (names not reported)';
+
+function forwardingNames(names) {
+  const list = Array.isArray(names) ? names : [];
+  if (list.length <= MAX_FORWARDING_NAMES_SHOWN) return list.join(', ');
+  return `${list.slice(0, MAX_FORWARDING_NAMES_SHOWN).join(', ')} and ${list.length - MAX_FORWARDING_NAMES_SHOWN} more`;
+}
+
+function forwardingPhrase(receipt, host) {
+  const names = receipt.forwarding?.[host] || [];
+  return names.length > 0
+    ? `which forwarded it to: ${forwardingNames(names)}`
+    : `which forwarded it to ${FORWARDING_UNKNOWN}`;
+}
+
 function buildSummary(receipt) {
   const entries = Array.isArray(receipt.entries) ? receipt.entries : [];
   if (entries.length === 0 && receipt.localOnly && receipt.type === 'ask') {
@@ -94,8 +110,8 @@ function buildSummary(receipt) {
   const modelHosts = uniqueHosts(entries, 'model-download');
   const otherHosts = uniqueHosts(entries, 'other');
 
-  if (searchHosts.length > 0) {
-    parts.push(`Query sent to ${searchHosts.join(', ')} (SearXNG)`);
+  for (const host of searchHosts) {
+    parts.push(`Query sent to ${host} (SearXNG), ${forwardingPhrase(receipt, host)}`);
   }
   if (sourceCount > 0) {
     parts.push(`${sourceCount} source page${sourceCount === 1 ? '' : 's'} fetched`);
@@ -129,6 +145,7 @@ function sanitizeReceipt(receipt) {
     updatedAt: receipt.updatedAt,
     summary: receipt.summary,
     cloudAi: receipt.cloudAi,
+    forwarding: Object.fromEntries(Object.entries(receipt.forwarding || {}).map(([host, names]) => [host, [...names]])),
     entries: receipt.entries.map(entry => ({ ...entry }))
   };
 }
@@ -171,6 +188,7 @@ function createReceipt({ id, type = 'activity', label = '', query = '' } = {}) {
     updatedAt: now,
     summary: '',
     cloudAi: cloudCheck([]),
+    forwarding: {},
     entries: []
   };
   receipt.summary = buildSummary(receipt);
@@ -229,6 +247,36 @@ function addBackgroundEntry(details = {}) {
   return addEntry(receipt.id, details);
 }
 
+// Record which upstream engines SearXNG reported forwarding a query to. Uses only the JSON
+// SearXNG already returned; never makes a request. Unknown receipt ids are ignored.
+function recordSearxngForwarding(receiptId, { url = '', engines = [] } = {}) {
+  const target = getReceipt(safeString(receiptId, 100));
+  if (!target) {
+    return null;
+  }
+  const host = hostFromUrl(cleanUrl(url));
+  const names = [...new Set((Array.isArray(engines) ? engines : [])
+    .filter(name => typeof name === 'string')
+    .map(name => safeString(name, 60))
+    .filter(Boolean))].sort((left, right) => left.localeCompare(right));
+  target.forwarding = target.forwarding || {};
+  target.forwarding[host] = [...new Set([...(target.forwarding[host] || []), ...names])]
+    .sort((left, right) => left.localeCompare(right));
+
+  const note = names.length > 0
+    ? ` – SearXNG forwarded it to: ${forwardingNames(names)} (engines SearXNG reported; engines that returned nothing are not listed)`
+    : ` – SearXNG forwarded it to ${FORWARDING_UNKNOWN}`;
+  const entry = [...target.entries].reverse()
+    .find(item => item.category === 'search' && item.host === host && !item.whatWasSent.includes(' – SearXNG forwarded it to'));
+  if (entry) {
+    entry.whatWasSent = `${entry.whatWasSent}${note}`.slice(0, 1200);
+  }
+  target.updatedAt = timestamp();
+  target.summary = buildSummary(target);
+  notify(target);
+  return sanitizeReceipt(target);
+}
+
 async function fetchWithReceipt(fetchImpl, receiptId, url, options = {}, details = {}) {
   addEntry(receiptId, {
     category: details.category,
@@ -272,6 +320,7 @@ module.exports = {
   CLOUD_AI_HOSTS,
   addEntry,
   addBackgroundEntry,
+  recordSearxngForwarding,
   createReceipt,
   exportPayload,
   fetchWithReceipt,
