@@ -122,4 +122,70 @@ assert.equal(permissionReceipt.cloudAi.ok, true, 'a permission request from a cl
 assert.equal(receiptById(askBefore.id).entries.length, 0, 'permission entries never land in other receipts');
 assert.equal(receipts.getReceipts().filter(receipt => receipt.type === 'permissions').length, 1, 'one permissions receipt per run');
 
+// SearXNG forwarding disclosure.
+receipts.resetForTests();
+const webSearch = receipts.createReceipt({ id: 'fwd-search', type: 'search', label: 'Search', query: 'history of tea' });
+receipts.addEntry(webSearch.id, {
+  category: 'search',
+  method: 'GET',
+  url: 'http://127.0.0.1:8080/search?q=history+of+tea&format=json',
+  whatWasSent: 'Search query: history of tea'
+});
+assert.equal(receiptById(webSearch.id).summary,
+  'Query sent to 127.0.0.1:8080 (SearXNG), which forwarded it to upstream search engines (names not reported)',
+  'before SearXNG answers, the receipt still says the query is forwarded');
+receipts.recordSearxngForwarding(webSearch.id, {
+  url: 'http://127.0.0.1:8080/search',
+  engines: ['startpage', 'duckduckgo', 'bing', 'duckduckgo']
+});
+assert.equal(receiptById(webSearch.id).summary,
+  'Query sent to 127.0.0.1:8080 (SearXNG), which forwarded it to: bing, duckduckgo, startpage');
+assert.equal(receiptById(webSearch.id).entries.length, 1, 'no new rows: the existing SearXNG row is annotated');
+assert.equal(receiptById(webSearch.id).entries[0].whatWasSent,
+  'Search query: history of tea – SearXNG forwarded it to: bing, duckduckgo, startpage (engines SearXNG reported; engines that returned nothing are not listed)');
+assert.deepEqual(receiptById(webSearch.id).forwarding, { '127.0.0.1:8080': ['bing', 'duckduckgo', 'startpage'] });
+
+// A second query in the same receipt (for example after Retry) combines the names.
+receipts.addEntry(webSearch.id, { category: 'search', method: 'GET', url: 'http://127.0.0.1:8080/search?q=tea', whatWasSent: 'Search query: tea' });
+receipts.recordSearxngForwarding(webSearch.id, { url: 'http://127.0.0.1:8080/search', engines: ['wikipedia'] });
+assert.equal(receiptById(webSearch.id).summary,
+  'Query sent to 127.0.0.1:8080 (SearXNG), which forwarded it to: bing, duckduckgo, startpage, wikipedia');
+assert.match(receiptById(webSearch.id).entries[1].whatWasSent, /^Search query: tea – SearXNG forwarded it to: wikipedia \(/);
+assert.equal(receiptById(webSearch.id).entries[0].whatWasSent.match(/forwarded it to/g).length, 1, 'each row is annotated once');
+
+// Empty engine list: plain fallback wording, in summary and row.
+const emptyList = receipts.createReceipt({ id: 'fwd-empty', type: 'ask', label: 'Ask AI web retrieval', query: 'q' });
+receipts.addEntry(emptyList.id, { category: 'search', method: 'GET', url: 'http://192.168.1.10:8080/search?q=q', whatWasSent: 'Search query: q' });
+receipts.recordSearxngForwarding(emptyList.id, { url: 'http://192.168.1.10:8080/search', engines: [] });
+assert.equal(receiptById(emptyList.id).summary,
+  'Query sent to 192.168.1.10:8080 (SearXNG), which forwarded it to upstream search engines (names not reported) · AI generated locally');
+assert.equal(receiptById(emptyList.id).entries[0].whatWasSent,
+  'Search query: q – SearXNG forwarded it to upstream search engines (names not reported)');
+
+// Image search: the SearXNG query is a search entry; image hosts stay separate.
+const imageSearch = receipts.createReceipt({ id: 'fwd-images', type: 'ask', label: 'Media image retrieval', query: 'Mount Everest' });
+receipts.addEntry(imageSearch.id, { category: 'search', method: 'GET', url: 'http://127.0.0.1:8080/search?q=Mount+Everest&categories=images', whatWasSent: 'Image search query: Mount Everest' });
+receipts.addEntry(imageSearch.id, { category: 'image', method: 'HEAD', url: 'https://upload.wikimedia.org/e.jpg', whatWasSent: 'media validation request' });
+receipts.recordSearxngForwarding(imageSearch.id, { url: 'http://127.0.0.1:8080/search', engines: ['flickr', 'duckduckgo images', 'pexels'] });
+assert.equal(receiptById(imageSearch.id).summary,
+  'Query sent to 127.0.0.1:8080 (SearXNG), which forwarded it to: duckduckgo images, flickr, pexels · Image/media hosts contacted: upload.wikimedia.org · AI generated locally');
+
+// Long lists are shortened in the text; engine names never count as cloud AI hosts.
+const longList = receipts.createReceipt({ id: 'fwd-long', type: 'search', label: 'Search', query: 'q' });
+receipts.addEntry(longList.id, { category: 'search', method: 'GET', url: 'http://127.0.0.1:8080/search?q=q', whatWasSent: 'Search query: q' });
+receipts.recordSearxngForwarding(longList.id, {
+  url: 'http://127.0.0.1:8080/search',
+  engines: [...Array.from({ length: 30 }, (_, index) => `engine-${String(index).padStart(2, '0')}`), 'api.openai.com']
+});
+assert.match(receiptById(longList.id).summary, /: api.openai.com, engine-00, .*, engine-23 and 6 more$/);
+assert.equal(receiptById(longList.id).cloudAi.ok, true);
+
+// Unknown receipt ids and junk input are ignored without throwing.
+assert.equal(receipts.recordSearxngForwarding('no-such-receipt', { url: 'http://127.0.0.1:8080/search', engines: ['bing'] }), null);
+assert.doesNotThrow(() => receipts.recordSearxngForwarding(webSearch.id, { url: 'not a url', engines: 'bing' }));
+
+// Local-only answers are unaffected.
+const localStill = receipts.createReceipt({ id: 'fwd-local', type: 'ask', label: 'Ask AI', query: 'q', localOnly: true });
+assert.equal(receiptById(localStill.id).summary, 'Nothing left this device: answer generated locally');
+
 console.log('privacy-receipt tests passed');
