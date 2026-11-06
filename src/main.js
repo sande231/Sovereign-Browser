@@ -35,6 +35,7 @@ let datasetWindow = null;
 const {
   IGNORED_SCHEMES: PRIVACY_RECEIPT_IGNORED_SCHEMES,
   classifyPrivacyRequest,
+  receiptCategoryForAppRequest,
   originFromUrl
 } = require('./privacy-attribution');
 
@@ -1072,7 +1073,8 @@ function contextForPrivacyRequest(details) {
 }
 
 function recordPrivacyWebRequest(details) {
-  const target = classifyPrivacyRequest(details, contextForPrivacyRequest(details));
+  const context = contextForPrivacyRequest(details);
+  const target = classifyPrivacyRequest(details, context);
   if (target.action === 'debug-skip') {
     unattributedPrivacyRequestSkips += 1;
     return;
@@ -1080,13 +1082,20 @@ function recordPrivacyWebRequest(details) {
   if (target.action === 'ignore') {
     return;
   }
-  const category = receiptCategoryForTrustedRequest(details.url);
+  const category = receiptCategoryForAppRequest({
+    url: details.url,
+    resourceType: details.resourceType,
+    tabKind: context.tabKind,
+    baseCategory: receiptCategoryForTrustedRequest(details.url)
+  });
   const entry = {
     category,
     method: details.method || 'GET',
     url: details.url,
     whatWasSent: target.unattributed
       ? 'other (unattributed) app-session request – no cookies, headers, or body logged'
+      : category === 'image'
+        ? 'image thumbnail preview – no query, prompt, or AI output sent'
       : category === 'model-download'
         ? 'model/runtime file request – no page content, prompt, or AI output sent'
         : 'trusted app/AI request – no cookies, auth headers, request body, prompt, or AI output logged'
@@ -2220,6 +2229,19 @@ function mediaFixtureResults(query, category) {
   if (!MEDIA_TEST_FIXTURES) {
     return null;
   }
+  if (query === 'fixture-unreachable') {
+    throw new Error('ECONNREFUSED');
+  }
+  if (query === 'fixture-empty') {
+    return {
+      query,
+      endpoint: searchSettings.endpoint,
+      category,
+      results: [],
+      unresponsiveEngines: [],
+      durationMs: 0
+    };
+  }
   const type = category === 'videos' ? 'videos' : 'images';
   const results = type === 'videos'
     ? [
@@ -2229,6 +2251,8 @@ function mediaFixtureResults(query, category) {
           type,
           title: 'Everest documentary watch page',
           sourceUrl: 'https://video.example/watch/everest',
+          pageUrl: 'https://video.example/watch/everest',
+          hasSourcePage: true,
           mediaUrl: '',
           originalMediaUrl: '',
           thumbnailUrl: 'https://video.example/thumb.jpg',
@@ -2257,6 +2281,8 @@ function mediaFixtureResults(query, category) {
           type,
           title: 'Political map of Nepal',
           sourceUrl: 'https://maps.example/nepal',
+          pageUrl: 'https://maps.example/nepal',
+          hasSourcePage: true,
           mediaUrl: 'https://cdn.example/nepal-map.jpg',
           originalMediaUrl: 'https://cdn.example/nepal-map.jpg',
           thumbnailUrl: 'https://cdn.example/nepal-map-thumb.jpg',
@@ -2270,6 +2296,8 @@ function mediaFixtureResults(query, category) {
           type,
           title: 'Mount Everest photo',
           sourceUrl: 'https://photos.example/everest',
+          pageUrl: 'https://photos.example/everest',
+          hasSourcePage: true,
           mediaUrl: 'https://cdn.example/everest-photo.png',
           originalMediaUrl: 'https://cdn.example/everest-photo.png',
           thumbnailUrl: 'https://cdn.example/everest-thumb.png',
@@ -2283,6 +2311,8 @@ function mediaFixtureResults(query, category) {
           type,
           title: 'Broken HTML response',
           sourceUrl: 'https://broken.example/page',
+          pageUrl: 'https://broken.example/page',
+          hasSourcePage: true,
           mediaUrl: 'https://broken.example/not-media.html',
           originalMediaUrl: 'https://broken.example/not-media.html',
           thumbnailUrl: '',
@@ -2296,6 +2326,8 @@ function mediaFixtureResults(query, category) {
           type,
           title: 'Thumbnail-only Nepal image',
           sourceUrl: 'https://thumb.example/nepal-gallery',
+          pageUrl: 'https://thumb.example/nepal-gallery',
+          hasSourcePage: true,
           mediaUrl: '',
           originalMediaUrl: '',
           thumbnailUrl: 'https://thumb.example/nepal-thumb.webp',
@@ -4337,7 +4369,7 @@ ipcMain.handle('privacy:start-activity', (event, request) => {
   const receipt = privacyReceipts.createReceipt({
     id: receiptId,
     type: receiptType,
-    label: receiptType === 'ask' ? 'Ask AI' : 'Search',
+    label: input.purpose === 'saved-chat-media' ? 'Saved chat image previews' : receiptType === 'ask' ? 'Ask AI' : 'Search',
     query: String(input.query || '').replace(/\s+/g, ' ').trim().slice(0, 300),
     localOnly: Boolean(input.localOnly)
   });
