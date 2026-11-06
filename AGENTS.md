@@ -7,3 +7,5 @@
 - Explain what you changed, which files, and how to test it manually.
 - Don't push to GitHub; Sandeep reviews and pushes.
 - Teamwork: Claude Code writes PLAN and REVIEW, Codex writes CHANGES, in docs/HANDOFF.md. Never edit the other's section.
+- Never run git commit, git push or change git config. Sandeep makes all commits.
+- Never add Co-Authored-By or any AI attribution lines to commit messages or pull requests.
