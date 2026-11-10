@@ -3,6 +3,14 @@ const { isMediaRequest, mediaTypeForQuestion, mediaQueryForQuestion, mentionsMed
 const { normalizeSearxngMediaResults, searchSearxngMedia } = require('../src/search-backend');
 
 const positives = [
+  ['shoe me pictures of red pandas', 'images', 'red pandas'],
+  ['sho me pics of red pandas', 'images', 'red pandas'],
+  ['plz show pictures of koalas', 'images', 'koalas'],
+  ['pls sho me some photos of the Alps', 'images', 'the Alps'],
+  ['shwo me images of Mars', 'images', 'Mars'],
+  ['can u shoe me pictures of red pandas?', 'images', 'red pandas'],
+  ['fnd me videos of whales', 'videos', 'whales'],
+  ['gimme photos of Tokyo', 'images', 'Tokyo'],
   [
     "pictures of Mount Everest",
     "images",
@@ -130,6 +138,12 @@ for (const [question, type, query] of positives) {
   assert.equal(mediaQueryForQuestion(question), query, question);
 }
 for (const question of [
+  'Shoe pictures of the 1920s',
+  'Snow pictures of Alaska',
+  'I hate pictures of spiders',
+  'Explain the shoe me pictures meme',
+  'What are pictures of the soul in Plato?',
+  'How do I show me pictures of cats in React?',
   "How does image compression work?",
   "What is image processing?",
   "Picture this scenario: a city with no cars.",

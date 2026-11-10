@@ -2258,7 +2258,7 @@ Reviewed 2026-11-09. Read the diff of `src/main.js`, `src/preload.js`, `src/ask.
 - **`npm run test:electron:chat-deletion` passed twice in a row** when I ran it outside the sandbox (`"ok": true`), including the new `pending-notice` and `pending-cleared` phases and the final marker scan. Before the fix, the same test failed 2 of 3 runs on the stale status.
 - No new network requests. `npm run check` passed.
 
-## Batch summary
+## Batch summary (P2 fixes batch, phase-0/chat-layout)
 Batch of P2 fixes on `phase-0/chat-layout`, run 2026-11-09. Claude planned and reviewed every task, Codex built every task, and Claude ran all the Electron tests outside the sandbox. Nothing was committed.
 
 | # | Task | Status | Built by | Files changed |
@@ -2282,3 +2282,445 @@ Batch of P2 fixes on `phase-0/chat-layout`, run 2026-11-09. Claude planned and r
 **Answered (Sandeep, 2026-11-09):** Q1 yes, now fix list #16 "Safe redirect handling" (P1, high priority). Q2 yes, now fix list #17 "Compact drop zone" (P3). No code was changed for either yet.
 
 **Manual tests to run in the app:** see the "Manual tests" list in the chat summary for this batch, which is the same as each task's PLAN §4. In short: (1) long chat, receipt open, image cards, and 3 window sizes; (2) address bar and New Tab inputs; (3) the Wikimedia redirect download and a fast image→text question; (4) a second `npm start`, minimise/restore, and dataset mode alongside the browser; (5) read the README table and the audit steps; (6) the pending notice with `SOVEREIGN_TEST_LEGACY_REMOVE=fail` on a disposable profile.
+
+## Task: Safe redirect handling
+Status: DONE (reviewed 2026-11-09; built by Codex). Branch: `phase-0/safe-redirects`. Fix-list #16 (P1, security).
+
+### PLAN (Claude)
+
+#### 1. What is wrong today (verified)
+- **Source reading** (`src/source-reader.js` `fetchPublicPage`, lines 622–689) loops over redirects with `fetchImpl(url, { redirect: 'manual' })`. In `main.js`, `fetchImpl` is `net.fetch` (`makeReceiptFetch`, line 924). In Electron 38, `net.fetch` with `redirect: 'manual'` **rejects** with "Redirect was cancelled" instead of returning the 3xx response. So every source page that redirects (`http`→`https`, `example.com`→`www.example.com`) fails and falls back to the snippet.
+- **Media validation** (`preflightMediaUrl`, `main.js` lines 2204–2216) checks the first URL, then calls `session.fetch(..., { redirect: 'follow' })`, then checks `response.url`. Electron does not update `response.url` after redirects, so **the redirect target is never checked**. A public image URL that 302s to `http://127.0.0.1/…` or `http://169.254.169.254/…` passes, and the request to the private address has already been sent (SSRF).
+- **Media download** (`media:download`, line 4743) calls `downloadURL(checked.url)` after the preflight. Chromium fetches the URL again and follows any redirects itself, and that second fetch is not checked at all.
+- **Address checks are incomplete** (`isPrivateIpv4` and `isPrivateIpv6`, lines 86–113):
+  - IPv6: `fe80:` is matched only literally, so `fe90::`–`febf::` slip through. Multicast `ff00::/8` and NAT64 `64:ff9b::/96` are not blocked. IPv4-mapped addresses are matched only as dotted text (`::ffff:127.`). `new URL('http://[::ffff:127.0.0.1]/').hostname` is `[::ffff:7f00:1]` (checked), so **the mapped form bypasses the check today**. Mapped `172.16/12`, `169.254/16` and `100.64/10` are also missed.
+  - IPv4 misses the reserved ranges `192.0.0.0/24` and `198.18.0.0/15`.
+- **DNS rebinding:** `validatePublicSourceUrl` resolves the host. Then `fetch` resolves it again on its own, and the second answer can be private.
+
+#### 2. Design: one small Node module that fetches with redirects and DNS pinned
+New file **`src/safe-fetch.js`**, plain Node with no Electron imports, so it is unit-testable under `npm run check`. Source reading and media validation both use it. It uses Node's `http`/`https` (Electron main has them), **not** `net.fetch`, because only Node lets us:
+- (a) see each 3xx response, and
+- (b) choose the IP address the socket connects to.
+
+Exports:
+1. **`isBlockedAddress(ip)`** returns true for any address that must never be contacted. Parse the address to bytes; do not use string prefixes.
+   - **IPv4:**
+     - `0.0.0.0/8` (unspecified)
+     - `10/8`
+     - `100.64/10` (CGNAT)
+     - `127/8`
+     - `169.254/16` (link-local, cloud metadata)
+     - `172.16/12`
+     - `192.0.0.0/24`
+     - `192.0.2.0/24`
+     - `192.168/16`
+     - `198.18/15`
+     - `198.51.100/24`
+     - `203.0.113/24`
+     - `224/4` (multicast)
+     - `240/4` (reserved, including `255.255.255.255`)
+   - **IPv6:**
+     - `::/128`
+     - `::1/128`
+     - `::/96` (IPv4-compatible; this also covers `::` and `::1`)
+     - `::ffff:0:0/96` (IPv4-mapped): check the embedded IPv4 against the IPv4 list, and accept both `::ffff:127.0.0.1` and `::ffff:7f00:1`
+     - `64:ff9b::/96` (NAT64): check the embedded IPv4
+     - `2002::/16` (6to4): check the embedded IPv4 from bits 16–47
+     - `fc00::/7` (unique local)
+     - `fe80::/10` (link-local)
+     - `fec0::/10` (old site-local)
+     - `ff00::/8` (multicast)
+     - `100::/64` (discard)
+     - `2001:db8::/32` (documentation)
+     - Any address with a zone id (`%…`) is blocked.
+   - Anything that doesn't parse as an IP returns `true` (fail closed).
+2. **`checkHopUrl(url, { previousUrl })`** throws a clear `Error` (`err.code = 'UNSAFE_URL'`) unless all of these hold:
+   - The protocol is `http:` or `https:`. Otherwise: "Only http and https links can be followed."
+   - The URL has no username or password.
+   - It is not a downgrade from `https` to `http`. Otherwise: "Blocked a redirect from HTTPS to HTTP."
+   - The hostname is not `localhost` or `*.localhost`.
+   - If the hostname is an IP literal (strip `[]`), it is not blocked by `isBlockedAddress`. Otherwise: "Blocked a link to a local or private-network address."
+   - Always parse with `new URL()`. That normalises `2130706433`, `0x7f.1` and similar forms to dotted IPv4 before the check.
+3. **`resolvePublicAddresses(hostname, resolve)`** does the following:
+   - For an IP literal, it returns that address. It has already been checked by `checkHopUrl`.
+   - Otherwise it calls `resolve(hostname, { all: true })`. The default is `dns.promises.lookup`.
+   - It throws if there are no records. It throws if **any** record is blocked, with the message "Blocked: <host> resolves to a local or private-network address."
+   - It returns the records `{ address, family }`. A record may carry an extra `connect` field; see §5.
+4. **`safeFetch(url, options)`** fetches a URL and follows redirects manually. It returns `{ response, finalUrl, chain }`.
+   - **Options:**
+     - `method` (default `GET`)
+     - `headers`
+     - `signal`
+     - `timeoutMs` (default 12000)
+     - `maxRedirects` (default **5**)
+     - `resolve`
+     - `ca` (optional extra trusted CA; tests only)
+     - `onHop`
+     - `transport` (for unit tests)
+   - **Per hop**, for `hop = 0 … maxRedirects`:
+     1. `checkHopUrl(current, { previousUrl })`.
+     2. `records = await resolvePublicAddresses(host, resolve)`.
+     3. `onHop({ url, host, index: hop, fromHost })`. `fromHost` is empty for hop 0. Call it **only after** the checks pass, so a blocked host is never listed as contacted.
+     4. Send the request with `http.request` or `https.request`:
+        - `lookup` is **pinned** to `records`. It answers from `records` and never resolves again. It honours `options.all`, and uses `record.connect || record.address`.
+        - `agent: false`, so no reused sockets.
+        - `servername` stays as the hostname, so TLS still verifies the real certificate.
+        - Pass `signal`, plus `ca` when given.
+        - Send no cookies. Send only the headers given, plus `accept-encoding: gzip, deflate, br`.
+     5. If the status is 301, 302, 303, 307 or 308 with a `Location` header: destroy the response body, set `previousUrl = current`, and set `current = new URL(location, current)`. After 303, or after 301/302 on a POST, switch to `GET` (we only send GET and HEAD, so in practice the method stays). Continue. A 3xx with no `Location` is an error.
+     6. Otherwise, build a WHATWG `Response`:
+        - `body` is `null` for `HEAD`, 204 and 304.
+        - Otherwise the body is `Readable.toWeb(stream)`, where the stream is first passed through `zlib` gunzip, inflate or brotli according to `content-encoding`.
+        - Copy `status`, `statusText` and the headers.
+        - Return `{ response, finalUrl: current, chain }`.
+   - If the loop ends while still redirecting, throw "Stopped after 5 redirects." This makes 6 hops the error, while 5 redirects (6 requests in total) are allowed.
+   - **Timeout:** one `AbortController` for the whole chain, combined with the caller's `signal`. An abort rejects with `name === 'AbortError'`.
+   - **`transport`** (unit tests only): `transport({ url, method, headers, lookup, ca, signal })`. It resolves to `{ status, headers, body /* Readable or null */ }`. The default transport is the `http`/`https` code above.
+
+#### 3. Wiring
+- **`src/source-reader.js`:**
+  - Remove its own `isPrivateIpv4`, `isPrivateIpv6` and `isBlockedHostname`.
+  - Re-implement `validatePublicSourceUrl(value, resolve)` as `checkHopUrl` + `resolvePublicAddresses`. Keep the exported name and keep the hash stripping.
+  - `fetchPublicPage(url, { fetchImpl, signal, timeoutMs, resolveHostname, onHop })`:
+    - Calls `safeFetch(url, { method: 'GET', headers: SOURCE_HEADERS, signal, timeoutMs, resolve: resolveHostname, onHop })`, or `fetchImpl` if one is given. The `fetchImpl` contract is now the same as `safeFetch`: it handles redirects and returns `{ response, finalUrl }`.
+    - Then applies the existing `response.ok`, content-type and `readLimitedResponseText` checks.
+    - Delete the old manual loop.
+  - Thread `onHop` (and `fetchImpl`) through `readOneSource` and `readSourcePages`.
+- **`src/main.js`, source reading** (`handleReadSources`, about line 4819):
+  - Pass `fetchImpl: (url, opts) => safeFetch(url, { ...opts, resolve: safeFetchResolve, ca: testCa, onHop: hop => privacyReceipts.addEntry(receipt.id, …) })`.
+  - Hop 0 `whatWasSent` is `'page fetch – no query or AI output sent'`. Later hops use `'page fetch – no query or AI output sent (redirect from <fromHost>)'`.
+  - Category `source-page`, method `GET`, `url: hop.url`.
+  - Stop using `makeReceiptFetch` here. Keep the function if other callers use it, and delete it if this was the last caller.
+- **`src/main.js`, media validation:**
+  - `preflightMediaUrl(url, mediaType, receiptDetails)` does `safeFetch(url, { method: 'HEAD', … })`. On 405 or 501, it falls back to `GET` with `Range: bytes=0-0`, and cancels the body straight away.
+  - Each hop gets a receipt entry: category `image`, with `receiptDetails.whatWasSent` for hop 0 and `… (redirect from <fromHost>)` after that.
+  - If there is no `receiptId`, use `privacyReceipts.addBackgroundEntry`, so a request is never unlisted.
+  - Keep the content-type and HTML checks. The returned `url` is the checked `finalUrl`.
+  - `preflightMediaUrlForRequest` and the `MEDIA_TEST_FIXTURES` branch stay as they are.
+- **Dead code to remove** (only what this change makes unused; check with grep):
+  - `preflightRedirects`, `preflightRedirectDetails`, and the preflight branch of `recordPrivacyRedirect`. Keep the thumbnail `follow` branch.
+  - The `receiptDetails` parameter of `fetchForDownloadPreflight` / `preflightDownloadUrl`.
+  - `preflightDownloadUrl` itself stays for `downloads:download-url` (the Downloads page "download this URL" box, user-typed, which may legitimately be a LAN address). That path is unchanged.
+- **`src/main.js`, guarding the download step:**
+  - `media:download` still uses Chromium's `downloadURL(checked.url)`, so the file goes through the normal Downloads UI.
+  - Chromium keeps one webRequest `details.id` across all redirect hops of a download, and `onBeforeRequest` fires **before** each hop is sent. Verified with a probe: ids `2 → 2 → 2` for `/a → /b → /c.png`.
+  - Steps:
+    1. Before calling `downloadURL`, register `guardedDownloadUrls.set(urlKey(checked.url, String(event.sender.id)), { receiptId, created: Date.now() })`. Expire entries after 60s.
+    2. In the existing `onBeforeRequest` handler (`setupAiNetworkMonitor`, line 4045; one listener per session, so extend this one), before `recordPrivacyWebRequest`:
+       - If the request matches a registered key, move it to `guardedDownloadRequests.set(details.id, { receiptId, hops: 0, lastUrl: details.url })`, delete the key, and continue as normal.
+       - If `details.id` is already guarded and `details.url !== lastUrl`, this is a redirect hop:
+         - `hops += 1`. If `hops > 5`, cancel.
+         - Run `checkHopUrl(details.url, { previousUrl: lastUrl })` and `resolvePublicAddresses(host, safeFetchResolve)`. This is async; call `callback` when it finishes.
+         - On failure: `callback({ cancel: true })`, and set the Ask page status through the existing download-failed path if it is easy. Otherwise the cancelled download simply shows as failed in Downloads.
+         - On success: add a receipt entry `'media file download request – no prompt or AI output sent (redirect from <prevHost>)'`, set `lastUrl`, `callback({})`, and **skip** `recordPrivacyWebRequest` for this hop so it isn't listed twice.
+       - Clean up `guardedDownloadRequests` in `onCompleted` and `onErrorOccurred` (add those listeners; they don't exist yet) and in `will-download`.
+       - All other requests keep exactly today's synchronous path.
+- **Test-only DNS override** (`main.js`, using `testHook`, so it is ignored when `app.isPackaged`):
+  - `SOVEREIGN_TEST_DNS` is JSON, for example `{"public.test":{"address":"93.184.216.34","connect":"127.0.0.1"},"private.test":{"address":"10.0.0.7"}}`.
+  - `safeFetchResolve(host)` returns `[{ address, family, connect }]` for mapped names, and calls `dns.promises.lookup(host, { all: true })` for everything else. Validation sees `address`; the pinned socket connects to `connect || address`.
+  - `SOVEREIGN_TEST_CA_FILE` is a PEM file passed as `ca`, test only.
+  - When packaged, `safeFetchResolve` is plain `dns.promises.lookup` and `ca` is `undefined`.
+
+#### 4. DNS rebinding (for CHANGES to state plainly)
+- **Source reading and media validation: closed.** The address that was checked is the address the socket connects to (pinned `lookup`), and there is no second DNS query.
+- **Media download step (Chromium `downloadURL`): narrowed, not closed.**
+  - Each hop is checked before it is sent.
+  - Chromium does its own DNS lookup, so a host that changes its answer between our check and Chromium's connect can still reach a private address.
+  - Closing it fully would mean downloading through `safeFetch` and writing the file ourselves, which bypasses Chromium's Downloads manager. That is not "simple and safe" for this task, so it goes under QUESTION FOR SANDEEP.
+- Node's `https` uses Node's bundled CA list, not the macOS keychain, and ignores system proxy settings. Source pages and media validation no longer go through a configured system proxy or a custom root CA. State this in CHANGES.
+
+#### 5. Tests (write first)
+1. **`tests/safe-fetch.test.js`** (pure unit, added to `npm run check`):
+   - **Address table.** Blocked:
+     - `127.0.0.1`, `10.1.2.3`, `172.16.0.1`, `172.31.255.255`, `192.168.1.1`
+     - `169.254.169.254`, `100.64.0.1`, `0.0.0.0`, `224.0.0.1`, `255.255.255.255`, `198.18.0.1`
+     - `::`, `::1`, `::ffff:127.0.0.1`, `::ffff:7f00:1`, `::ffff:a9fe:a9fe`
+     - `fd00::1`, `fe80::1`, `febf::1`, `ff02::1`
+     - `64:ff9b::a00:1`, `2002:c0a8:0101::1`, `fe80::1%en0`
+     - `not-an-ip`
+
+     Allowed: `93.184.216.34`, `8.8.8.8`, `172.32.0.1`, `2606:4700::1111`, `64:ff9b::808:808`.
+   - **`checkHopUrl`.** Blocked:
+     - `file:///etc/passwd`, `ftp://x`, `javascript:alert(1)`, `data:…`
+     - `http://user:pw@example.com`, `http://localhost/`, `http://a.localhost/`
+     - `http://2130706433/`, `http://0x7f.1/`, `http://[::ffff:127.0.0.1]/`
+     - `https→http`
+
+     Allowed: `http→https`.
+   - **`safeFetch` with a fake `transport` and fake `resolve`:**
+     - `public.test` 302 → `http://127.0.0.1/`, `10.0.0.1`, `192.168.0.1`, `169.254.169.254`, `[::1]`, `[::ffff:7f00:1]`, `private.test` (resolves to `10.0.0.7`). Each is blocked **and the transport is never called for the blocked hop**.
+     - A mixed DNS answer (one public and one private record) is blocked.
+     - A chain of 5 redirects succeeds. A chain of 6 throws "Stopped after 5 redirects."
+     - `https` → `http` is blocked.
+     - `http` → `https` and public → other public succeed, `chain` has every URL, and `onHop` was called once per contacted host with the right `fromHost`.
+     - `resolve` is called once per hop, and the `lookup` passed to the transport returns exactly the resolved address (pinning).
+     - A 3xx with no `Location` is an error.
+     - `HEAD` gives a `null` body.
+     - A gzip body is decoded.
+2. **`tests/safe-fetch-integration.test.js`** (plain Node, real sockets on `127.0.0.1`, added to `npm run check` if it runs in under about 3s):
+   - Real HTTP servers, with `resolve` mapping `public.test` and `public2.test` to `{ address: '93.184.216.34', connect: '127.0.0.1' }`.
+   - Real HTTPS server: generate a 1-day self-signed certificate for `public-tls.test` at test time with `openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=public-tls.test -addext subjectAltName=DNS:public-tls.test -days 1` in a temp dir, and pass it as `ca`. Never commit a key. If `openssl` is missing, print `SKIP https cases: openssl not found` and still run the HTTP cases.
+   - Cases:
+     - Redirect to `http://127.0.0.1:<port>/secret` is blocked, and the `/secret` handler counter stays 0.
+     - A 6-hop chain is stopped.
+     - `https://public-tls.test` → `http://public.test` is blocked.
+     - `http://public.test/page` → `https://public-tls.test/page` is **read**: call `readSourcePages` from `source-reader.js` with `fetchImpl` = `safeFetch` with that resolver and `ca`, and expect `evidenceMode === 'page'` and the page text in the passages.
+3. **`tests/electron/safe-redirects.test.js`** (new, run outside the sandbox):
+   - Setup:
+     - Local HTTP server on `127.0.0.1`.
+     - `SOVEREIGN_TEST_DNS` maps `public.test` and `public2.test` to report `93.184.216.34` and connect to `127.0.0.1`.
+     - `app.commandLine.appendSwitch('host-resolver-rules', 'MAP public.test 127.0.0.1, MAP public2.test 127.0.0.1')` for Chromium's download step.
+     - Temporary profile, `SOVEREIGN_TEST_DOWNLOAD_DIR`.
+   - From the Ask page (`sovereign://ask/`, exact match):
+     - (a) `window.sovereign.media.preflight({ url: 'http://public.test:P/redirect-to-loopback' })` rejects with the private-network message, and the server's `/secret` counter is 0.
+     - (b) Preflight of `http://public.test:P/img-chain` (302 → `http://public2.test:P/img.png`, `image/png`) succeeds. The receipt (`privacy.getReceipts`) has entries for both `public.test` and `public2.test`, the second with `redirect from public.test`.
+     - (c) `readSources({ question, results: [{ url: 'http://public.test:P/article', title, snippet }] })`, where `/article` 301s to `http://public2.test:P/article-final` (HTML with the question terms). It returns that source with `evidenceMode: 'page'`, and the receipt lists both hosts as `source-page`.
+     - (d) The download guard: `/img-flip` answers `HEAD` and `GET`-range with `200 image/png`, but answers a full `GET` without `Range` with 302 → `http://127.0.0.1:P/secret`. `media.download({ url: 'http://public.test:P/img-flip' })`, then wait 2s. The `/secret` counter is 0 and no file is saved in the test download dir.
+   - Exit with `app.exit(0)` or `app.exit(1)`. Do not use `process.exitCode` with `app.quit()`, because that exits 0.
+   - Add the `test:electron:safe-redirects` script and its `check:tests` syntax-check entry.
+   - Codex: Electron crashes in your sandbox. Only `node --check` this file. Claude runs it.
+
+#### 6. Do not change
+- Thumbnail `<img>` loading in the Ask page. It is out of scope, and thumbnails can legitimately come from a local SearXNG image proxy.
+- `downloads:download-url`.
+- Search requests to SearXNG.
+- Model downloads.
+- Receipt UI.
+- Do not add cloud calls. The only network requests are the same page, image and download requests as before, now each listed per hop.
+
+#### 7. Manual tests (Sandeep)
+1. `npm run check` passes. Then run `npm run test:electron:safe-redirects`, which must print `"ok": true`.
+2. `npm start`, then open Ask AI with **Search the web** on and ask a question whose top results use `http://` links or redirect to `www.` (for example `history of the http 301 status code`). Open the Privacy Receipt: `source-page` rows appear for both the first host and the redirected host (`… (redirect from <host>)`), and the answer cites the page, not just the snippet.
+3. Ask `show me pictures of the Eiffel Tower`, then click **Download** on a Wikimedia `Special:FilePath` result. It downloads. The receipt lists `commons.wikimedia.org` and `upload.wikimedia.org (redirect from commons.wikimedia.org)`.
+4. Optional, on your LAN: run `python3 -m http.server 8000` on another machine. You can't easily make a public URL redirect there by hand, so rely on step 1's tests for blocked cases.
+5. Search for a normal topic on the Search page and check that results and the Downloads page work as before.
+
+### CHANGES (Codex)
+
+Implemented 2026-11-09, tests first. No commit or push.
+
+- **`src/safe-fetch.js` (new):** Shared Node HTTP/HTTPS fetcher. Parses IPv4/IPv6 into numeric components, blocks the PLAN's address ranges (including embedded IPv4), rejects credentials, local hosts and HTTPS downgrades, validates every DNS answer, and pins socket lookup to those checked records. Follows at most five redirects, destroys redirect bodies, reports each checked hop, decodes gzip/deflate/Brotli, and keeps a single abort/timeout controller through redirects and body reading. No cookies are sent.
+- **`src/source-reader.js`:** Replaced the private-address helpers and manual fetch loop with the shared checker/fetcher. Preserved the exported validator and hash stripping, source content checks, size limits and extraction. Threaded `onHop` and the new `{ response, finalUrl }` fetch contract through source reading.
+- **`src/main.js`:** Source and media validation now use the shared fetcher and record every contacted hop with its purpose and redirect origin. Media HEAD validation retains the GET-range fallback and returns the validated final URL; checks without an active receipt go into the background receipt. Added the Chromium download redirect guard with five-redirect enforcement, checks before redirected requests, receipt entries and cleanup. Removed the old preflight redirect tracking; retained thumbnail attribution and `makeReceiptFetch` for search. DNS/socket overrides and the optional test CA use `testHook` and are ignored in packaged builds. The Downloads page's user-entered URL path remains unchanged.
+- **Tests / `package.json`:** Added `tests/safe-fetch.test.js`, `tests/safe-fetch-integration.test.js`, and `tests/electron/safe-redirects.test.js`. Unit and real-socket tests are included in `check`; the Electron test has its own `test:electron:safe-redirects` script and a `check:tests` syntax entry. TLS integration generates its certificate/key in a temporary directory and removes them; no key is committed.
+
+**Verification:**
+- Wrote the three test files before implementation. The first `npm run check` reached the expected missing `src/safe-fetch` module failure.
+- After implementation, all existing checks before the integration suite and all new safe-fetch unit tests pass. Unit tests also exercise source extraction through an HTTP-to-HTTPS redirect, all three compression formats, body timeout and caller cancellation.
+- `npm run check` was run after each change batch. It currently exits nonzero at the real-socket integration suite because this sandbox denies `server.listen` on `127.0.0.1` (`EPERM`). This is not skipped or reported as a passing test. Real HTTP/HTTPS socket behavior and the integration suite's runtime remain unverified here.
+- `npm run check:tests`, the integration test's syntax check, and `git diff --check` pass. Per PLAN, the Electron test was syntax-checked only; Claude must run it outside the sandbox.
+
+**Manual verification (Sandeep / Claude):** Run `npm run check` outside the sandbox, then `npm run test:electron:safe-redirects` and expect `"ok": true`. In `npm start`, read sources whose URLs redirect and check both hosts' `source-page` receipt rows. Download a Wikimedia `Special:FilePath` image and check the redirect-origin labels. Verify normal Search and the Downloads page still work. The Electron fixture checks blocked private redirects without contacting `/secret`, successful public image/source redirects and their receipts, and a URL that changes from safe HEAD validation to a private redirect during Chromium's full download.
+
+**Limits required by PLAN:**
+- Source reading and media validation close the DNS-rebinding gap: the validated address is the socket address, with no second DNS query.
+- Chromium media downloads narrow, but do not close, DNS rebinding. Redirect destinations are checked before the hop, but Chromium performs its own DNS lookup and can receive a different answer before connecting.
+- Node HTTPS uses Node's CA trust instead of the macOS keychain, and these source/media validation requests no longer use configured system proxies or custom system root CAs.
+
+**QUESTION FOR SANDEEP:** A follow-up could close Chromium download DNS rebinding by downloading through `safeFetch` and writing files ourselves, but that bypasses Chromium's Downloads manager. That change is deliberately outside this PLAN; decide separately whether to pursue it.
+
+### REVIEW (Claude)
+Reviewed 2026-11-09, round 1. **Verdict: DONE.** Codex built it. I checked the diff and the 4 new files against the PLAN, then ran everything outside the sandbox.
+
+**MUST FIX:** none.
+
+**SHOULD FIX (not blocking):**
+- `safeFetch` builds `new Response(...)`, which throws a `RangeError` for statuses outside 200–599 (for example a stray 1xx or 999). The source or media check then fails with an unclear message instead of "HTTP <n>". This is rare and fails closed.
+- `SOVEREIGN_TEST_DNS` is passed to `JSON.parse` at startup. Malformed JSON crashes the unpackaged app. It is test-only and ignored when packaged, so this is acceptable.
+- `preflightMediaUrl` keeps an unused `_targetSession` parameter. Validation no longer uses the tab's Chromium session, which is intended: no cookies.
+- The receipt labels an `http`→`https` hop on the same host as "redirect from wikipedia.org", by host only. That is correct, but it doesn't show the scheme change.
+
+**OK:**
+- **Addresses:** `isBlockedAddress` parses to bytes and covers every range in the PLAN, including the hex IPv4-mapped form (`::ffff:7f00:1`) that bypassed the old check, `fe80::/10` in full, NAT64, 6to4, multicast, zone ids, and fail-closed for non-IPs.
+- **`checkHopUrl`:** blocks non-http(s) schemes, credentials, `localhost`, private literals, and `https`→`http`.
+- **DNS pinning:** the socket's `lookup` answers only from the records that were checked (`connect || address`), with `agent: false` and TLS `servername` set to the real host. This closes DNS rebinding for source reading and media validation.
+- **Hop limit:** 5 redirects are allowed and the 6th stops with "Stopped after 5 redirects.". `onHop` fires only after a hop passes its checks, so blocked hosts are never listed as contacted.
+- **Source reading:** the old `net.fetch` `redirect: 'manual'` loop (which always failed in Electron 38) is gone. Abort still maps to `AbortError`, which `readOneSource` checks by name.
+- **Media validation:** `HEAD`, with the `GET` range fallback, through `safeFetch`. Every hop is in the receipt, with the background receipt used when no activity is open. The returned URL is the checked final URL.
+- **Download guard:** Chromium's redirect hops for `media:download` are checked in `onBeforeRequest` before they are sent, using the same request id (verified by probe). It enforces the 5-redirect limit, cleans up on `will-download`, `onCompleted` and `onErrorOccurred`, and leaves every other request on the unchanged synchronous path.
+- **Dead code:** the old preflight redirect tracking was removed. Thumbnail attribution and `makeReceiptFetch` (still used by search) are kept. `downloads:download-url` is unchanged, as planned.
+- **Test hooks:** `SOVEREIGN_TEST_DNS` and `SOVEREIGN_TEST_CA_FILE` go through `testHook` and are ignored when `app.isPackaged`.
+- **Tests run outside the sandbox:**
+  - `npm run check`: exit 0. It includes `safe-fetch.test.js`, with blocked hops for `127.0.0.1`, `10.x`, `192.168.x`, `169.254.169.254`, `[::1]`, `[::ffff:7f00:1]` and a name resolving to `10.0.0.7`; in each case the blocked hop is never contacted. It also covers 5 vs 6 redirects, `https`→`http`, pinning and decoding. It also includes `safe-fetch-integration.test.js`, which uses real sockets and a runtime-generated TLS certificate, reads an `http`→`https` page, and checks the `/secret` counter stays 0.
+  - `npm run test:electron:safe-redirects`: `{"ok":true}`, exit 0. It covers a preflight blocked before `/secret`; a 2-host image chain with both hosts in the receipt ("redirect from public.test"); a 301 source page read as `page` with both hosts listed as `source-page`; and a download whose full `GET` flips to a loopback redirect, cancelled before `/secret`, with no file saved.
+  - Regression: `media-chat`, `downloads` and `browser-features` pass.
+  - Live sanity check from the dev machine: `http://wikipedia.org/` → `https://www.wikipedia.org/` read with 3 hops listed. Wikimedia `Special:FilePath` HEAD → `upload.wikimedia.org`, `image/jpeg`. `http://127.0.0.1/` is blocked.
+- No cloud AI. No new kinds of request: the same page, image and download requests as before, now each hop listed.
+
+**DNS rebinding (summary):** closed for source reading and media validation. Narrowed but not closed for the Chromium download step, as Codex's CHANGES says.
+
+**QUESTION FOR SANDEEP:** Should media downloads move to `safeFetch` (we write the file ourselves) to close the last DNS-rebinding gap? It would bypass Chromium's Downloads manager, so this needs a separate decision. **Safest choice for now:** keep Chromium downloads with the per-hop guard.
+
+**Answered (Sandeep, 2026-11-09):** keep Chromium downloads with the hop-by-hop check. Proxy and certificate behaviour is accepted for now. Both are recorded as known limits below. No code change.
+
+#### Known limits (accepted by Sandeep, 2026-11-09)
+1. **DNS rebinding on the media download step.**
+   - `media:download` still hands the file to Chromium (`downloadURL`), so it goes through the normal Downloads manager.
+   - Each redirect hop is checked in `onBeforeRequest` before it is sent: public address, no `https`→`http`, at most 5 redirects.
+   - Chromium then does its **own** DNS lookup. A hostname that answers with a public address for our check and a private address for Chromium's connection can still reach the local network.
+   - Source reading and image checks are **not** affected: they connect to the exact address that was checked.
+   - Closing this would mean downloading through `safeFetch` and writing the file ourselves. Not planned for now.
+2. **Source reading and image checks ignore system proxy settings.**
+   - `safeFetch` uses Node's `http`/`https`, not Chromium's network stack, so it does not use the macOS or system proxy configuration.
+   - **A future Tor/VPN or proxy routing feature must route these requests as well**, through `safeFetch`'s transport and the pinned DNS lookup. Otherwise source pages and image checks would bypass the tunnel and reveal the user's real IP address.
+3. **Networks with TLS inspection will fail source reading.**
+   - Node's `https` trusts only Node's built-in CA list, not certificates installed in the macOS keychain.
+   - On corporate or school networks that inspect TLS with a keychain-installed root certificate, source pages (and HTTPS image checks) fail with a certificate error. Ask AI then falls back to the search snippets.
+   - Normal browsing in tabs is not affected, because it uses Chromium.
+
+
+## Task: No fake images from the local model
+Status: DONE (reviewed 2026-11-09; built by Codex). Branch: `phase-0/safe-redirects`.
+
+### PLAN (Claude)
+
+#### 1. What happened (verified in code)
+- With **Search the web** off, `answerQuestion()` (`src/ask.js` about line 2198) sends the question down the media path only if `SovereignMediaIntent.isMediaRequest(question)` is true.
+- **`shoe me pictures of red pandas` returns false.** There are two ways to match today:
+  - The request regex only knows real verbs (`show me`, `show`, `find`, and so on). `shoe` matches none of them.
+  - The `leading` regex needs the question to *start* with `pictures of`.
+- So the question went to `streamLocalAnswer()`. Its `CHAT_SYSTEM_PROMPT` (`src/ask.js` lines 34–43) says nothing about images, and the 1B model invented "Image 1: Red Panda in a Tree…".
+- The **web-on** text path (`SEARCH_SYSTEM_PROMPT`, `src/search-utils.js` line 8) has the same gap for questions that aren't detected as media.
+
+#### 2. Model instructions
+- Move `CHAT_SYSTEM_PROMPT` out of `ask.js` into a new tiny UMD file, **`src/chat-prompt.js`**, built the same way as `media-intent.js`: it attaches `SovereignChatPrompt = { CHAT_SYSTEM_PROMPT, IMAGE_RULE }` to `window`, and uses `module.exports` under Node. This lets the prompt be unit-tested.
+  - Load it in `src/ask.html` before `ask.js`.
+  - In `ask.js`, replace the constant with `const CHAT_SYSTEM_PROMPT = window.SovereignChatPrompt.CHAT_SYSTEM_PROMPT;`.
+  - Keep every existing sentence word for word.
+- `IMAGE_RULE` is one string, appended to the end of `CHAT_SYSTEM_PROMPT`:
+  > `You cannot see, show, create, generate, or retrieve images, photos, videos, or maps. If the user asks for pictures or other media, reply in one sentence that you cannot show images here and that they can turn on Search the web to find real images. Never describe imaginary images, never invent image titles, captions, file names, or links, and never use placeholders such as "Image 1".`
+- Append the same `IMAGE_RULE` text to `SEARCH_SYSTEM_PROMPT` in `src/search-utils.js`. Write it inline there, because search-utils is also loaded in other pages and must not depend on `chat-prompt.js`.
+  - Change the second sentence's ending to "…to find real images with **Find images**", **only if** that label exists. It doesn't: the real buttons are **Search web for images** (local-only consent) and **Show images**. So **do not** use the words "Find images". See the QUESTION below.
+- Add `node --check src/chat-prompt.js && node tests/chat-prompt.test.js` to `npm run check`.
+
+#### 3. Detection (`src/media-intent.js`)
+Add one extra positive rule, **after** the existing negative early return (the `what is`, `how do`, `explain`, `describe`, `tell me about`, `imagine` and `picture this` regex). So everything that is excluded today stays excluded.
+
+- **Short request prefix:** 1–5 words at the start, after the politeness phrases are stripped. Every word must be in this vocabulary:
+  - **Real request verbs:** `show`, `find`, `get`, `give`, `see`, `display`, `download`, `pull`, `look`, `search`, `send`, `share`, `fetch`, `bring`
+  - **Fillers:** `me`, `us`, `u`, `you`, `can`, `could`, `would`, `pls`, `plz`, `please`, `i`, `want`, `wanna`, `to`, `need`, `lemme`, `gimme`, `up`, `for`, `some`, `a`, `few`, `any`, `the`, `hey`, `just`, `quick`
+  - **Typo verbs:** words within edit distance 1 of `show`, `find`, `give` or `send`. Count insert, delete, substitute and swap-adjacent, so `shoe`, `sho`, `shw`, `shwo`, `snow`, `fnd`, `fidn` and `giv` all count. A typo verb counts **only when the next word is `me`, `us` or `u`**, so "Shoe pictures of the 1920s" and "Snow pictures of Alaska" are *not* requests. Write a 15-line helper for the edit distance. Do not add a dependency.
+  - The prefix must contain at least one real or typo verb.
+- **Then:** an optional quantity, then a media unit (`pictures`, `pics`, `photos`, `photographs`, `images`, `videos`, `clips`, `wallpapers`, singular or plural; same list as `mediaUnit`), then `of`, `showing` or `from`, then at least one letter.
+- **`mediaQueryForQuestion`:** when this new prefix matched (and the existing steps did not already strip a request), strip the prefix, then strip the `mediaUnit` as today. So `shoe me pictures of red pandas` → `red pandas`.
+- `mediaTypeForQuestion` is unchanged.
+
+#### 4. Tests (write first)
+1. **`tests/media-intent.test.js`:** add positives as `[question, type, query]`:
+   - `shoe me pictures of red pandas` → `images`, `red pandas`
+   - `sho me pics of red pandas` → `images`, `red pandas`
+   - `plz show pictures of koalas` → `images`, `koalas`
+   - `pls sho me some photos of the Alps` → `images`, `the Alps`
+   - `shwo me images of Mars` → `images`, `Mars`
+   - `can u shoe me pictures of red pandas?` → `images`, `red pandas`
+   - `fnd me videos of whales` → `videos`, `whales`
+   - `gimme photos of Tokyo` → `images`, `Tokyo`
+
+   Add negatives (`isMediaRequest` is false):
+   - `Shoe pictures of the 1920s`
+   - `Snow pictures of Alaska`
+   - `I hate pictures of spiders`
+   - `Explain the shoe me pictures meme`
+   - `What are pictures of the soul in Plato?`
+   - `How do I show me pictures of cats in React?`
+
+   **All existing positive, negative and cleanup cases must still pass unchanged.**
+2. **New `tests/chat-prompt.test.js`:**
+   - `CHAT_SYSTEM_PROMPT` starts with the exact old first sentence and contains every old sentence. Copy them into the test.
+   - It ends with `IMAGE_RULE`.
+   - `IMAGE_RULE` matches `/cannot see, show, create, generate, or retrieve images/`, `/one sentence/`, `/Search the web/`, `/Never describe imaginary images/` and `/invent image titles/`.
+   - `require('../src/search-utils').SEARCH_SYSTEM_PROMPT` (check how it is exported; `tests/dataset-collection.test.js` already uses it) contains the same rule.
+
+#### 5. Do not change
+- The media answer path or its buttons.
+- `streamLocalAnswer`.
+- Any other prompt (the sidebar summary).
+- No network changes.
+
+#### 6. QUESTION FOR SANDEEP
+The request asked the model to suggest **"Find images"**, but no control has that name. The existing buttons are **Search web for images** and **Show images**, and Electron tests depend on those labels. **Safest choice taken:** the model says "turn on Search the web to find real images", and no buttons are renamed. Should the buttons be renamed to "Find images" in a later task?
+
+#### 7. Manual tests (Sandeep)
+1. `npm run check` passes.
+2. `npm start` → Ask AI with **Search the web off** and the model loaded:
+   - `shoe me pictures of red pandas` → **no model answer**. You get the "I can retrieve real image results… when you allow web retrieval" message with the **Search web for images** button. Click it: web search turns on and real red panda images appear.
+   - Also try `sho me pics of koalas` and `plz show photos of the Alps`. Both behave the same.
+3. Still with web off, ask something the detector should *not* catch but that invites made-up images, e.g. `Describe some pictures of red pandas for me`. The model answers in one sentence that it can't show images and suggests turning on Search the web. There is no "Image 1:" list and no invented titles. (A 1B model can still slip. Tell me if it does, with the exact text.)
+4. Regression: `How do I resize an image in Python?` gives a normal text answer with no image search. `Snow pictures of Alaska` is not treated as an image request (it is answered as text).
+
+### CHANGES (Codex)
+Implemented 2026-11-09, tests first. No commit or push.
+
+- **`src/chat-prompt.js` (new), `src/ask.js`, `src/ask.html`:** Moved the local chat prompt into the browser/Node wrapper, preserving every old sentence verbatim, appended the exact IMAGE_RULE, and loaded it before Ask AI.
+- **`src/search-utils.js`:** Appended the same rule inline to the search prompt. It suggests turning on Search the web; no button labels changed.
+- **`src/media-intent.js`:** Added the bounded, vocabulary-checked short request prefix after the existing exclusions. The 15-line edit helper supports insertion, deletion, substitution and adjacent swaps; typo verbs require a following me/us/u. Query cleanup strips the new prefix only if the existing steps have not stripped a request.
+- **`tests/media-intent.test.js`, `tests/chat-prompt.test.js` (new), `package.json`:** Added all eight required positives and six negatives, retained all existing expectations, and added prompt-preservation/shared-rule assertions and the new check steps.
+- **PLAN inconsistency resolved:** The required positive `gimme photos of Tokyo` conflicts with listing gimme only as a filler while requiring a verb. Treated gimme as a contracted request verb to satisfy the explicit test.
+- No network changes, dependencies, media-path/button changes, sidebar prompt changes, or changes to streamLocalAnswer. Preserved the pre-existing safe-redirect work.
+
+**Verification:**
+- Before implementation, `npm run check` failed on the new `shoe me pictures of red pandas` assertion; the standalone prompt test failed because chat-prompt did not exist.
+- After implementation, new tests and all existing media cases pass. `npm run check` fails only in `tests/safe-fetch-integration.test.js`: this sandbox blocks localhost sockets (`listen EPERM 127.0.0.1`).
+- Ran every other top-level check step individually, including the build, all syntax/unit checks and `npm run check:tests`; all pass. `git diff --check` passes.
+- Electron UI and live model behavior were not run here. Prompt instructions cannot guarantee a 1B model will always comply.
+
+**Manual verification (Sandeep):**
+1. Run `npm run check` outside the sandbox, then `npm start`.
+2. With Search the web off, try `shoe me pictures of red pandas`, `sho me pics of koalas`, and `plz show photos of the Alps`. Expect the existing web-retrieval consent message and Search web for images button, with no model answer. Click the button and verify real images.
+3. With web off and the model loaded, ask `Describe some pictures of red pandas for me`. Expect a one-sentence limitation and suggestion to enable Search the web, without imaginary captions or Image 1 lists.
+4. Verify `How do I resize an image in Python?` and `Snow pictures of Alaska` stay on the text path.
+
+
+### REVIEW (Claude)
+Reviewed 2026-11-09, round 1. **Verdict: DONE.** Codex built it.
+
+**MUST FIX:** none.
+
+**SHOULD FIX (not blocking):**
+- `gimme` is in both the verb and filler sets. That is harmless, and it is how the PLAN's own inconsistency (gimme listed only as a filler, yet the prefix needs a verb) was resolved; Codex noted it in CHANGES.
+- The prefix words are split on whitespace only, so punctuation inside the prefix (`plz, show me pics of…`) is not caught by the new rule. It may still be caught by the existing regex.
+- The prompt rule can't force a 1B model to obey. That's why detection does most of the work: a detected image request never reaches the model.
+
+**OK:**
+- **Prompt:** the prompt moved unchanged into `src/chat-prompt.js`, and `tests/chat-prompt.test.js` checks every old sentence. `IMAGE_RULE` is appended to both the Ask prompt and `SEARCH_SYSTEM_PROMPT`, and it never invents a "Find images" button.
+- **Detection placement:** the new short-prefix rule runs **after** the existing exclusions (`what is…`, `how do…`, `explain`, `describe`, `tell me about`, `imagine`), so everything excluded before is still excluded.
+- **Typo verbs:** words within edit distance 1 of show, find, give or send count only before `me`, `us` or `u`. So `Snow pictures of Alaska` and `Shoe pictures of the 1920s` stay text questions.
+- **Search phrase:** `mediaQueryForQuestion` strips the new prefix, so `shoe me pictures of red pandas` searches for `red pandas`.
+- **Unit tests:** all 8 new positives and 6 new negatives pass, and every existing positive, negative and cleanup case is unchanged.
+- **Extra cases I checked (not in the tests):** compared with the committed detector, the only newly detected phrasing was `send me photos from my trip`, which is a real image request. These were already treated as image requests before this change and are unchanged: `display images of a dataframe in pandas`, `give me a summary of photos of the war`, `see pictures of`. `me pictures of cats` stays false.
+- **Check:** `npm run check` exits 0 outside the sandbox, including `chat-prompt` and `media-intent`. (Codex's sandbox can't open localhost sockets, so its `npm run check` failed only on the safe-fetch integration test. It ran every other step individually.)
+- **Electron:** `media-chat`, `ask-layout` (`"ok": true`) and `ui-smoke` pass, so loading the Ask page with the new `chat-prompt.js` script works.
+- No network changes, and no button or answer-path changes.
+
+**QUESTION FOR SANDEEP:** No button is named "Find images". The existing buttons are **Search web for images** and **Show images**, and Electron tests use those labels. **Safest choice taken:** the model tells the user to turn on Search the web, and no buttons were renamed. Do you want a later task to rename the buttons to "Find images"?
+
+**Answered (Sandeep, 2026-11-09):** no rename. The labels stay **Search web for images** and **Show images**, and the model's suggestion to "turn on Search the web" stays.
+
+## Batch summary (safe redirects + no fake images, phase-0/safe-redirects, 2026-11-09)
+Both tasks are **DONE**. Codex built both. Claude wrote the PLAN and REVIEW and ran the Electron tests outside Codex's sandbox. Final `npm run check`: **exit 0**. Nothing committed.
+
+| # | Task | Status | Built by | Files |
+|---|---|---|---|---|
+| 1 | Safe redirect handling | DONE | Codex | `src/safe-fetch.js` (new), `src/source-reader.js`, `src/main.js`, `package.json`, `tests/safe-fetch.test.js` (new), `tests/safe-fetch-integration.test.js` (new), `tests/electron/safe-redirects.test.js` (new) |
+| 2 | No fake images from the local model | DONE | Codex | `src/chat-prompt.js` (new), `src/ask.js`, `src/ask.html`, `src/search-utils.js`, `src/media-intent.js`, `package.json`, `tests/media-intent.test.js`, `tests/chat-prompt.test.js` (new) |
+
+**Test results:**
+- `npm run check`: exit 0. It now includes:
+  - `safe-fetch` unit tests: private targets blocked before contact, 5 vs 6 redirects, `https`→`http`, DNS pinning, decoding.
+  - Real-socket tests, including an HTTPS server whose certificate is generated at test time.
+  - `chat-prompt` and the extended `media-intent` tests.
+- `npm run test:electron:safe-redirects`: `{"ok":true}`.
+  - A private redirect is blocked before `/secret` is reached.
+  - Image and source redirect chains work, with every host in the receipt.
+  - A download that redirects to loopback is cancelled before it is sent.
+- Regression (Electron): `media-chat`, `downloads`, `browser-features`, `ask-layout` and `ui-smoke` pass.
+- Live sanity check: `http://wikipedia.org/` → `https://www.wikipedia.org/` is read. The Wikimedia `Special:FilePath` image resolves to `upload.wikimedia.org`. `http://127.0.0.1/` is blocked.
+
+**Open questions for Sandeep:**
+1. **(Task 1)** The Chromium download step is still exposed to DNS rebinding. Each redirect hop is checked first, but Chromium does its own DNS lookup. Closing this means downloading through `safeFetch` and writing the file ourselves, which bypasses Chromium's Downloads manager. Do it as a follow-up? *For now, Chromium downloads plus the per-hop guard.*
+2. **(Task 1, side effect)** Source reading and media checks now use Node's network stack. They ignore system proxy settings and trust Node's built-in certificate list instead of the macOS keychain. Acceptable? *For now, accepted and documented.*
+3. **(Task 2)** No button is called "Find images". The real labels are "Search web for images" and "Show images". Rename them? *For now, the model just says "turn on Search the web", and no buttons were renamed.*
+
+**Answered (Sandeep, 2026-11-09):** Q1 keep Chromium downloads with the hop-by-hop check. Q2 accepted for now. Q3 no rename. The download DNS-rebinding gap, the ignored system proxy (a future Tor/VPN feature must route these requests too) and failures on TLS-inspecting networks are recorded under **Known limits** in the "Safe redirect handling" task. No code was changed.
+
+**Manual tests:** see the chat summary for this batch, and each task's PLAN §7.

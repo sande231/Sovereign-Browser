@@ -1,5 +1,5 @@
 const dns = require('node:dns').promises;
-const net = require('node:net');
+const { checkHopUrl, resolvePublicAddresses, safeFetch } = require('./safe-fetch');
 
 const MAX_SOURCE_PAGES = 3;
 const SOURCE_FETCH_TIMEOUT_MS = 10000;
@@ -12,7 +12,6 @@ const CHARS_PER_TOKEN_ESTIMATE = 4;
 const SOURCE_CONTEXT_CHAR_LIMIT = (MODEL_CONTEXT_TOKENS - RESPONSE_TOKEN_RESERVE - PROMPT_OVERHEAD_TOKEN_RESERVE) * CHARS_PER_TOKEN_ESTIMATE;
 const MAX_PASSAGES_PER_SOURCE = 3;
 const MAX_PASSAGE_CHARS = 900;
-const MAX_REDIRECTS = 5;
 
 const SOURCE_HEADERS = {
   accept: 'text/html,application/xhtml+xml,text/plain;q=0.8,*/*;q=0.1',
@@ -83,87 +82,9 @@ function contentTerms(value) {
     .filter(term => term.length >= 3 && !STOP_WORDS.has(term));
 }
 
-function isPrivateIpv4(address) {
-  const parts = String(address || '').split('.').map(part => Number(part));
-  if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return false;
-  }
-
-  const [a, b] = parts;
-  return a === 0 ||
-    a === 10 ||
-    a === 127 ||
-    (a === 100 && b >= 64 && b <= 127) ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    (a >= 224);
-}
-
-function isPrivateIpv6(address) {
-  const host = String(address || '').toLowerCase().replace(/^\[|\]$/g, '');
-  return host === '::' ||
-    host === '::1' ||
-    host.startsWith('fc') ||
-    host.startsWith('fd') ||
-    host.startsWith('fe80:') ||
-    host.startsWith('::ffff:127.') ||
-    host.startsWith('::ffff:10.') ||
-    host.startsWith('::ffff:192.168.');
-}
-
-function isBlockedHostname(hostname) {
-  const host = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
-  if (!host || host === 'localhost' || host.endsWith('.localhost')) {
-    return true;
-  }
-
-  const ipVersion = net.isIP(host);
-  if (ipVersion === 4) {
-    return isPrivateIpv4(host);
-  }
-  if (ipVersion === 6) {
-    return isPrivateIpv6(host);
-  }
-
-  return false;
-}
-
 async function validatePublicSourceUrl(value, resolveHostname = dns.lookup) {
-  let parsed;
-  try {
-    parsed = new URL(String(value || ''));
-  } catch {
-    throw new Error('Source URL is invalid.');
-  }
-
-  if (!['http:', 'https:'].includes(parsed.protocol)) {
-    throw new Error('Source URL must use http or https.');
-  }
-  if (parsed.username || parsed.password) {
-    throw new Error('Source URL must not include credentials.');
-  }
-  if (isBlockedHostname(parsed.hostname)) {
-    throw new Error('Source fetching blocks localhost and private-network addresses.');
-  }
-
-  const host = parsed.hostname.replace(/^\[|\]$/g, '');
-  if (!net.isIP(host)) {
-    let records;
-    try {
-      records = await resolveHostname(host, { all: true });
-    } catch {
-      throw new Error('Could not resolve source host.');
-    }
-    const addresses = Array.isArray(records) ? records : [records];
-    if (addresses.length === 0) {
-      throw new Error('Could not resolve source host.');
-    }
-    if (addresses.some(record => isBlockedHostname(record.address))) {
-      throw new Error('Source host resolves to a private-network address.');
-    }
-  }
-
+  const parsed = checkHopUrl(value);
+  await resolvePublicAddresses(parsed.hostname, resolveHostname);
   parsed.hash = '';
   return parsed.toString();
 }
@@ -623,68 +544,25 @@ async function readLimitedResponseText(response, maxBytes = MAX_SOURCE_BYTES) {
 }
 
 async function fetchPublicPage(url, {
-  fetchImpl = fetch,
+  fetchImpl = safeFetch,
   signal,
   timeoutMs = SOURCE_FETCH_TIMEOUT_MS,
-  resolveHostname = dns.lookup
+  resolveHostname = dns.lookup,
+  onHop
 } = {}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  const abort = () => controller.abort();
-  if (signal?.aborted) {
-    controller.abort();
-  } else {
-    signal?.addEventListener('abort', abort, { once: true });
+  const { response, finalUrl } = await fetchImpl(url, {
+    method: 'GET', headers: SOURCE_HEADERS, signal, timeoutMs, resolve: resolveHostname, onHop
+  });
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(`Source returned HTTP ${response.status}.`);
   }
-
-  let currentUrl = url;
-  try {
-    for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount += 1) {
-      const checkedUrl = await validatePublicSourceUrl(currentUrl, resolveHostname);
-      const response = await fetchImpl(checkedUrl, {
-        method: 'GET',
-        redirect: 'manual',
-        credentials: 'omit',
-        headers: SOURCE_HEADERS,
-        signal: controller.signal
-      });
-
-      if (response.status >= 300 && response.status < 400) {
-        const location = response.headers.get('location');
-        if (!location) {
-          throw new Error(`Source redirected with HTTP ${response.status} but no Location header.`);
-        }
-        currentUrl = new URL(location, checkedUrl).toString();
-        continue;
-      }
-
-      if (!response.ok) {
-        throw new Error(`Source returned HTTP ${response.status}.`);
-      }
-
-      const contentType = response.headers.get('content-type') || '';
-      if (contentType && !/(?:text\/html|application\/xhtml\+xml|text\/plain)/i.test(contentType)) {
-        throw new Error(`Unsupported source content type: ${contentType.split(';')[0]}.`);
-      }
-
-      const body = await readLimitedResponseText(response);
-      return {
-        finalUrl: checkedUrl,
-        contentType,
-        ...body
-      };
-    }
-
-    throw new Error('Source redirected too many times.');
-  } catch (error) {
-    if (error?.name === 'AbortError') {
-      throw new DOMException('Source reading was canceled.', 'AbortError');
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-    signal?.removeEventListener('abort', abort);
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType && !/(?:text\/html|application\/xhtml\+xml|text\/plain)/i.test(contentType)) {
+    await response.body?.cancel();
+    throw new Error(`Unsupported source content type: ${contentType.split(';')[0]}.`);
   }
+  return { finalUrl, contentType, ...(await readLimitedResponseText(response)) };
 }
 
 function trimContextToLimit(sources, limit = SOURCE_CONTEXT_CHAR_LIMIT) {
@@ -815,7 +693,7 @@ async function readOneSource(question, result, options) {
   }
 }
 
-async function readSourcePages({ question, results, signal, onActivity, fetchImpl, resolveHostname, timeoutMs } = {}) {
+async function readSourcePages({ question, results, signal, onActivity, fetchImpl, resolveHostname, timeoutMs, onHop } = {}) {
   const safeQuestion = normalizeText(question).slice(0, 300);
   if (!safeQuestion) {
     throw new Error('Enter a search question before reading sources.');
@@ -853,6 +731,7 @@ async function readSourcePages({ question, results, signal, onActivity, fetchImp
       onActivity,
       fetchImpl,
       resolveHostname,
+      onHop,
       timeoutMs
     }));
   }

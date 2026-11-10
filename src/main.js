@@ -29,13 +29,25 @@ const {
   searchSearxngMedia
 } = require('./search-backend');
 const {
-  validatePublicSourceUrl,
   readSourcePages
 } = require('./source-reader');
 const privacyReceipts = require('./privacy-receipt');
 const { createPermissionController } = require('./permission-policy');
 const { createChatStore, legacyChatIds, parseLegacyChats } = require('./chat-store');
 const { testHook } = require('./test-hooks');
+const dns = require('node:dns').promises;
+const { isIP } = require('node:net');
+const { safeFetch, checkHopUrl, resolvePublicAddresses } = require('./safe-fetch');
+const testDns = JSON.parse(testHook('SOVEREIGN_TEST_DNS', { isPackaged: app.isPackaged }) || '{}');
+const testCaFile = testHook('SOVEREIGN_TEST_CA_FILE', { isPackaged: app.isPackaged });
+const testCa = testCaFile ? fs.readFileSync(testCaFile) : undefined;
+const safeFetchResolve = app.isPackaged ? dns.lookup : async (host, options) => {
+  if (Object.hasOwn(testDns, host)) {
+    const record = testDns[host];
+    return [{ ...record, family: isIP(record.address) }];
+  }
+  return dns.lookup(host, options);
+};
 const { datasetUserDataDir, seedDatasetPreferences } = require('./dataset-collection');
 const datasetBatchEnabled = Boolean(process.env.SOVEREIGN_DATASET_BATCH);
 let datasetWindow = null;
@@ -48,8 +60,8 @@ const {
   originFromUrl
 } = require('./privacy-attribution');
 
-const preflightRedirects = createUrlReceiptTracker();
-const preflightRedirectDetails = new Map();
+const guardedDownloadUrls = new Map();
+const guardedDownloadRequests = new Map();
 const thumbnailReceipts = createUrlReceiptTracker({ maxEntries: 1000 });
 
 const UI_HEIGHT = 92;
@@ -1055,26 +1067,6 @@ function recordPrivacyRedirect(details) {
       thumbnailReceipts.follow(urlKey(details.url, scope), urlKey(details.redirectURL, scope));
       return;
     }
-    const fromKey = urlKey(details.url, 'preflight');
-    const toKey = urlKey(details.redirectURL, 'preflight');
-    if (!fromKey || !toKey) return;
-    const receiptId = preflightRedirects.follow(fromKey, toKey);
-    if (!receiptId) return;
-    const pending = preflightRedirectDetails.get(receiptId);
-    const fromHost = new URL(details.url).host;
-    let base = 'media validation request – no query, prompt, or AI output sent';
-    for (const call of pending || []) {
-      if (call.keys.has(fromKey)) {
-        call.keys.add(toKey);
-        base = call.whatWasSent || base;
-      }
-    }
-    privacyReceipts.addEntry(receiptId, {
-      category: 'image',
-      method: details.method || 'GET',
-      url: details.redirectURL,
-      whatWasSent: base.replace('request', `redirect from ${fromHost}`)
-    });
   } catch (error) {
     logAi('privacy redirect attribution failed', { error: error?.message || String(error) });
   }
@@ -1975,6 +1967,11 @@ function setupDownloadHandlingForSession(targetSession = session.defaultSession)
   downloadHandledSessions.add(targetSession);
 
   targetSession.on('will-download', (_event, item, webContents) => {
+    const chain = item.getURLChain();
+    for (const [id, guard] of guardedDownloadRequests) {
+      if (guard.webContentsId === webContents?.id && chain.includes(guard.lastUrl)) guardedDownloadRequests.delete(id);
+    }
+    for (const url of chain) guardedDownloadUrls.delete(urlKey(url, String(webContents?.id)));
     const id = nextDownloadId;
     nextDownloadId += 1;
     const owner = findTabByWebContentsId(webContents?.id);
@@ -2107,39 +2104,14 @@ function cancelPreflightBody(response) {
   }
 }
 
-async function fetchForDownloadPreflight(targetSession, url, options, receiptDetails = null) {
+async function fetchForDownloadPreflight(targetSession, url, options) {
   const downloadSession = targetSession && typeof targetSession.fetch === 'function'
     ? targetSession
     : session.defaultSession;
-  const fetchImpl = (requestUrl, requestOptions) => downloadSession.fetch(requestUrl, requestOptions);
-  if (receiptDetails?.receiptId) {
-    const receiptId = receiptDetails.receiptId;
-    const key = urlKey(url, 'preflight');
-    const call = { keys: new Set(key ? [key] : []), whatWasSent: receiptDetails.whatWasSent };
-    preflightRedirects.remember(key, receiptId);
-    const pending = preflightRedirectDetails.get(receiptId) || new Set();
-    pending.add(call);
-    preflightRedirectDetails.set(receiptId, pending);
-    try {
-      return await privacyReceipts.fetchWithReceipt(fetchImpl, receiptId, url, options, {
-        category: receiptDetails.category || 'other',
-        whatWasSent: receiptDetails.whatWasSent || 'download validation request – no request body logged'
-      });
-    } finally {
-      pending.delete(call);
-      for (const registeredKey of call.keys) {
-        if (preflightRedirects.lookup(registeredKey) === receiptId &&
-            ![...pending].some(other => other.keys.has(registeredKey))) {
-          preflightRedirects.forget(registeredKey);
-        }
-      }
-      if (!pending.size) preflightRedirectDetails.delete(receiptId);
-    }
-  }
-  return fetchImpl(url, options);
+  return downloadSession.fetch(url, options);
 }
 
-async function preflightDownloadUrl(url, targetSession = session.defaultSession, receiptDetails = null) {
+async function preflightDownloadUrl(url, targetSession = session.defaultSession) {
   let response;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12000);
@@ -2148,7 +2120,7 @@ async function preflightDownloadUrl(url, targetSession = session.defaultSession,
       method: 'HEAD',
       redirect: 'follow',
       signal: controller.signal
-    }, receiptDetails);
+    });
   } catch (error) {
     clearTimeout(timeout);
     throw new Error(`Could not check the URL before downloading: ${error.message}`);
@@ -2165,12 +2137,7 @@ async function preflightDownloadUrl(url, targetSession = session.defaultSession,
         redirect: 'follow',
         headers: { Range: 'bytes=0-0' },
         signal: fallbackController.signal
-      }, receiptDetails
-        ? {
-            ...receiptDetails,
-            whatWasSent: `${receiptDetails.whatWasSent || 'download validation request'} (GET range fallback)`
-          }
-        : null);
+      });
     } catch (error) {
       clearTimeout(fallbackTimeout);
       throw new Error(`Could not check the URL before downloading: ${error.message}`);
@@ -2201,18 +2168,37 @@ async function preflightDownloadUrl(url, targetSession = session.defaultSession,
   };
 }
 
-async function preflightMediaUrl(url, mediaType = 'images', targetSession = session.defaultSession, receiptDetails = null) {
-  const safeUrl = await validatePublicSourceUrl(url);
-  const details = await preflightDownloadUrl(safeUrl, targetSession, receiptDetails);
-  const finalSafeUrl = await validatePublicSourceUrl(details.finalUrl || safeUrl);
-  if (!isMediaMimeType(details.contentType, mediaType)) {
-    throw new Error(`The linked resource is not a direct ${mediaType === 'videos' ? 'video' : 'image'} file. Server content type: ${details.contentType || 'unknown'}.`);
+async function preflightMediaUrl(url, mediaType = 'images', _targetSession, receiptDetails = null) {
+  const fetchMedia = (method, headers) => safeFetch(url, {
+    method, headers, resolve: safeFetchResolve, ca: testCa,
+    onHop: hop => {
+      const base = receiptDetails?.whatWasSent || 'media validation request – no query, prompt, or AI output sent';
+      const entry = {
+        category: 'image', method, url: hop.url,
+        whatWasSent: `${base}${method === 'GET' ? ' (GET range fallback)' : ''}${hop.index ? ` (redirect from ${hop.fromHost})` : ''}`
+      };
+      if (receiptDetails?.receiptId) privacyReceipts.addEntry(receiptDetails.receiptId, entry);
+      else privacyReceipts.addBackgroundEntry(entry);
+    }
+  });
+  let fetched = await fetchMedia('HEAD');
+  if ([405, 501].includes(fetched.response.status)) {
+    cancelPreflightBody(fetched.response);
+    fetched = await fetchMedia('GET', { Range: 'bytes=0-0' });
   }
-  return {
-    ...details,
-    url: finalSafeUrl,
-    downloadable: true
-  };
+  const { response, finalUrl } = fetched;
+  cancelPreflightBody(response);
+  if (!response.ok) throw new Error(`The server returned HTTP ${response.status} before download.`);
+  const contentType = response.headers.get('content-type') || '';
+  const disposition = response.headers.get('content-disposition') || '';
+  const length = response.headers.get('content-length') || '';
+  if (/\btext\/html\b/i.test(contentType) && !contentDispositionIsAttachment(disposition)) {
+    throw new Error('That URL appears to be an HTML page, not a file download.');
+  }
+  if (!isMediaMimeType(contentType, mediaType)) {
+    throw new Error(`The linked resource is not a direct ${mediaType === 'videos' ? 'video' : 'image'} file. Server content type: ${contentType || 'unknown'}.`);
+  }
+  return { contentType, disposition, length, finalUrl, url: finalUrl, downloadable: true };
 }
 
 function mediaFixtureResults(query, category) {
@@ -4041,11 +4027,39 @@ function recordAiNetwork(details) {
 }
 
 function setupAiNetworkMonitor() {
+  session.defaultSession.webRequest.onCompleted(details => guardedDownloadRequests.delete(details.id));
+  session.defaultSession.webRequest.onErrorOccurred(details => guardedDownloadRequests.delete(details.id));
   session.defaultSession.webRequest.onBeforeRedirect(details => recordPrivacyRedirect(details));
   session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
     if (aiWebContentsIds.has(details.webContentsId)) {
       recordAiNetwork(details);
       broadcastAiState();
+    }
+    const key = urlKey(details.url, String(details.webContentsId));
+    const registered = guardedDownloadUrls.get(key);
+    if (registered) {
+      guardedDownloadUrls.delete(key);
+      if (Date.now() - registered.created < 60000) {
+        guardedDownloadRequests.set(details.id, { receiptId: registered.receiptId, hops: 0, lastUrl: details.url, webContentsId: details.webContentsId });
+      }
+    }
+    const guard = guardedDownloadRequests.get(details.id);
+    if (guard && details.url !== guard.lastUrl) {
+      guard.hops += 1;
+      if (guard.hops > 5) { callback({ cancel: true }); return; }
+      const previousUrl = guard.lastUrl;
+      (async () => {
+        const parsed = checkHopUrl(details.url, { previousUrl });
+        await resolvePublicAddresses(parsed.hostname, safeFetchResolve);
+        const entry = {
+          category: 'image', method: details.method || 'GET', url: details.url,
+          whatWasSent: `media file download request – no prompt or AI output sent (redirect from ${new URL(previousUrl).host})`
+        };
+        if (guard.receiptId) privacyReceipts.addEntry(guard.receiptId, entry);
+        else privacyReceipts.addBackgroundEntry(entry);
+        guard.lastUrl = details.url;
+      })().then(() => callback({}), () => callback({ cancel: true }));
+      return;
     }
     recordPrivacyWebRequest(details);
     callback({});
@@ -4779,6 +4793,12 @@ ipcMain.handle('media:download', async (event, request) => {
     ownerTabId: null,
     title: mediaType === 'videos' ? 'Save Video' : 'Save Image'
   });
+  const guardKey = urlKey(checked.url, String(event.sender.id));
+  const guard = { receiptId, created: Date.now() };
+  guardedDownloadUrls.set(guardKey, guard);
+  setTimeout(() => {
+    if (guardedDownloadUrls.get(guardKey) === guard) guardedDownloadUrls.delete(guardKey);
+  }, 60000).unref();
   event.sender.downloadURL(checked.url);
   return downloadsSnapshot();
 });
@@ -4821,7 +4841,13 @@ async function handleReadSources(event, request) {
         results: input.results,
         signal: controller.signal,
         onActivity: entry => pushSearchActivity(entry),
-        fetchImpl: makeReceiptFetch(receipt.id, 'source-page', 'page fetch – no query or AI output sent')
+        fetchImpl: (url, options) => safeFetch(url, {
+          ...options, resolve: safeFetchResolve, ca: testCa,
+          onHop: hop => privacyReceipts.addEntry(receipt.id, {
+            category: 'source-page', method: 'GET', url: hop.url,
+            whatWasSent: `page fetch – no query or AI output sent${hop.index ? ` (redirect from ${hop.fromHost})` : ''}`
+          })
+        })
       })),
       activity: searchActivityEvents.slice(-30)
     };
