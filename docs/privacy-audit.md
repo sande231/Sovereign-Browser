@@ -46,9 +46,8 @@ Do not browse normal website tabs during this audit. Normal browsing tabs are in
 Run these actions:
 
 1. Run one normal Search.
-2. Run one Ask AI question with **Search the web** enabled.
-3. Use **Read sources for a fuller answer**.
-4. Ask for one image, then click **Search web for images**.
+2. Run one Ask AI question with **Search the web** enabled. Sovereign reads the top 3 source pages automatically; there is no separate button.
+3. Ask for one image, then click **Search web for images**.
 
 If local model setup starts during the test, its model/runtime requests should appear in the receipt history under **Background**.
 

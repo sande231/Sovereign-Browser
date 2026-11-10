@@ -1,5 +1,7 @@
 const assert = require('node:assert/strict');
 const {
+  createUrlReceiptTracker,
+  urlKey,
   classifyPrivacyRequest,
   receiptCategoryForAppRequest,
   originFromUrl
@@ -131,4 +133,30 @@ for (const tabKind of ['ask', 'search']) {
   assert.equal(receiptCategoryForAppRequest({ resourceType: 'script', tabKind, baseCategory: 'other' }), 'other');
 }
 assert.equal(receiptCategoryForAppRequest({ resourceType: 'image', tabKind: 'web', baseCategory: 'other' }), 'other');
+assert.equal(urlKey('HTTPS://A.example/x'), urlKey('https://a.example/x'));
+assert.notEqual(urlKey('https://a.example/x', '1'), urlKey('https://a.example/x', '2'));
+for (const url of ['data:image/png;base64,x', 'blob:https://a.example/x', 'invalid']) {
+  assert.equal(urlKey(url), '');
+}
+const tracker = createUrlReceiptTracker({ maxEntries: 3 });
+tracker.remember('A', 'receipt-A');
+assert.equal(tracker.lookup('A'), 'receipt-A');
+assert.equal(tracker.follow('A', 'B'), 'receipt-A');
+assert.equal(tracker.follow('B', 'C'), 'receipt-A');
+for (const key of ['A', 'B', 'C']) assert.equal(tracker.lookup(key), 'receipt-A');
+assert.equal(tracker.follow('unknown', 'D'), '');
+assert.equal(tracker.lookup('D'), '');
+tracker.remember('A', 'receipt-A');
+tracker.remember('D', 'receipt-D');
+assert.equal(tracker.lookup('B'), '');
+assert.equal(tracker.lookup('A'), 'receipt-A');
+tracker.forget('C');
+assert.equal(tracker.lookup('C'), '');
+// The same URL retains independent ownership across tabs and active receipt changes.
+const thumbnails = createUrlReceiptTracker();
+thumbnails.remember(urlKey('https://images.example/a', 'tab-1'), 'old-receipt');
+thumbnails.remember(urlKey('https://images.example/a', 'tab-2'), 'other-receipt');
+assert.equal(thumbnails.follow(urlKey('https://images.example/a', 'tab-1'), urlKey('https://cdn.example/a', 'tab-1')), 'old-receipt');
+assert.equal(thumbnails.lookup(urlKey('https://images.example/a', 'tab-2')), 'other-receipt');
+assert.equal(thumbnails.lookup(urlKey('https://cdn.example/a', 'tab-2')), '');
 console.log('privacy-attribution tests passed');

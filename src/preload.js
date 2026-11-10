@@ -100,6 +100,12 @@ contextBridge.exposeInMainWorld('sovereign', {
   },
   chats: {
     list: () => ipcRenderer.invoke('chats:list'),
+    legacyStatus: () => ipcRenderer.invoke('chats:legacy-status'),
+    onLegacyStatus: callback => {
+      const listener = (_event, status) => callback(status);
+      ipcRenderer.on('chats:legacy-status', listener);
+      return () => ipcRenderer.removeListener('chats:legacy-status', listener);
+    },
     save: chat => ipcRenderer.invoke('chats:save', chat),
     delete: id => ipcRenderer.invoke('chats:delete', id),
     clear: () => ipcRenderer.invoke('chats:clear'),

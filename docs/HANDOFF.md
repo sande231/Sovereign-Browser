@@ -694,6 +694,8 @@ Each item is small and focused. One Codex task per line unless they are grouped.
 | 13 | ~~Question~~ Answered | No separate "Read sources for a fuller answer" button. Automatic reading of the top 3 sources is the intended behaviour (Sandeep, 2026-11-05) | — | Closed; the docs follow-up is #14 |
 | 14 | P3, docs | Replace the "Read sources for a fuller answer" wording with a description of automatic source reading: with **Search the web** on, Ask AI reads up to the top 3 source pages and answers from them. The pages appear in the Privacy Receipt as `source-page` entries. Change only those lines | `README.md` (line 132, feature table row "Read more source material"), `docs/privacy-audit.md` (line 50: delete step 3 and fold it into step 2, e.g. "Run one Ask AI question with **Search the web** enabled; Sovereign reads the top 3 source pages automatically". Renumber the image step from 4 to 3. Check the expected-hosts part of the audit still matches, since the source-page hosts now come from step 2) | The docs describe a button that doesn't exist. No code change; `npm run check` must still pass |
 | 15 | P3, usability | If removing older-version chats fails again on a later startup, the pending cleanup is not shown to the user again (deleted chats still cannot return). Follow-up: show the pending notice whenever cleanup is still pending, with a regression test. | `src/main.js`, `src/ask.js`, `src/settings.js`, `tests/electron/chat-deletion.test.js` | A cleanup that keeps failing is invisible to the user |
+| 16 | **P1, privacy/security** | **Safe redirect handling** (Sandeep, 2026-11-09, high priority). Follow redirects manually for both image validation (media preflight / download / copy link) and source reading. At **every hop**, check that the host resolves to a public address: block private, loopback and link-local ranges (IPv4 and IPv6, including IPv4-mapped IPv6), checked **after DNS resolution**, not only on the literal host. Stop after at most **5 hops**. List every contacted host in the Privacy Receipt, with the purpose and "redirect from &lt;host&gt;". Source pages that redirect (for example `http://` → `https://`) must be readable. Note from Task 3 testing: in Electron 38, `net.fetch`/`session.fetch` with `redirect: 'manual'` rejects with "Redirect was cancelled" instead of returning the 3xx, and `session.fetch`'s `response.url` is not updated after redirects, so the PLAN must use a mechanism that really exposes each hop (for example `webRequest.onBeforeRedirect` to validate the next hop and cancel it, or Node `http`/`https` with a pinned, pre-validated address). Needs Electron tests with a local redirect chain: public→private blocked, a 6-hop chain blocked, http→https source read OK, and every hop in the receipt | `src/main.js` (`preflightDownloadUrl`, `fetchForDownloadPreflight`, `recordPrivacyRedirect`), `src/source-reader.js`, receipt tests, new Electron test | Today a public image URL that redirects to a private address passes the check (SSRF gap), and source pages that redirect probably can't be read |
+| 17 | ~~P3, usability~~ Done in "Chat layout overlap" round 2 | **Compact drop zone** (Sandeep, 2026-11-09). On Ask AI, the attachment drop zone stays one line until a file is dragged over the page or **Attach** is used; it then expands as it does today, and goes back to one line when it's empty again. Keyboard and screen-reader access to Attach must not change | `src/ask.html`, `src/ask.js`, `src/styles.css`, Ask AI layout test | In short windows the bottom stack takes about 300px and squeezes the chat (Task 1 follow-up) |
 
 Each fix should come with an automated test where it's practical: pure functions (the address classifier, receipt summary, `addEntry`) in `tests/*.test.js`, which run under `npm run check`, and UI flows in the fixture Electron tests.
 
@@ -1417,3 +1419,866 @@ Reviewed 2026-11-06. Read AGENTS.md, this task's PLAN and CHANGES, the entire tr
 - `npm run check`: passed (including chat-store unit tests and Electron-test syntax checks). `npm run test:electron:chat-deletion`: passed with final `"ok": true` after running outside the sandbox; the sandboxed GUI launch aborted with SIGABRT. `git diff --check`: passed before this documentation update. These passing tests do not cover the MUST FIX cases above.
 
 **Manual verification for fixes:** use a disposable old-version profile with persisted legacy chats; launch Settings before Ask and disable saving; verify the deletion offer and absence of reimport after restart. Separately seed a malformed saved-chats file containing a marker and verify explicit Clear removes it. Open the same saved conversation in two Ask tabs, delete it while one is generating, and verify both close it after completion and it never returns. Inspect the closed profile recursively for legacy markers, and distinguish remaining legacy/cache/export data from the new saved-chat file.
+
+## Task: Chat layout overlap
+Status: done, round 2 (reviewed 2026-11-09; awaiting Sandeep manual retest)
+
+Priority P2, usability. This is item 4 in the Feature test pass fix list, and known issue (2). Branch: `phase-0/chat-layout`.
+
+### PLAN (Claude)
+
+#### 1. Root cause
+- `.ask-page` (`src/styles.css` lines 1444–1452) is a CSS grid with 7 fixed rows: `grid-template-rows: auto auto auto auto minmax(0, 1fr) auto auto`.
+- `src/ask.html` puts **8** children in `<main class="ask-page">`, in this order:
+  1. `.ask-header`
+  2. `#privacy-receipt-panel`: `hidden` until the user clicks the receipt toggle
+  3. `#model-setup-card`: `hidden` once the model is ready
+  4. `#chat-history-panel`: `hidden` unless chat saving is on, or saved chats exist
+  5. `#chat-thread`
+  6. `.chat-controls` (Search the web toggle and Attach button)
+  7. `#attachment-panel` (always shown)
+  8. `#chat-composer`
+- The row list was written for the case where 2, 3 and 4 are all shown, which would put the thread in row 5, the `1fr` row. A `hidden` panel is `display: none`, so it takes no grid row and everything after it moves up.
+- Normal case (all three hidden): the header, thread, controls, attachment panel and composer fill rows 1–5. The **composer** gets the stretching `1fr` row, and the **thread** gets an `auto` row that grows with its content.
+- `.ask-page` has `height: 100vh; overflow: hidden`. Once the chat is longer than the screen, the `auto` rows add up to more than 100vh. The `1fr` row shrinks to 0, and the controls, attachment panel and composer are drawn over the end of the thread. The thread's own `overflow: auto` never comes into play, because its row is as tall as its content.
+- The row count only works for the one combination the author had in mind. Any other mix of shown and hidden panels moves the stretching row to the wrong element.
+
+#### 2. The fix (CSS only, `src/styles.css`)
+Change `.ask-page` from a fixed-row grid to a **flex column**. Then it does not matter which panels are shown: only the thread stretches, and every other child keeps its natural height.
+
+1. **`.ask-page` (line 1444):**
+   - Replace `display: grid` and `grid-template-rows: …` with `display: flex; flex-direction: column;`. Keep `gap: 12px`, `padding: 18px`, `max-width: 980px` and `margin: 0 auto`.
+   - Change `overflow: hidden` to `overflow-y: auto; overflow-x: hidden;`. In a normal window nothing overflows, so the page never scrolls. In a very short window the whole page scrolls instead of clipping the composer, which is a safety net.
+   - Keep `height: 100vh` from the shared rule at line 1433. `box-sizing: border-box` is already global (line 85), so the padding is inside the 100vh.
+2. **All direct children except the thread:** add one rule `.ask-page > * { flex: 0 0 auto; min-width: 0; }`. They keep their natural height and never shrink. `min-width: 0` stops long URLs or file names from widening the column.
+3. **`.chat-thread` (line 1556):** add `flex: 1 1 0;` and change `min-height: 0` to `min-height: 120px`. Keep `overflow: auto`. The thread takes all the space left over and scrolls inside itself. The 120px floor stops it collapsing to nothing when the receipt or history panel is open in a short window; the page scrolls instead (see 1). This rule must come after the `.ask-page > *` rule, or be more specific (`.ask-page > .chat-thread`), so that `flex: 1 1 0` wins.
+4. **Cap the optional panels** so that opening one never pushes the thread down to its floor in a normal window:
+   - `.privacy-receipt-panel` (line 1240) and `.chat-history-panel` (line 1495): add `max-height: 38vh; overflow: auto;`. The receipt table already has its own `max-height: 190px` (line 1323); leave it as it is.
+   - Do **not** cap `.model-setup-card`. It is short, and its buttons must always be reachable.
+5. **Media queries:** no change is needed. The rules at 860px and 620px only change columns inside the children (`.chat-message`, `.chat-composer`, `.media-card`) and padding. Check that nothing in those blocks sets `grid-template-rows` on `.ask-page` (it doesn't today).
+6. **Do not touch** `src/ask.js`, `src/ask.html` or any other page's layout. The shared rule at line 1433 (`.newtab-page, .ask-page, …`) must stay as it is. Override only inside the `.ask-page`-specific rule.
+
+Expected diff: about 15 lines, all in `src/styles.css`.
+
+**Out of scope, note only:** the auto-scroll in `renderThread()` (`src/ask.js` lines 797–799) runs before image thumbnails load. A card that loads later grows after the scroll, so the last image card can end up partly below the fold until the user scrolls. That is a JS follow-up and related to fix-list item 7 (thumbnail loading). It is not the overlap bug. Report it in CHANGES if you see it during testing, but don't fix it in this task.
+
+#### 3. Sizes and states to check
+Test each state at three window sizes:
+- **Wide:** about 1400×900
+- **Narrow:** about 800×700. This is below the 860px breakpoint, so chat labels stack and media cards go to one column.
+- **Small:** about 600×500. This is below the 620px breakpoint, and the controls stack vertically.
+
+| # | State | Expected |
+|---|---|---|
+| A | All optional panels hidden (model ready, saving off, no saved chats, receipt closed), short chat | Thread fills the space between the header and the controls. Controls, attachment panel and composer sit at the bottom of the window. No page scrollbar. |
+| B | Same as A, long chat (10+ messages) | Only the thread scrolls. The last message is fully visible directly above the Search the web / Attach bar. Nothing overlaps. |
+| C | Privacy receipt panel open, long chat | Receipt is at most about 38vh and scrolls inside itself. Thread still visible and scrollable. Closing the receipt gives the space back to the thread. |
+| D | Saved chats panel shown (saving on, several saved chats), long chat | Same as C. |
+| E | Model setup card shown (model not loaded yet) | Card at natural height, its buttons fully visible. Thread takes what's left. |
+| F | Receipt **and** saved chats **and** model setup all shown, small window | Thread keeps at least 120px. The **page** scrolls, so the composer can always be reached. Nothing is drawn on top of anything else. |
+| G | 1–3 attachments added (attachment list grows) | Attachment panel grows, thread shrinks, no overlap. |
+| H | Image answer with media cards | Cards render inside the thread and scroll with it. At narrow width the cards stack to one column, and the last card can be scrolled fully into view above the controls. |
+| I | Composer textarea resized by dragging its corner (max 150px) | Thread shrinks to make room. No overlap. |
+| J | Light and dark theme | No visual change apart from the layout fix. |
+
+#### 4. Manual test steps (Sandeep)
+1. `npm run check` passes.
+2. `npm start`, then open Ask AI. Make sure the model is loaded, chat saving is off, and the receipt is closed (state A).
+3. With web off, ask about 10 short questions (or one question that gives a long answer) until the thread scrolls. **The last line of the last answer must be fully visible above the Search the web / Attach bar.** Scroll the thread up and down: only the thread should move, and the header and composer stay put.
+4. Click the Privacy Receipt toggle (state C). The thread gets shorter but still scrolls to the last message. Close the receipt and the thread grows back.
+5. Turn chat saving on in Settings and reload Ask AI so the saved-chats panel appears (state D). Repeat step 3's check.
+6. Attach two TXT files (state G). Check the last message is still visible.
+7. Turn on Search the web and ask `show me pictures of red pandas` (state H). Scroll to the last image card and check it sits fully above the controls bar.
+8. Resize the window to about 800×700, then about 600×500, and repeat the checks in steps 3, 4 and 7 at each size. At 600×500, open the receipt and the saved-chats panel together (state F). The page may scroll, but the composer must still be reachable and nothing may overlap.
+9. Drag the textarea's resize corner to make it taller (state I).
+10. Switch the theme (Settings) and check once in dark mode (state J).
+11. Regression: open the New Tab, Settings, Downloads and Bookmarks pages and check their layout is unchanged, because they share the rule at `src/styles.css` line 1433.
+
+**Automated check (optional, if it's quick):** in `tests/electron/ui-smoke.test.js`, after filling the thread with enough messages to scroll, assert that `#chat-thread`'s `getBoundingClientRect().bottom` is `<=` `.chat-controls`'s `getBoundingClientRect().top`, and that `#chat-thread.scrollHeight > clientHeight` (the thread scrolls, not the page). Skip this if the smoke fixture can't easily fill the thread. The manual steps above are the main check.
+
+#### Round 2 PLAN (2026-11-09, after Sandeep's manual test failed)
+**What failed:** in a window of about 1600×1100 with saving on, 3 saved chats and an image answer:
+1. The last image card's buttons were clipped at the bottom of the chat, even with the chat scrolled to the end.
+2. The chat was a thin strip, and the page and the chat both scrolled, so there were two scrollbars.
+
+**Reproduced** with a scratch probe that renders the real Ask AI page with 3 saved chats, the model card showing and a 5-card image answer. On this display the window is clamped to a 737px viewport.
+
+| Part | Height |
+|---|---|
+| Header | 72px |
+| Model card | 103px |
+| Saved chats panel | 210px |
+| Controls | 50px |
+| Drop zone panel | 70px |
+| Composer | 138px |
+
+Together with the gaps and padding, these are taller than the viewport. The thread sits at its 120px minimum, and the page scrolls as well, which gives the two scrollbars. In a 120px strip, an image card (about 230px) never fits, and its buttons are cut off at the strip's edge.
+
+A second cause of clipping: thumbnails are `height: 100%` of a preview with no fixed height, so a card grows when its image loads. `renderThread()` has already scrolled to the bottom by then. A portrait thumbnail can push the last card's buttons below the fold after the "scroll to end".
+
+**Goal:** the conversation is the main area. The page does not scroll in a normal window; only the thread scrolls. The last element can always be scrolled fully into view, with padding below it.
+
+**Changes. Keep them to these files:**
+- `src/styles.css`
+- `src/ask.html`
+- `src/ask.js`
+- `package.json` (test script only)
+- one new test
+
+**1. Thread padding and stable card height (`src/styles.css`)**
+- `.chat-thread`:
+  - Change the padding to `2px 4px 24px 0`. The extra bottom padding keeps space below the last card, and the right padding keeps the scrollbar off the cards.
+  - Add `scroll-padding-bottom: 24px`.
+- `.media-preview`: add `position: relative`.
+- `.media-preview img`: add `position: absolute; inset: 0;` and keep `width/height: 100%; object-fit: cover`. The image then never changes the card's height. The preview keeps its `min-height` (92px, or 160px under 860px) and stretches with the card body. The text placeholder ("Preview unavailable" / "Video") still sizes normally.
+- No JS change for scrolling. The existing `forceScroll` / `shouldAutoScroll` logic is enough once the card height no longer changes after render.
+
+**2. Model card becomes one line (`src/styles.css` only; the HTML ids stay)**
+- The card is already hidden once the model is loaded (`renderModelSetupState` → `engineLoaded`). Keep that.
+- Before the model loads, make it a compact row:
+  - `.model-setup-card`: `display: flex; align-items: center; gap: 12px; padding: 8px 12px;`. This replaces the 2-column grid.
+  - `.model-setup-card > div`: `flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; row-gap: 2px;`
+  - `.model-setup-card .section-title`: keep it as the "Local model" label, at the same small size, with `margin: 0`.
+  - `.model-setup-card h2`: `margin: 0; font-size: 13px`.
+  - `#model-size` and `#model-status`: `font-size: 12px`. Keep them as they are. They wrap only if the window is too narrow, so a long error message is never truncated.
+  - `#download-model`: add the `compact-action` class in `ask.html`, plus `flex: 0 0 auto` in CSS.
+- Remove `.model-setup-card` from the 860px media-query rule that sets `grid-template-columns: 1fr`. Leave `.chat-composer` in that rule.
+- Target: the card is ≤ 56px tall at widths ≥ 860px.
+
+**3. Saved chats become a collapsible section (`src/ask.html`, `src/ask.js`, `src/styles.css`)**
+- **HTML:** in `.chat-history-header`, replace `<strong>Saved chats</strong>` with:
+
+  ```html
+  <button class="chat-history-toggle" id="chat-history-toggle" type="button" aria-expanded="true" aria-controls="chat-history-list">Saved chats</button>
+  ```
+
+  Keep `#clear-chat-history`, `#chat-history-panel` and `#chat-history-list` unchanged. Tests use those ids.
+- **JS state:** add a module variable `let chatHistoryExpanded = null;`. `null` means automatic.
+- **JS helper:** add `chatHistoryIsExpanded()`. It returns `savedChatsUnreadable || (chatHistoryExpanded ?? messages.length === 0)`.
+  - Expanded by default when the thread is empty.
+  - Collapsed by default once a chat is open.
+  - Always expanded while the unreadable-history notice is showing, so the user can see it and delete it.
+- **JS helper:** add `updateChatHistoryDisclosure()`.
+  - Sets `chatHistoryList.hidden = !expanded` and `toggle.setAttribute('aria-expanded', String(expanded))`.
+  - Sets the toggle text to `Saved chats (N)`, where N is `savedChatList.length`, or plain `Saved chats` when N is 0.
+  - Adds or removes the class `collapsed` on `#chat-history-panel`.
+- **Call sites:**
+  - Call `updateChatHistoryDisclosure()` at the top of `renderChatHistory()`, after the `hidden` early return. The list is still rebuilt as today, even when collapsed, so hidden items stay in the DOM.
+  - Also call it at the end of `renderThread()`. That way asking the first question collapses the list automatically.
+- **Toggle click:** sets `chatHistoryExpanded = !chatHistoryIsExpanded()` and calls `updateChatHistoryDisclosure()`.
+- **Reset to automatic:** set `chatHistoryExpanded = null` when a saved chat is loaded (in the title click handler, before `renderThread`) and in `newChat()`. So loading a chat collapses the list, and New chat expands it again.
+- **CSS:**
+  - `.chat-history-panel`: change the padding to `6px 10px`, and the cap to `max-height: min(30vh, 260px)`.
+  - `.chat-history-toggle`: styled as a plain text button. Bold, 13px, no border or background, `color: var(--text)`, with a ▸ marker before the text, rotated to ▾ when the panel is not `.collapsed`. Visible `:focus-visible` ring, using the existing focus styles.
+  - `#chat-history-list[hidden] { display: none; }`
+- **Target:** collapsed panel ≤ 48px.
+
+**4. Compact drop zone (this is fix-list #17, folded in here; `src/ask.html`, `src/ask.js`, `src/styles.css`)**
+- **HTML:** split the drop-zone text into two spans. Keep the exact wording, because wording changes belong to fix-list #10.
+
+  ```html
+  <span class="drop-zone-title">Drop PDF, TXT, Markdown, or CSV files here.</span> <span class="drop-zone-detail">Attachments stay temporary in this chat unless chat saving is enabled.</span>
+  ```
+
+- **Compact state:** `#attachment-panel` gets the class `compact` when there are no attachments **and** no file drag is in progress. `renderAttachments()` sets it. "Attach used" counts as expanded as soon as files are added. A cancelled file picker leaves it compact.
+- **Page-level drag tracking in `ask.js`:**
+  - A `dragDepth` counter.
+  - `document` `dragenter`: if `event.dataTransfer?.types` includes `'Files'`, increment the counter and remove `compact`.
+  - `document` `dragleave`: decrement the counter. At 0, re-apply compact through `renderAttachments()`, or through a small `updateAttachmentPanelCompact()` helper that both call.
+  - `document` `drop` and `dragend`: reset the counter to 0 and update.
+  - Do **not** `preventDefault` on document-level events. Only the drop zone accepts drops, exactly as today.
+- **CSS:**
+  - `.attachment-panel.compact`: `padding: 6px;`
+  - `.attachment-panel.compact .attachment-drop-zone`: `padding: 6px 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;`
+  - `.attachment-panel.compact .drop-zone-detail`: `display: none;`
+  - `.attachment-list:empty`: `display: none;`. This removes the empty grid row and its gap.
+- Keyboard and screen readers are unchanged. The drop zone keeps `tabindex="0"` and Enter/Space opens the picker, the Attach label is unchanged, and the `.drag-over` focus ring is unchanged.
+- **Target:** the compact panel is ≤ 48px.
+
+**5. Less fixed chrome, and no nested scrolling (`src/styles.css`)**
+- `.ask-page`: change `gap` from 12px to 10px. Keep `overflow-y: auto` only as the safety net for very short windows.
+- `.privacy-receipt-panel`: change the cap from `38vh` to `min(30vh, 260px)`, so opening it doesn't push the thread to its floor in a normal window.
+- **Composer:** change `.chat-actions` to `grid-template-columns: repeat(3, minmax(74px, auto))`, which gives 2 rows instead of 3. This brings the composer from about 138px to about 100px. Keep the 860px rule (4 columns) and the 620px rule as they are.
+- **Header:** when the thread has messages, hide the description paragraph.
+  - `renderThread()` sets `document.body.classList.toggle('ask-has-messages', messages.length > 0)`.
+  - CSS: `.ask-has-messages .ask-header p { display: none; }`
+  - The h1 and the buttons stay.
+- **Expected budget** at a 737px viewport with the model card shown and saved chats collapsed:
+  - Header about 45px, model 56, history 48, controls 50, drop zone 48 and composer about 100.
+  - Plus about 60px of gaps and 36px of padding, which is about 445px in total.
+  - That leaves the thread about 290px, with no page scroll.
+- With the model loaded, the thread gets more than 50% of the viewport. In a 1600×1100 window, the thread is far larger.
+
+**6. Automated test (new `tests/electron/ask-layout.test.js`)**
+Use the same setup as `ui-smoke.test.js`:
+- A temporary profile with `saveChatsOnDevice: true`.
+- `require('../../src/main.js')`, then open Ask AI.
+
+Set up the page with page globals (they are top-level `let` bindings in `ask.js`), the same way the round-2 probe did:
+- `savedChatList` = 3 chats, `saveChatsOnDevice = true`, then `renderChatHistory()`.
+- `messages` = 4 Q/A pairs, plus an assistant message whose `mediaResults` holds 5 image items. Their `thumbnailUrl` is a `data:image/svg+xml` **portrait** image, 600×1200. A `data:` URL makes no network request.
+- Make sure `#model-setup-card` is shown. No model is loaded in tests, so it normally is.
+- Call `renderThread({ forceScroll: true })`.
+
+Resize the window to 1280×900. Wait for all `document.images` to finish loading, then two animation frames.
+
+Assert:
+1. **Page does not scroll:** `.ask-page.scrollHeight <= clientHeight + 1`.
+2. **Thread is the main area:** `#chat-thread.clientHeight >= 0.35 * innerHeight`. The thread is also the tallest direct child of `.ask-page`.
+3. **History collapsed:** `#chat-history-list.hidden === true`, the toggle has `aria-expanded="false"`, the toggle text includes `(3)`, and the panel is ≤ 48px.
+4. **Model card one line:** ≤ 56px.
+5. **Drop zone compact:** `#attachment-panel` has `.compact` and is ≤ 48px.
+6. **Scroll to end works:**
+   - `renderThread` force-scrolled to the end, so `scrollHeight - scrollTop - clientHeight <= 1` **after** the images loaded.
+   - The last `.media-actions` bottom is ≤ `#chat-thread` bottom − 8.
+   - The last child's bottom is ≤ the thread's bottom.
+7. **Image load doesn't resize cards:** record each `.media-card` height before the images load (render with the images, and measure synchronously in the same task) and after. They must be equal within 1px.
+8. **Toggle:**
+   - Clicking `#chat-history-toggle` expands the list and sets `aria-expanded="true"`.
+   - Clicking it again collapses it.
+   - `newChat()` with an empty thread expands it.
+   - Calling the title-click restore on a saved chat collapses it. Simulate this by setting `messages` and running the restore path, or simply call `.chat-history-title.click()`. The saved chat's `messages` are empty, so instead assert that after `newChat()` and then `chatHistoryExpanded = null; messages = [m]; renderThread()`, the list collapses.
+9. **Drag:**
+   - Dispatch `new DragEvent('dragenter', { dataTransfer })` on `document`, where `dataTransfer` is a `new DataTransfer()` with `items.add(new File(['x'], 'a.txt', { type: 'text/plain' }))`. Then `#attachment-panel` loses `.compact`.
+   - Dispatch `dragleave` and it becomes compact again.
+   - Adding an attachment entry also removes `.compact`. Push a fake `{ name, status: 'ready' }` and call `renderAttachments()`, or skip this if it is brittle.
+10. **Small-window safety net:** at 600×500, the composer (`#chat-form`) can be reached. After `.ask-page.scrollTop = scrollHeight`, the composer's bottom is ≤ `innerHeight`, and the thread is ≥ 120px.
+
+Print a JSON summary and quit with exit code 0 or 1, like the other Electron tests.
+
+**package.json:**
+- Add `"test:electron:ask-layout": "npm run build:ai && node --check tests/electron/ask-layout.test.js && env -u ELECTRON_RUN_AS_NODE electron tests/electron/ask-layout.test.js"`.
+- Add `node --check tests/electron/ask-layout.test.js` to `check:tests`.
+
+**Codex note:** Electron aborts inside the Codex sandbox, so just `node --check` the new test. Claude runs it outside the sandbox during REVIEW.
+
+**7. Do not change**
+- Media card markup or JS, except nothing (CSS only for the card).
+- The receipt contents.
+- Chat saving and deletion logic.
+- Other pages' layout.
+- No new network requests. The test's thumbnails are `data:` URLs.
+
+**8. Manual tests (Sandeep), after round 2**
+1. `npm run check` passes.
+2. Window about 1600×1100. Turn saving on so 3 or more saved chats exist. Before the model loads, the model card is one line. Then ask an image question with web on (`show me pictures of red pandas`).
+   - Only the chat scrolls. There is no page scrollbar.
+   - The chat area is the largest part of the page.
+   - Scroll to the end: the last card's Open source page / Open original media / Copy image URL / Download buttons are fully visible, with space below them.
+3. **Saved chats:**
+   - With a chat open, the list is collapsed to one line, "▸ Saved chats (3)". Click to expand, then click to collapse.
+   - Click **New chat**: the list expands.
+   - Load a saved chat: it collapses again.
+   - Clear history and Delete still work.
+4. **Model:** before the model loads, the card is one line with its button. After the first answer loads the model, the card disappears.
+5. **Drop zone:**
+   - It is one line ("Drop PDF, TXT, Markdown, or CSV files here.").
+   - Drag a file over the window: it expands. Drag out: it is one line again.
+   - Drop a TXT file on it: the file is attached and the panel stays expanded. Remove the file: one line again.
+   - **Attach** works the same way.
+   - Tab to the drop zone and press Enter: the file picker opens.
+6. Open the Privacy Receipt. It is capped, and the chat still scrolls without a page scrollbar.
+7. Resize to about 800×700 and 600×500. Nothing overlaps. At 600×500 the page may scroll, but the composer must stay reachable.
+8. Check dark theme, and check that the New Tab, Settings and Downloads layouts are unchanged.
+
+
+### CHANGES (Codex)
+
+#### Round 2, fix 1
+
+- Fixed both Round 2, review 1 MUST FIX items in `tests/electron/ask-layout.test.js`: explicit `app.exit(0)` / `app.exit(1)`, exact `sovereign://ask/` matching, and readiness guards for `saveChatsOnDevice` and the model card. Kept substring matching for chrome/newtab.
+- Validation: `npm run check` passed, including the test's syntax check. Electron runtime was not run in the sandbox, per PLAN; run `npm run test:electron:ask-layout` outside it and confirm `ok: true` with exit 0 (failed assertions must exit 1).
+- No product code, PLAN or REVIEW changes; no commit.
+
+#### Round 2
+
+Implemented the Round 2 PLAN, tests first:
+- `tests/electron/ask-layout.test.js` (new): temporary saving-enabled profile, 3 saved chats, 4 Q/A pairs and 5 portrait SVG thumbnails using only data URLs. Measures card heights synchronously before image loading and after loading plus two animation frames. Asserts page/thread geometry, compact panel heights, bottom padding and scroll position, disclosure defaults/toggles, unreadable-history visibility, drag/reset and attachment states, and composer access at 600×500.
+- `package.json`: added `test:electron:ask-layout` and the new test's syntax check to `check:tests`.
+- `src/styles.css`: stable absolutely positioned thumbnails, thread bottom/right padding, compact model row, collapsible-history styling and focus ring, compact empty drop zone, smaller panel caps/page gaps, three-column composer actions, and hidden header description during conversations. Preserved the short-window page-scroll safety net and responsive composer rules.
+- `src/ask.html`: added the history disclosure button, compact model-button class, and separate drop-zone title/detail spans without changing their wording or existing ids.
+- `src/ask.js`: automatic/manual history disclosure with reset on New chat and saved-chat restore, forced expansion for unreadable history, conversation body class, and document-level file-drag depth tracking for the empty attachment panel. Document listeners do not prevent default; existing drop acceptance and scrolling logic stay unchanged.
+
+Validation:
+- Wrote the Electron regression test and script wiring before product edits; `node --check tests/electron/ask-layout.test.js` and `npm run check` passed at that stage.
+- `npm run check` passed after implementation and the final CHANGES update. `git diff --check` passed.
+- As instructed, did not launch Electron in the sandbox. The new test has only been syntax-checked; no runtime red/green result or visual layout result is claimed. Claude should run `npm run test:electron:ask-layout` outside the sandbox during REVIEW.
+- No new network requests or cloud AI calls. Existing unrelated work was preserved. PLAN and REVIEW were not edited. No commit or push.
+
+Manual testing: follow Round 2 PLAN §8. With 3 saved chats and an image answer at about 1600×1100, check that only the thread scrolls and the last card's buttons have space below. Exercise history expand/collapse, New chat and saved-chat restore; drag in/out, attach/remove a TXT file, and keyboard attachment picking. Open the receipt, resize to 800×700 and 600×500, and verify composer access, dark theme, and unchanged New Tab/Settings/Downloads layouts.
+
+
+Implemented the CSS-only PLAN in `src/styles.css`:
+- Converted `.ask-page` to a flex column with vertical page overflow as the short-window safety net and horizontal overflow hidden.
+- Made direct children keep their natural height with `flex: 0 0 auto` and `min-width: 0`; the later `.chat-thread` rule overrides flex to `1 1 0`, keeps internal scrolling, and sets a 120px minimum height.
+- Capped the receipt and saved-chats panels at `38vh` with internal scrolling.
+- Preserved the shared page rule, model setup card, receipt table cap, responsive rules, and all JavaScript/HTML.
+
+Validation: `npm run check` passed after the CSS change. Inspected the CSS diff and responsive rules; no `.ask-page` grid-row override remains. No automated UI test was added, and the visual state matrix has not been run. No new network requests were introduced.
+
+Manual testing: follow PLAN §4 at approximately 1400×900, 800×700, and 600×500. With a long chat, verify the last message scrolls fully above the controls; toggle receipt/history, show model setup, add attachments, inspect image cards, and resize the composer. With all panels open in the small window, verify the page scrolls and the composer remains reachable. Check both themes and the New Tab, Settings, Downloads, and Bookmarks layouts.
+
+The image-thumbnail auto-scroll follow-up remains outside this change; it was not exercised during testing. No commit was made.
+
+### REVIEW (Claude)
+
+#### Round 2, review 2 (2026-11-09): DONE
+- **MUST FIX 1 fixed:** the catch calls `app.exit(1)` and success calls `app.exit(0)`. I proved it with a scratch copy that has one assertion made impossible: it printed `{"ok":false,…}` and exited **1**.
+- **MUST FIX 2 fixed:** the test waits for the exact `sovereign://ask/` URL, and the readiness wait guards `typeof saveChatsOnDevice`.
+- `npm run test:electron:ask-layout` passes (`"ok": true`, exit 0), run outside the sandbox.
+- `npm run check` passes and `git diff --check` is clean.
+- Product code is unchanged since review 1. The review 1 SHOULD FIX notes still stand, and neither blocks.
+- Fix-list #17 (Compact drop zone) is done as part of this round.
+
+#### Round 2, review 1 (2026-11-09)
+I reviewed the `src/ask.html`, `src/ask.js`, `src/styles.css` and `package.json` diffs against the Round 2 PLAN. I ran the new test and the round-2 probe outside the sandbox.
+
+**MUST FIX (test only; the product code is correct):**
+1. **The new test can never fail.** `tests/electron/ask-layout.test.js:153-157` sets `process.exitCode = 1` and then calls `app.quit()`. Under Electron the process still exits 0. That is how the first run below reported `{"ok":false,…}` with **exit 0**. Use `app.exit(1)` in the catch, as `media-chat.test.js` and `chat-deletion.test.js` do. Also call `app.exit(0)` on success instead of `app.quit()`.
+2. **The test waits on the wrong page.**
+   - Lines 24 and 38 use `getURL().includes('sovereign://ask/')`, which first matches `sovereign://ask/model-setup.html`. That page has no `renderThread` or `#model-setup-card`, so the run timed out with "Timed out waiting for Ask AI."
+   - Match the exact URL `=== 'sovereign://ask/'`, like `ui-smoke.test.js:49-51`. Keep `includes` only for `index.html` and `sovereign://newtab`.
+   - Also make the line-39 wait robust: `typeof saveChatsOnDevice !== 'undefined' && …`.
+
+**Evidence that the product change is right.** I ran a scratch copy of the test with only those two fixes applied, and it **passed**. At a 735px viewport (this display clamps the 1280×900 window):
+
+| Measurement | Result |
+|---|---|
+| Thread height | 330px, 45% of the viewport, the tallest part of the page |
+| Page scroll | none (`scrollHeight == clientHeight`) |
+| Model card | 46px |
+| Collapsed saved chats, "Saved chats (3)" | 42px |
+| Compact drop zone | 45px |
+| Composer | 97px |
+| Header (description hidden) | 30px |
+| Last `.media-actions` | 48px above the thread's bottom edge |
+| Image cards | identical height before and after the portrait thumbnails loaded |
+
+All 11 interaction checks passed: toggle, New chat, restore, unreadable notice, drag enter, leave, drop and dragend, and attachment add and remove. At 600×500 the composer can be reached and the thread keeps its 120px floor.
+
+**SHOULD FIX (not blocking):**
+- `document` `dragleave` decrements `dragDepth` even for non-file drags, while only file drags increment it. `Math.max(0, …)` keeps it safe. The worst case is that the panel compacts early during a mixed drag. Acceptable.
+- In windows of 800×700 or smaller, the thread still sits at its 120px floor and the page scrolls. That is the planned safety net. Making the composer or controls even smaller is a possible later P3.
+
+**OK:**
+- **Model card:** the HTML and JS match the PLAN §2–4 exactly, and every existing id is kept. The model card is one line and still disappears once the model is loaded. Long errors wrap rather than truncate.
+- **Saved chats:**
+  - Collapsed by default with a chat open, expanded on New chat, collapsed again on restore.
+  - Always expanded while the unreadable notice is showing.
+  - The list is still rebuilt while hidden, so `chat-deletion` and `media-chat` (which click hidden items through JS) are unaffected.
+- **Drop zone:** compact until a file drag or an attachment. The document listeners don't call `preventDefault`. Wording is unchanged.
+- **Card height:** thumbnails are absolutely positioned, so a card can no longer grow after the auto-scroll. Together with the 24px bottom padding, this removes the clipping.
+- **Round-2 probe at the reported scenario:** 3 saved chats, the model card shown, a 5-image answer, a window of 1600×1100 (clamped to 737px).
+  - Before: thread 120px, page scrolls.
+  - After: thread 332px, **no page scroll**, and the last buttons are not clipped.
+  - Screenshot: `shots-after/ask-1600x1100.png` in my scratchpad.
+- **Regression:** `chat-deletion`, `media-chat` and `ui-smoke` pass outside the sandbox.
+- No new network requests. The test thumbnails are `data:` URLs.
+
+---
+#### Round 1 review
+Reviewed 2026-11-09. Checked the `src/styles.css` diff against the PLAN, read the rules it interacts with, and measured the real Ask AI page in Electron with a throwaway probe script (scratchpad only, not added to the repo). The probe filled the thread with 15 long messages plus a 4-card image grid, toggled the optional panels, and measured at three window sizes.
+
+**MUST FIX:** none.
+
+**SHOULD FIX (follow-up, not blocking):**
+- In short windows the fixed bottom stack (controls bar + attachment panel with its drop zone + composer) is about 280–310px. At 800×700 (494px viewport) that leaves the thread at its 120px floor even with every optional panel hidden, so the page scrolls to reach the composer. Nothing overlaps and everything is reachable, but the chat area is small. Suggested follow-up: make the attachment drop zone compact (one line) until files are added or dragged over. This is a separate usability task, not part of the overlap bug.
+- No automated layout assertion was added (the PLAN marked it optional). The probe in this review could become a `tests/electron/` test later.
+
+**OK:**
+- The diff matches the PLAN exactly: `.ask-page` is a flex column with `overflow-y: auto; overflow-x: hidden`, `.ask-page > *` keeps natural height, `.chat-thread` gets `flex: 1 1 0; min-height: 120px` and comes later in the file with equal specificity, so it wins. The receipt and saved-chats panels are capped at 38vh.
+- The shared page rule, the model setup card, the receipt table cap and the 860px/620px media queries are unchanged, and no media query sets `grid-template-rows` on `.ask-page`. JS and HTML are untouched.
+- The thread's children (`.chat-message`, a grid with visible overflow) keep a content-based minimum height, so the newly fixed-height thread scrolls instead of squashing messages.
+- `[hidden]` overrides exist for the receipt, setup and history panels, so the new `max-height`/`overflow` rules do not show hidden panels.
+- Probe results: at 1400×900, 800×700 and 600×500, with no panels, with the receipt only, and with receipt + saved chats + model setup: `#chat-thread` bottom is above `.chat-controls` top in all 9 cases (no overlap), the thread scrolls internally, and after scrolling to the end the last message (the image grid) sits fully above the controls bar. At 1400×900 with no panels the page itself does not scroll. In the smaller sizes, or with all panels open, the thread holds 120px and the page scrolls, as planned.
+- No network requests added. `npm run check` passed (exit 0).
+
+**Still needs Sandeep's hand test:** PLAN §4, particularly real image cards from SearXNG (the probe used placeholder cards of 220px) and dragging the textarea resize corner. The PLAN's out-of-scope note on auto-scroll before thumbnails load still applies.
+
+## Task: Address bar input
+Status: done (reviewed 2026-11-09)
+
+Priority P2, bug. Feature test pass fix list #5 (section 1, Browsing). Branch: `phase-0/chat-layout` (batch of P2 fixes).
+
+### PLAN (Claude)
+
+#### 1. Root cause
+- **Address bar:** `classifyAddressInput` (`src/main.js` ~line 435) treats any input that starts with `letters:` as an unsupported URL scheme, unless it is `http(s)://` or `localhost:port`. So `Python: list comprehension`, `Note:buy milk` and `example.com:8080` all get "Sovereign only opens http and https websites." `new URL('example.com:8080')` really does parse `example.com:` as a scheme, which is why the old check fires.
+- `looksLikeNavigableAddress` accepts any `a.b` with any last label, so version numbers like `3.11.2` open as URLs (Chromium even parses `3.11.2` as the IPv4 address 3.11.0.2).
+- **New Tab search box:** `src/newtab.js` (submit handler ~line 372) always calls `window.sovereign.openSearch(...)`, and `browser:open-search` in `src/main.js` (~line 4262) always opens a Search or Ask AI tab. So `localhost:3000` or `https://example.com` typed there is **sent to SearXNG as a query** and never opened.
+
+#### 2. Changes
+
+**A. New pure module `src/address-input.js`** (CommonJS, no Electron imports, same style as `src/permission-policy.js`). Move these functions out of `src/main.js` unchanged unless stated: `normalizeInternalUrl`, `normalizeAddress`, `normalizeSearchQuestion`, and `classifyAddressInput` (rewritten, below). Delete `looksLikeNavigableAddress` (replaced by `looksLikeHostAddress`). Export `classifyAddressInput`, `normalizeAddress`, `normalizeInternalUrl`, `normalizeSearchQuestion`, `looksLikeHostAddress`. In `src/main.js`, `require('./address-input')` and destructure those names so every existing caller of `normalizeAddress` / `normalizeInternalUrl` keeps working with no other edits.
+
+**`normalizeAddress` change (one line):** the "use `http` not `https`" rule for scheme-less input currently covers `localhost` and IPv4. Add bracketed IPv6 (`^\[[0-9a-f:.]+\]`, case-insensitive) to it, so `[::1]:3000` opens as `http://[::1]:3000/`.
+
+**`classifyAddressInput(input)`**, rules in this order (return shapes unchanged: `{kind:'error',error}`, `{kind:'internal',url}`, `{kind:'url',url}`, `{kind:'search',question,mode:'search'}`):
+1. Trim. Empty → error `Enter a website address or search question.` (unchanged).
+2. Starts with `?` → search for the rest, trimmed. If the rest is empty → the empty-input error. (Lets users force a search for a host-like word, e.g. `?node.js`.)
+3. `normalizeInternalUrl(raw)` succeeds → internal (unchanged).
+4. Starts with `http://` or `https://` (case-insensitive) → `normalizeAddress(raw)`. ok → url. Not ok → error with `checked.error`. **Never** search. Spaces after the scheme are allowed here (the URL parser encodes them).
+5. Starts with any other `scheme://` (`/^[a-z][a-z\d+.-]*:\/\//i`) → error `Sovereign only opens http and https websites.`
+6. No whitespace and starts with a known non-web scheme followed by `:` → same error. List (case-insensitive): `about, blob, chrome, chrome-extension, data, devtools, file, ftp, intent, javascript, magnet, mailto, sms, tel, view-source, ws, wss`. These must never go to the search engine. Every other `word:` prefix is **not** treated as a scheme.
+7. Contains whitespace → search.
+8. `looksLikeHostAddress(raw)` is true → `normalizeAddress(raw)`. ok → url. Not ok (for example `localhost:99999`, `999.1.1.1`) → error with `checked.error`. It clearly looked like an address, so it is never searched.
+9. Otherwise → search.
+
+**`looksLikeHostAddress(value)`**: true when the whole value is `HOST` + optional `:PORT` (1–5 digits) + optionally a path/query/fragment starting with `/`, `?` or `#`, where HOST is one of:
+- `localhost` (case-insensitive)
+- IPv4: `\d{1,3}(\.\d{1,3}){3}` (range checked later by the URL parser)
+- bracketed IPv6: `\[[0-9a-f:.]+\]`
+- a domain: one or more labels `[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?` followed by `.`, then a top-level label that is either letters only (2–63) or `xn--` punycode. Case-insensitive.
+No `@` support (no userinfo), so `user@example.com` is a search.
+
+**B. New Tab box opens addresses.**
+- `src/newtab.js` submit handler: when there are **no** attachments, add `navigateIfAddress: true` to the `openSearch` payload. With attachments, the payload is unchanged (it's an Ask AI handoff).
+- `src/main.js`, `browser:open-search` handler: at the top (after the sidebar line), if `input.navigateIfAddress === true && !input.handoffId`, call `classifyAddressInput(input.question)`. If the result's kind is **not** `search`, call `navigateActive(state, input.question)` and return. This opens URLs and internal pages, and shows the same error as the address bar for blocked schemes. It applies in both Search and Ask modes, because a bare address is never a question. Otherwise fall through to the current behaviour.
+- `src/renderer.js` and `src/search.js` are **not** changed. (The toolbar Search button's seed uses `naturalSearchQuestion`; a `word:` input just seeds an empty search box there, which is harmless. Out of scope.)
+
+**No new network requests.** Navigation to the typed address is the same as today's address bar.
+
+#### 3. Tests (write first)
+**`tests/address-input.test.js`** (new, `node:assert/strict`), and add `node --check src/address-input.js && node tests/address-input.test.js` to the `check` script in `package.json` next to the other unit tests. It must cover at least these 40 cases with the exact expected result:
+
+| Input | Kind | Expected url / question |
+|---|---|---|
+| `example.com` | url | `https://example.com/` |
+| `example.com:8080` | url | `https://example.com:8080/` |
+| `example.com:8080/path?q=1#x` | url | `https://example.com:8080/path?q=1#x` |
+| `example.com?q=1` | url | `https://example.com/?q=1` |
+| `wikipedia.org` | url | `https://wikipedia.org/` |
+| `sub.domain.co.uk/page` | url | `https://sub.domain.co.uk/page` |
+| `xn--bcher-kva.example` | url | `https://xn--bcher-kva.example/` |
+| `localhost` | url | `http://localhost/` |
+| `localhost:3000` | url | `http://localhost:3000/` |
+| `LOCALHOST:3000/api` | url | `http://localhost:3000/api` |
+| `127.0.0.1:8080` | url | `http://127.0.0.1:8080/` |
+| `192.168.1.1` | url | `http://192.168.1.1/` |
+| `[::1]:3000` | url | `http://[::1]:3000/` |
+| `https://example.com` | url | `https://example.com/` |
+| `HTTPS://Example.com/Path` | url | `https://example.com/Path` |
+| `http://localhost:3000/a b` | url | `http://localhost:3000/a%20b` |
+| `  https://example.com/x  ` | url | `https://example.com/x` |
+| `Python: list comprehension` | search | `Python: list comprehension` |
+| `Note:buy milk` | search | `Note:buy milk` |
+| `C++: templates` | search | `C++: templates` |
+| `re:invent` | search | `re:invent` |
+| `foo:bar` | search | `foo:bar` |
+| `what is example.com` | search | `what is example.com` |
+| `history   of tea` | search | `history of tea` |
+| `3.11.2` | search | `3.11.2` |
+| `e.g.` | search | `e.g.` |
+| `user@example.com` | search | `user@example.com` |
+| `hello` | search | `hello` |
+| `?example.com` | search | `example.com` |
+| `ftp://example.com` | error | http/https-only message |
+| `file:///etc/passwd` | error | http/https-only message |
+| `javascript:alert(1)` | error | http/https-only message |
+| `mailto:a@example.com` | error | http/https-only message |
+| `view-source:example.com` | error | http/https-only message |
+| `https://` | error | (any non-empty message) |
+| `localhost:99999` | error | (any non-empty message) |
+| `` (empty) and `   ` | error | `Enter a website address or search question.` |
+| `?` | error | `Enter a website address or search question.` |
+| `sovereign://settings` | internal | `sovereign://settings/` |
+| a 400-character search phrase with spaces | search | sliced to 300 characters |
+
+Also assert, as a loop over every row whose kind is `url`: the result is never `search` (the "never send a URL to the search engine" rule), and `looksLikeHostAddress` is false for `Python:`, `3.11.2` and `user@example.com`.
+
+**`tests/electron/browser-features.test.js`** (extend; it already runs a local HTTP server on 127.0.0.1): after the existing feature page loads, open a New Tab (`window.sovereign.newTab()` from the chrome contents), wait for `#home-query`, set its value to `127.0.0.1:<port>/home-typed` (no scheme), and submit `#home-search` (`requestSubmit()`). Wait until some web contents has URL `http://127.0.0.1:<port>/home-typed`, and assert no contents URL starts with `sovereign://search`. Make the server answer any path (it already does). Do this before the sidebar and detach steps, or after. Either is fine, but don't break the existing assertions.
+
+#### 4. Manual test steps (Sandeep)
+1. `npm run check` passes (includes the new unit tests). Optionally `npm run test:electron:browser-features`.
+2. `npm start`. In the **address bar** type each and press Enter:
+   - `example.com:8080`: tries to open `https://example.com:8080/` (it will time out or fail to connect; that's fine, it must not search or show the "http and https" error).
+   - `localhost:3000` (with nothing running: connection error page, not a search). `127.0.0.1:8080` with SearXNG running: the SearXNG page opens.
+   - `https://wikipedia.org`: opens.
+   - `Python: list comprehension` and `Note:buy milk`: open Sovereign Search with that text.
+   - `3.11.2`: searches. `javascript:alert(1)` and `file:///etc/passwd`: the "only opens http and https" error.
+3. Open a **New Tab**. In its search box, with **Search** selected, type `127.0.0.1:8080` and press Enter: the page opens in this tab, and Search does not open. Repeat with `https://example.com` and with **Ask AI** selected: it opens the page, and Ask AI does not start.
+4. In the New Tab box type `Python: list comprehension`: Sovereign Search opens with that query. Open the Privacy Receipt after any of the URL cases in step 3: there is no SearXNG `search` entry for them.
+5. Attach a TXT file on the New Tab and type `example.com`: this is still an Ask AI handoff with the attachment (an address plus an attachment is a question about the file).
+
+**Known limit:** without a public-suffix list, a host-like word with an alphabetic last label (for example `node.js`) still opens as a URL, as it does today. Type `?node.js` to search.
+
+### CHANGES (Codex)
+
+Implemented the PLAN, tests first:
+- Added `tests/address-input.test.js` with every required table case, exact result shapes, URL-never-search assertions, host exclusions, all listed blocked schemes, and invalid IPv4 coverage. Added the module syntax check and unit test to `package.json`.
+- Extended `tests/electron/browser-features.test.js` after the existing sidebar/detach checks: submit a scheme-less local address through New Tab, wait for direct navigation, and assert no Search tab exists.
+- Added pure CommonJS `src/address-input.js`, moving the existing normalization helpers and implementing the ordered classification rules and host matcher. The only change to `normalizeAddress` is the planned bracketed IPv6 HTTP default.
+- Updated `src/main.js` to import the helpers and route opted-in New Tab address submissions through `navigateActive`, including internal pages and blocked-address errors.
+- Updated `src/newtab.js` to set `navigateIfAddress: true` only without attachments. Attachment handoff payloads remain unchanged.
+
+Validation:
+- Tests were written before implementation. `npm run check` initially failed because `src/address-input.js` did not yet exist.
+- After implementation, `npm run check` passed, including the new unit tests and Electron test syntax check.
+- Attempted `npm run test:electron:browser-features`; Electron exited with signal `SIGABRT` at startup, before test output. Runtime integration and visual checks remain unverified in this environment.
+- No new request mechanism or cloud AI calls were added; typed addresses use existing navigation and receipt handling. Preserved the pre-existing CSS and handoff edits, and did not change renderer.js, search.js, PLAN, or REVIEW. No commit was made.
+
+Manual testing: follow PLAN §4. In the address bar verify domains with ports and local/IPv6 hosts navigate, colon phrases and `3.11.2` search, `?node.js` forces search, and blocked schemes show errors. In New Tab, verify a local address and HTTPS URL navigate in both Search and Ask AI modes, with no SearXNG search entry in the Privacy Receipt. Verify an attachment plus `example.com` still opens an Ask AI handoff. Run `npm run test:electron:browser-features` in a working Electron session.
+
+### REVIEW (Claude)
+Reviewed 2026-11-09. Read the full diff (`src/main.js`, `src/newtab.js`, `package.json`, `tests/electron/browser-features.test.js`) and the new files `src/address-input.js` and `tests/address-input.test.js`, against the PLAN.
+
+**MUST FIX:** none.
+
+**SHOULD FIX (minor, not blocking):**
+- `src/main.js` imports `looksLikeHostAddress` but never uses it. Harmless; drop it from the destructure when next touching the file.
+- Rule 6 (known non-web schemes) only applies when the input has no whitespace, as the PLAN said. So `javascript: alert(1)` or `data:text/html, <b>x` with a space would go to the user's own SearXNG as a search. That is the PLAN's choice, not a build error; the risk is low (the text only goes to the local SearXNG and its upstream engines, as any typed search does). Revisit only if it comes up.
+
+**OK:**
+- The classifier implements rules 1–9 in the PLAN's order. The moved helpers are byte-for-byte the old ones apart from the planned IPv6 `http` default. Every other caller of `normalizeAddress` / `normalizeInternalUrl` in `main.js` still resolves through the import, and `normalizeSearchQuestion` is still used at three call sites.
+- `tests/address-input.test.js` covers every row in the PLAN table (17 URL cases, 13 search cases, 21 blocked-scheme cases, 3 invalid-address errors, 4 empty cases, the internal case, the 300-character slice) and asserts no URL row is classified as `search`. It is wired into `npm run check`.
+- New Tab: `navigateIfAddress` is only sent without attachments, and main.js only acts on it when `handoffId` is empty, so the attachment handoff is unchanged. Blocked schemes typed on the New Tab show the address-bar error rather than searching.
+- `npm run test:electron:browser-features` **passed** when I ran it outside the sandbox (Codex's sandboxed run aborted at startup). The new step typed `127.0.0.1:<port>/home-typed` into the New Tab box, the page opened, and no `sovereign://search` tab was created.
+- No new network requests: the typed address uses the existing navigation path. `npm run check` passed (exit 0).
+
+## Task: Receipt: image redirects and late thumbnails
+Status: done (reviewed 2026-11-09), with a QUESTION FOR SANDEEP below
+
+Priority P2, privacy. Feature test pass fix list #6 and #7 (section 9; image-retrieval REVIEW item 4). Branch: `phase-0/chat-layout` (batch of P2 fixes).
+
+### PLAN (Claude)
+
+#### 1. Root cause
+- **Preflight redirects.** `preflightDownloadUrl` (`src/main.js` ~line 2047) calls `fetchForDownloadPreflight` with `redirect: 'follow'`. `privacyReceipts.fetchWithReceipt` logs only the URL it was given. Chromium then follows every redirect hop, but no hop is logged. The webRequest hook sees each hop, but a `session.fetch` request has no `webContentsId` or initiator, so `classifyPrivacyRequest` returns `debug-skip` and it is dropped. Result: when an image URL (e.g. Wikimedia `Special:FilePath`) redirects to another host, that host is contacted but missing from the receipt. The same applies to the GET range fallback and to `media:download`.
+- **Manual redirects are not an option.** I probed Electron 38 on 2026-11-09 (scratchpad script, local server, 302 to another host). `net.fetch` and `session.fetch` with `redirect: 'manual'` **reject with "Redirect was cancelled"** for both GET and HEAD, with or without webRequest listeners. They do not return the 3xx response. So `preflightDownloadUrl` must keep `redirect: 'follow'`. The same probe showed `webRequest.onBeforeRedirect` fires for every hop with `details.url` (from) and `details.redirectURL` (to), for both `session.fetch` and `<img>` loads.
+- **Late thumbnails.** Thumbnail `<img>` loads from the Ask/Search page go through `recordPrivacyWebRequest`. That function attributes a request to `activeReceiptId`, the receipt most recently started in that tab (`activePrivacyReceiptsByWebContentsId`). Thumbnails use `loading='lazy'` (`src/ask.js` ~line 623), and `renderThread()` re-creates every `<img>` on each render. So a thumbnail from an older image answer that loads after the user starts a new question (on scroll, or on re-render without a cache hit) is logged in the **new** question's receipt. The probe showed `<img>` redirect hops each reach `onBeforeRequest`, so they are already listed, but also in whatever receipt is active then.
+
+#### 2. Changes
+
+**A. Pure tracker in `src/privacy-attribution.js`** (unit-testable, no Electron). Add and export `createUrlReceiptTracker({ maxEntries = 500 } = {})` returning:
+- `remember(key, receiptId)`: store `key → receiptId`. Keys are strings built by the caller. If the map exceeds `maxEntries`, drop the oldest entries (Map insertion order; re-setting a key moves it to the end).
+- `lookup(key)`: the receipt id or `''`.
+- `forget(key)`.
+- `follow(fromKey, toKey)`: if `fromKey` is known, remember `toKey` with the same receipt id and return that id; otherwise return `''`.
+Also export `urlKey(url, scope = '')`, which returns `${scope} ${new URL(url).href}`, or `''` for an invalid URL or a non-http(s) URL. Normalising with `URL.href` matters because Chromium reports normalised URLs.
+
+**B. Preflight redirect hops (`src/main.js`)**
+1. Module-level `const preflightRedirects = createUrlReceiptTracker()` and a `Map` `preflightRedirectDetails` of `receiptId → { whatWasSent }`, or store an object instead of a bare id; either is fine as long as the tracker stays pure.
+2. In `fetchForDownloadPreflight`, when `receiptDetails?.receiptId` is set: before the fetch, `remember(urlKey(url, 'preflight'), receiptId)` and keep the details. After the fetch settles (`finally`), `forget` every key registered for this call, including the followed ones. A small per-call `Set` of keys is enough.
+3. In `setupAiNetworkMonitor`, add `session.defaultSession.webRequest.onBeforeRedirect(details => recordPrivacyRedirect(details))`. No other code registers `onBeforeRedirect` (checked).
+4. `recordPrivacyRedirect(details)`:
+   - **Preflight:** if `!details.webContentsId`, compute `receiptId = preflightRedirects.follow(urlKey(details.url,'preflight'), urlKey(details.redirectURL,'preflight'))`. If it is set, `privacyReceipts.addEntry(receiptId, { category: 'image', method: details.method || 'GET', url: details.redirectURL, whatWasSent: 'media validation redirect from <from-host> – no query, prompt, or AI output sent' })`. Use the stored `whatWasSent` base when available. Add the new key to the per-call set so it is forgotten later.
+   - **Thumbnails:** if `details.webContentsId`, call `thumbnailReceipts.follow(urlKey(details.url, String(details.webContentsId)), urlKey(details.redirectURL, String(details.webContentsId)))`. No entry is added here, because the next `onBeforeRequest` for the hop logs it (see C).
+   - Must never throw. Wrap the body in try/catch and log with `logAi`.
+5. Only the receipt-backed path is tracked. `downloads:download-url` (no receipt) is unchanged. Keep `validatePublicSourceUrl` on the final URL in `preflightMediaUrl` as it is today.
+
+**C. Late thumbnails go to the receipt that showed them (`src/main.js`, `src/ask.js`)**
+1. Module-level `const thumbnailReceipts = createUrlReceiptTracker({ maxEntries: 1000 })`.
+2. `search:media` handler: after results are available (**both** the fixture branch and the real branch), for each result with a `thumbnailUrl`, `thumbnailReceipts.remember(urlKey(item.thumbnailUrl, String(event.sender.id)), receipt.id)`.
+3. `privacy:start-activity` with `purpose === 'saved-chat-media'`: accept an optional `thumbnailUrls` array from the request. Take at most 200 strings, http(s) only (urlKey returns `''` otherwise), and remember each against the new receipt for `event.sender.id`. In `src/ask.js` (saved-chat restore, ~line 1724), pass `thumbnailUrls` = every `item.thumbnailUrl` of the restored messages' `mediaResults`.
+4. In `recordPrivacyWebRequest`, after `classifyPrivacyRequest` returns `action: 'receipt'` or `'background'` and the request has a `webContentsId`: if `thumbnailReceipts.lookup(urlKey(details.url, String(details.webContentsId)))` returns an id **and** `privacyReceipts.getReceipt(id)` exists, use that id and `addEntry` to it instead of the active or background receipt. Otherwise keep today's behaviour. Web-tab requests are already `ignore`d before this point, so a website can't use this.
+5. `src/ask.js` ~line 623: change `image.loading = 'lazy'` to `image.loading = 'eager'`, so thumbnails load while their receipt is still the active one (fix list #7).
+6. The key is scoped by the Ask/Search tab's `webContents.id`, so the same thumbnail URL in two tabs keeps each tab's own receipt.
+
+**No new network requests.** This only labels requests that already happen. The `whatWasSent` text says what was sent (a validation request), with no cookies or bodies logged.
+
+#### 3. Tests (write first)
+- **`tests/privacy-attribution.test.js`** (extend; already in `npm run check`):
+  - `urlKey`: normalises (`HTTPS://A.example/x` and `https://a.example/x` give the same key), scopes differ, and `data:`/`blob:`/invalid input give `''`.
+  - Tracker: remember/lookup/forget. `follow` chains A→B→C, and all three return the same receipt. `follow` from an unknown key returns `''` and remembers nothing. Eviction at `maxEntries` drops the oldest key.
+- **Electron test**, extending `tests/electron/media-chat.test.js` or a new `tests/electron/receipt-redirects.test.js` (add it to `check:tests` and a `test:electron:receipt-redirects` script if new). Run a local HTTP server on `127.0.0.1` that answers `/redirect.png` with a 302 to `http://localhost:<port>/final.png`, served as `image/png`. In an Ask tab, call `window.sovereign.privacy.startActivity({ requestId: 'r1', type: 'ask', query: 'x' })`, then `window.sovereign.media.preflight({ url: 'http://127.0.0.1:<port>/redirect.png', type: 'images' })` (check the real preload names). Assert receipt `r1` contains entries for **both** hosts `127.0.0.1` and `localhost`.
+  - Note: `validatePublicSourceUrl` rejects loopback. If there is no existing test hook that allows local hosts for media preflight (check `MEDIA_TEST_FIXTURES` and `src/test-hooks.js`), call `fetchForDownloadPreflight`/`preflightDownloadUrl` through an existing test seam, or skip the Electron part and say so in CHANGES. **Do not** weaken `validatePublicSourceUrl` for tests, and do not add a new env-var bypass that works in packaged builds.
+  - Late thumbnail (if practical): register a thumbnail for receipt A via a fixture media search, start receipt B, then append an `<img>` with that thumbnail URL (served by the local server) to the page. Assert the request is in A, not B. If it isn't practical, cover it with the unit tests plus manual step 4 below, and say so in CHANGES.
+
+#### 4. Manual test steps (Sandeep)
+1. `npm run check` passes.
+2. `npm start` with SearXNG running. In Ask AI, turn on **Search the web** and ask `show me pictures of the Eiffel Tower`. When the cards appear, open the Privacy Receipt for that question.
+3. Find a result whose original URL redirects (Wikimedia `commons.wikimedia.org/wiki/Special:FilePath/...` redirects to `upload.wikimedia.org`). Click **Download** on it. The receipt must list `commons.wikimedia.org` **and** `upload.wikimedia.org`, the second labelled "media validation redirect from commons.wikimedia.org". Compare with DevTools (View → Toggle Developer Tools on the Ask page, Network tab): every host there should appear in the receipt.
+4. Late thumbnails: ask an image question, then **immediately** (before every thumbnail has loaded, ideally on a slow network) ask a plain text question. Open the receipt history dropdown. Thumbnail hosts (`image` rows) must be in the image question's receipt, and the text question's receipt must have none.
+5. Turn chat saving on, save a chat with image results, restart, reopen it from Saved chats. The "Saved chat image previews" receipt lists the thumbnail hosts. Then ask a new question: no thumbnail rows move into it.
+
+### CHANGES (Codex)
+
+Implemented the PLAN, tests first:
+- `tests/privacy-attribution.test.js`: added URL normalization/scope/scheme cases, tracker lookup/forget, redirect chains, unknown-source behavior, eviction and re-insertion order, and independent thumbnail ownership across tabs.
+- `src/privacy-attribution.js`: added the bounded pure URL receipt tracker and normalized HTTP(S) keys.
+- `src/main.js`: tracks receipt-backed validation redirect hops through onBeforeRedirect, labels each destination using the stored validation purpose and source host, and cleans up each call's keys in finally. Thumbnail ownership is registered in both media search branches and saved-chat activity, propagated through redirects, and preferred over the active/background receipt when the owning receipt still exists.
+- `src/ask.js`: uses eager thumbnail loading and passes restored thumbnail URLs before rendering a saved chat.
+- `src/privacy-receipt.js`: exported the existing getReceipt helper, required by the PLAN's receipt-existence check (it was previously private).
+
+Validation:
+- Wrote tests before implementation; the first `npm run check` failed because urlKey was not yet implemented. Full `npm run check` passes after implementation.
+- Redirect Electron test skipped as explicitly permitted in PLAN §3: real media preflight rejects loopback; MEDIA_TEST_FIXTURES accepts HTTPS only and bypasses fetching; no existing callable preflight seam is exposed. Public URL validation remains unchanged and no bypass was added.
+- Late-thumbnail integration testing remains manual: existing fixture thumbnails are fixed remote URLs, not a local-server fixture. Unit tests cover per-tab ownership and redirect propagation; they do not prove Electron event ordering.
+- Attempted existing `npm run test:electron:media-chat`; Electron aborted at startup with SIGABRT, before assertions ran. Runtime/visual behavior remains unverified here.
+- No new network request mechanism or cloud AI calls. Existing unrelated working-tree changes were preserved. No commit or push.
+
+Manual testing: follow PLAN §4. Confirm redirected image validation lists both source and destination hosts with the redirect purpose; immediately follow an image question with a text question and check that late thumbnail rows stay with the image receipt; reopen a saved image chat and verify its previews stay in the saved-chat receipt after another question.
+
+
+### REVIEW (Claude)
+Reviewed 2026-11-09. Read the diff of `src/main.js`, `src/privacy-attribution.js`, `src/privacy-receipt.js`, `src/ask.js` and `tests/privacy-attribution.test.js` against the PLAN, then verified the behaviour at runtime with a scratch Electron probe (not in the repo). The probe loads the real `src/main.js`, maps two fake public hostnames (`img-a.example`, `img-b.example`) to a local server with Chromium's `host-resolver-rules`, and stubs Node's `dns.promises.lookup` *in the probe process only* so `validatePublicSourceUrl` accepts them. No app code was bypassed.
+
+**MUST FIX:** none.
+
+**Runtime results (probe):**
+- `media.preflight('http://img-a.example/redir-pre.png')` with a 302 to `img-b.example`: the receipt lists `img-a.example` ("media validation request …") **and** `img-b.example` ("media validation redirect from img-a.example …"). Before this change only `img-a.example` appeared.
+- Late thumbnail: registered `http://img-a.example/redir-thumb.png` (which redirects to `img-b.example`) to receipt A through the saved-chat path, started receipt B, then loaded the `<img>`. **Both hops were logged in A, and B stayed empty.**
+- So `session.fetch` redirects do arrive in `onBeforeRedirect` with no `webContentsId`, and `<img>` hops carry the tab's id, which is what the code assumes.
+
+**SHOULD FIX (follow-ups, not blocking):**
+- **Turn the probe into a permanent Electron test** (`tests/electron/receipt-redirects.test.js`). The `host-resolver-rules` + test-process DNS stub technique avoids any app-side test bypass. Codex skipped the Electron part, as the PLAN permitted, because it had no local-host seam; this is the seam.
+- `whatWasSent` for a hop is built with `base.replace('request', 'redirect from <host>')`. This works for the three current strings, but is fragile if the wording changes. A dedicated label would be cleaner.
+- **Pre-existing, found during this review: `session.fetch`'s `response.url` does not reflect redirects in Electron 38.** The probe's preflight returned the *original* URL as `finalUrl`. So `preflightMediaUrl`'s second `validatePublicSourceUrl(details.finalUrl)` never checks the redirect target, and a public image URL that redirects to a private-network address passes validation. This gap existed before this task. The new `onBeforeRedirect` hook is the natural place to close it, by validating each hop or cancelling via `onBeforeRequest`. See the question below.
+- **Pre-existing, found while planning:** `net.fetch(..., { redirect: 'manual' })` rejects with "Redirect was cancelled" in Electron 38 instead of returning the 3xx. `src/source-reader.js` `fetchPublicPage` relies on manual redirects, so in the real app any source page that redirects (for example `http://` → `https://`) probably fails to read instead of being followed. The unit tests use a fake fetch, so they don't catch it. Worth a hand test: ask a web question whose top source redirects, and check whether it is read.
+
+**QUESTION FOR SANDEEP:** should the two pre-existing redirect problems above (the media preflight's private-network check misses redirect targets; source pages that redirect probably can't be read) become their own tasks? I did not change either here, because both go beyond this task's receipt-only scope, and the safe fix for the first one changes download behaviour.
+
+**OK:**
+- The tracker is pure, bounded (500 / 1000 entries) and unit-tested: normalisation, scopes, chains, eviction, and per-tab ownership.
+- Thumbnail ownership is registered in both `search:media` branches and in the saved-chat restore path. Renderer-supplied URLs are capped at 200, http(s) only, and scoped to the sender's own webContents, so a page can only relabel requests from itself. Web tabs are still ignored before the override.
+- The owning receipt is used only if it still exists (`getReceipt` is now exported); otherwise today's behaviour applies.
+- Preflight keys are cleaned up in `finally`, including keys added by redirects, without removing keys still used by a concurrent call.
+- `loading='eager'` is set as planned. No new network requests: this only labels requests that already happen. `npm run check` passed (exit 0).
+
+## Task: Single instance and dataset profile
+Status: done (reviewed 2026-11-09)
+
+Priority P2, stability. Feature test pass fix list #8 (section 13, known issue 3). Branch: `phase-0/chat-layout` (batch of P2 fixes).
+
+### PLAN (Claude)
+
+#### 1. Root cause
+- `src/main.js` never calls `app.requestSingleInstanceLock()`. A second `npm start` (or a double-click while it's running) starts a second full browser on the **same** profile (`~/Library/Application Support/sovereign-browser/`). Two Chromium processes then fight over `WebStorage/QuotaManager`, LevelDB (`Local Storage`, which once held saved chats) and IndexedDB (the cached model). That gives "Could not open the quota database, resetting" and "Failed to delete the database: Database IO error", and risks corrupting storage.
+- Dataset collection mode (`SOVEREIGN_DATASET_BATCH`, `runDatasetCollection` ~line 4118) also uses the default profile, so running it while the browser is open is the same two-processes-one-profile problem.
+- Electron's single-instance lock is **per userData folder**. Instances with different profiles (every Electron test sets its own `SOVEREIGN_USER_DATA_DIR`, and the dataset profile below) don't block each other, so the lock can always be requested once the path is final.
+
+#### 2. Changes
+**A. Dataset profile helpers, `src/dataset-collection.js`** (pure, already unit-tested by `tests/dataset-collection.test.js`). Add and export:
+- `datasetUserDataDir(appDataDir)` returns `path.join(appDataDir, 'sovereign-browser-dataset')`.
+- `seedDatasetPreferences({ normalPrefsPath, datasetDir, fsImpl = fs })`: if `<datasetDir>/preferences.json` already exists, do nothing and return `false`. Otherwise create `datasetDir` (`recursive`, mode `0o700`). Read `normalPrefsPath` **read-only**. If it parses and has a `search` object, write `{ "search": <that object> }` to `<datasetDir>/preferences.json` (mode `0o600`) and return `true`. A missing or unparseable file means write nothing and return `false`; never throw. Only the `search` section (the SearXNG endpoint) is copied: no chats, bookmarks, session or AI settings. That keeps a user's custom SearXNG endpoint working in dataset mode without sharing any storage.
+
+**B. Profile selection and lock, `src/main.js`**, replacing the block at ~line 231 (`if (process.env.SOVEREIGN_USER_DATA_DIR) …`):
+1. If `SOVEREIGN_USER_DATA_DIR` is set, use it (unchanged; this is what tests use, and it wins in dataset mode too).
+2. Else, if `datasetBatchEnabled`: `const dir = datasetUserDataDir(app.getPath('appData'))`, call `seedDatasetPreferences({ normalPrefsPath: path.join(app.getPath('userData'), 'preferences.json'), datasetDir: dir })` **before** `setPath` (so `getPath('userData')` is still the normal profile), then `app.setPath('userData', dir)`. Log one line: `Dataset collection uses its own profile: <dir>`.
+3. Then, still at top level: `const hasSingleInstanceLock = app.requestSingleInstanceLock();`. If false: `console.log('Sovereign is already running with this profile; focusing the existing window.')` and `app.quit()`.
+4. `app.whenReady().then(...)`: first line `if (!hasSingleInstanceLock) return;`, so the second process creates no windows, sessions or model service, and doesn't touch storage. Also guard `finishPendingLegacyChatDelete` and the rest implicitly via that early return. Check that no other top-level code touches storage before `whenReady`. If something does, guard it with the same flag.
+5. Add `app.on('second-instance', () => focusExistingWindow())`:
+   - In dataset mode: if `datasetWindow` is alive, restore it if minimized, then `show()` and `focus()`.
+   - Otherwise pick the most recently created live window state in `windows` (the last entry of the Map with a non-destroyed `state.window`). If minimized, `restore()`, then `show()` and `focus()`. If there is no window (macOS, all windows closed), call `createWindow()`, the same as `activate`.
+   - Ignore command-line URLs for now (out of scope).
+
+**No new network requests.** No change to how storage is used apart from the dataset profile location.
+
+#### 3. Tests (write first)
+- **`tests/dataset-collection.test.js`** (extend): `datasetUserDataDir('/x/AppSupport')` is `/x/AppSupport/sovereign-browser-dataset`. `seedDatasetPreferences` in a temp dir:
+  - (a) normal prefs with `search.endpoint` + `bookmarks` + `ai`: the seeded file has **only** `search`, and its mode is `0o600`;
+  - (b) a second call doesn't overwrite an edited dataset file, and returns `false`;
+  - (c) a missing normal file returns `false` and doesn't throw;
+  - (d) invalid JSON returns `false`.
+- **New `tests/electron/single-instance.test.js`**, using the orchestrator pattern from `tests/electron/chat-deletion.test.js` (spawn `process.execPath` with `--phase=…`, `ELECTRON_RUN_AS_NODE` removed):
+  - Phase `primary`: set `SOVEREIGN_USER_DATA_DIR` to a temp profile (with the usual test `preferences.json`), `require('../../src/main.js')`, wait for the chrome `index.html` contents. Count `app.on('second-instance')` events and focus calls. Then spawn the `secondary` phase **asynchronously** on the same profile, and wait up to 30 s for it to exit.
+  - Assert: the secondary exits with status 0 within the timeout, the primary saw exactly one `second-instance`, and the primary still has exactly one chrome window (`index.html` contents count unchanged).
+  - Then also spawn a secondary on a **different** temp profile that quits itself once its chrome window exists, and assert it **did** start: its stdout contains a marker the phase prints after ready. That proves separate profiles aren't blocked.
+  - Print a JSON summary with `"ok": true`, then quit.
+  - Add `node --check tests/electron/single-instance.test.js` to `check:tests` and a `test:electron:single-instance` script, like the others.
+  - Don't add a dataset-mode Electron test (it needs SearXNG). The helpers are unit-tested.
+
+#### 4. Manual test steps (Sandeep)
+1. `npm run check` passes. `npm run test:electron:single-instance` passes (run outside the sandbox).
+2. Quit every Sovereign window (Cmd+Q). Check Activity Monitor shows no Sovereign/Electron left, then `npm start`. Note whether the quota/database lines appear. They may still appear **once** if the previous session was force-quit or crashed; that is Chromium repairing itself.
+3. With Sovereign running, run `npm start` again in a second terminal. The second command prints "Sovereign is already running…" and exits within a few seconds. The existing window comes to the front (un-minimize it first to check restore). No second window, and no quota/database errors in either terminal.
+4. Minimize the window, run `npm start` again: the window is restored. On macOS, close all windows (app still in the Dock) and run `npm start` again: one new window opens.
+5. Dataset mode: with the browser still open, run `SOVEREIGN_DATASET_BATCH=<questions file> npm start` (with SearXNG running). It starts (not blocked), prints `Dataset collection uses its own profile: ~/Library/Application Support/sovereign-browser-dataset`, and uses the same SearXNG endpoint as your normal settings. Afterwards your normal browser's saved chats, settings and downloaded model are untouched, and no database errors appear in the browser's terminal.
+6. The dataset profile has its own model cache. Dataset mode doesn't use the local model today, so nothing is downloaded there.
+
+### CHANGES (Codex)
+
+Implemented the PLAN, tests first:
+- `tests/dataset-collection.test.js`: added dataset path, search-only seeding, file/directory permissions, preservation of the normal preferences and an edited dataset file, missing/invalid preferences, absent/null search, and filesystem-error cases.
+- `tests/electron/single-instance.test.js` (new): asynchronous orchestrator/primary/secondary launches verify same-profile exit status, one second-instance event, one focus call, unchanged chrome count, and successful startup on a different profile. Child launches have timeouts and remove ELECTRON_RUN_AS_NODE.
+- `package.json`: registered the Electron test's syntax check and `test:electron:single-instance` command.
+- `src/dataset-collection.js`: added/exported datasetUserDataDir and non-throwing seedDatasetPreferences. Only search settings are copied, with private permissions and exclusive creation to avoid overwriting an existing file.
+- `src/main.js`: explicit profile overrides retain precedence; dataset mode otherwise seeds and selects its separate profile before acquiring the per-profile single-instance lock. A rejected launch quits and skips ready initialization. Second launches restore/show/focus the latest live browser window (or dataset window); a browser with no windows creates one. Audited top-level initialization for storage access; also guarded the before-quit session saver so a rejected instance cannot write preferences during shutdown.
+
+Validation:
+- Tests were written before implementation. Initial `npm run check` failed with `datasetUserDataDir is not a function`, as expected. Full `npm run check` passes after implementation, including the new Electron test's syntax check.
+- Attempted `npm run test:electron:single-instance`; Electron aborted at startup with SIGABRT before assertions ran. Runtime lock/focus behavior is not verified in this sandbox; run this command outside the sandbox as specified in PLAN §4.
+- No dataset-mode Electron test, as specified by the PLAN. No new network requests or cloud AI calls. Existing unrelated edits preserved. No commit or push.
+
+Manual testing: follow PLAN §4: run the Electron test outside the sandbox; launch twice on the normal profile and verify the second exits while the existing window focuses/restores; close all macOS windows and relaunch to verify one opens; run dataset collection alongside the browser and verify the separate profile log and copied SearXNG endpoint, with normal chats/settings/model storage untouched.
+
+### REVIEW (Claude)
+Reviewed 2026-11-09. Read the diff of `src/main.js`, `src/dataset-collection.js`, `tests/dataset-collection.test.js`, `package.json` and the new `tests/electron/single-instance.test.js` against the PLAN.
+
+**MUST FIX:** none.
+
+**SHOULD FIX (minor):**
+- `console.log('Sovereign is already running …')` goes to the terminal only. A double-click launch of a packaged build shows nothing, but the existing window comes to the front, which is the standard macOS behaviour. Fine as is.
+- The PLAN's expected outcome ("stops the quota/database errors") can only be confirmed by hand. A force-quit or crash can still make Chromium repair its quota database once on the next start. That is expected, and the manual steps say so.
+
+**OK:**
+- Order is right: the `SOVEREIGN_USER_DATA_DIR` override, then the dataset profile (seeded **before** `setPath`, so it reads the normal profile's `preferences.json`), then `requestSingleInstanceLock()` on the final path. `app.setName('Sovereign')` runs later in `whenReady`, and userData is already fixed by then, so the normal profile stays `sovereign-browser/`.
+- A rejected instance returns early from `whenReady`, and `before-quit` is also guarded. Without that guard, the rejected instance's `saveOpenSessionNow()` could overwrite the running instance's saved session with an empty one. Codex caught this beyond the PLAN, and it's correct.
+- `focusExistingWindow` restores, shows and focuses the newest live window, creates one if all are closed (macOS), and focuses the dataset window in dataset mode.
+- `seedDatasetPreferences` copies only `search`, uses `0o600` / `0o700` and exclusive create (`wx`), never throws, and never writes to the normal profile. The unit tests cover all four PLAN cases plus a filesystem error.
+- **`npm run test:electron:single-instance` passed** when I ran it outside the sandbox: `{"ok":true,"secondInstances":1,"focusCalls":1,"chromeWindows":1,"differentProfileStarted":true}`.
+- No new network requests. `npm run check` passed.
+
+## Task: Docs: automatic source reading
+Status: done (reviewed 2026-11-09)
+
+Priority P3, docs. Feature test pass fix list #14 (section 6). Docs only. Branch: `phase-0/chat-layout` (batch of P2 fixes).
+
+### PLAN (Claude)
+
+#### 1. Root cause
+Sandeep decided on 2026-11-05 that there is no "Read sources for a fuller answer" button. With **Search the web** on, Ask AI automatically reads up to the top 3 source pages (`src/source-reader.js`: at most 3 pages, 10 s timeout, 1.25 MB cap per page) and answers from them. Each page fetch is listed in the Privacy Receipt as a `source-page` entry. Two docs still describe the button. A search of every `*.md` outside `node_modules` and `docs/HANDOFF.md`, plus `src/*.html` and `src/*.js`, found exactly two places:
+- `README.md` line 132, table row `| Read more source material | Use **Read sources for a fuller answer**, where available |`
+- `docs/privacy-audit.md` line 50, step `3. Use **Read sources for a fuller answer**.` in section 4 "Run a Small Test Script Manually".
+The receipt label `Read sources` in `src/main.js` names the activity, not a button, so it stays (fix list #13).
+
+#### 2. Changes (docs only, change only these lines)
+1. `README.md` line 132: replace the row with
+   `| Read more source material | Turn on **Search the web** in Ask AI. Sovereign automatically reads up to the top 3 source pages and answers from them; each page appears in the Privacy Receipt as a ` + "`source-page`" + ` entry |`
+   Keep the table's two-column format.
+2. `docs/privacy-audit.md` section 4, the numbered list (lines ~48–51):
+   - Step 2 becomes: `2. Run one Ask AI question with **Search the web** enabled. Sovereign reads the top 3 source pages automatically; there is no separate button.`
+   - Delete step 3 (`Use **Read sources for a fuller answer**.`).
+   - Renumber the image step from 4 to 3.
+3. Check the rest of `docs/privacy-audit.md` for anything that relied on the old step 3 (for example "source pages from step 3", or an expected-hosts list). Section 7 currently doesn't mention source pages. If you find a reference, point it at step 2. If there is none, change nothing else.
+4. Don't touch `docs/HANDOFF.md` history, code, or any other file.
+
+#### 3. Tests
+No code change. `npm run check` must still pass. Afterwards, `grep -rn "fuller answer" README.md docs/privacy-audit.md` returns nothing.
+
+#### 4. Manual test steps (Sandeep)
+1. Read the README "Using Sovereign" table and `docs/privacy-audit.md` section 4. They describe automatic reading, the list is numbered 1–3, and nothing mentions a button.
+2. Optional sanity check of the claim: with SearXNG running, ask an Ask AI question with **Search the web** on, and open the receipt. Up to 3 `source-page` entries appear, with no button pressed.
+
+### CHANGES (Codex)
+
+Implemented the docs-only PLAN:
+- `README.md`: replaced the obsolete button instruction with the exact planned automatic-reading wording, preserving the two-column table and documenting `source-page` receipt entries.
+- `docs/privacy-audit.md`: updated step 2, removed the button step, and renumbered the image step to 3. Checked the rest of the guide; no references depended on the removed step, so no other changes were needed.
+
+Validation:
+- Tests first: ran the obsolete-wording absence check before editing; it failed as expected on both old passages. After editing, the same check passed with no matches for `fuller answer` in either file.
+- `npm run check` passed. No code or test files changed; existing unrelated edits were preserved. No commit or push.
+
+Manual testing: read the README “Using Sovereign” table and audit section 4; confirm automatic reading and numbering 1–3. Optionally ask a web-enabled question with SearXNG running and confirm up to 3 `source-page` receipt entries without pressing a separate button. This optional runtime check was not performed.
+
+### REVIEW (Claude)
+Reviewed 2026-11-09. Read the diff of `README.md` and `docs/privacy-audit.md`.
+
+**MUST FIX:** none.
+
+**SHOULD FIX:** none. (Wording nit: the README says "up to the top 3" and the audit says "the top 3". Both are accurate, because fewer pages are read when fewer results exist or a page fails. I left them as the PLAN specified.)
+
+**OK:** Only the two planned lines changed. The audit list is renumbered 1–3, and section 7 didn't rely on the old step 3. `grep "fuller answer"` on both files returns nothing. No code changed. `npm run check` passed.
+
+## Task: Pending deletion notice
+Status: done (reviewed 2026-11-09)
+
+Priority P3, usability. Feature test pass fix list #15 (Saved chat deletion, known limit "Repeated cleanup failure"). Branch: `phase-0/chat-layout` (batch of P2 fixes).
+
+### PLAN (Claude)
+
+#### 1. Root cause
+- When removing chats saved by an older version fails, `deleteAllSavedChats` returns `legacyPending: true`, and Ask AI / Settings show a one-off status line: "Chats saved by an older version could not be removed yet; Sovereign will try again the next time it starts." (`LEGACY_DELETE_PENDING_TEXT` in `src/ask.js` ~line 1595, and the same text in `src/settings.js` ~line 159).
+- On the next start, `finishPendingLegacyChatDelete()` (`src/main.js` ~line 4985) retries in the background. If it fails **again**, the result is only logged to the console. `chat-deletions.json` keeps `legacyDeletePending: true`, but no UI ever reads it. `savedChatSnapshot()` doesn't include it, and Settings has no way to ask. So a cleanup that keeps failing is invisible to the user. Deletion still wins (the chats can't come back), so this is a usability/trust problem, not a data leak.
+
+#### 2. Changes
+**`src/main.js`**
+1. A counter `legacyRemovalsInFlight`, incremented and decremented (in `finally`) around the body of `removeLegacyChatKeySafely()`.
+2. `function legacyDeleteNoticeVisible()` returns `chatStore().legacyDeletePending() && legacyRemovalsInFlight === 0`. If `legacyDeletePending()` throws, treat it as `false` and log; never break `chats:list`.
+3. `savedChatSnapshot()` adds `legacyPending: legacyDeleteNoticeVisible()`. That way it reaches Ask AI through `chats:list` and the existing `chats:changed` broadcast.
+4. `broadcastSavedChats()` also sends `chats:legacy-status` with `{ legacyPending }` (**only** that field, no chat titles) to every live tab whose `kind === 'settings'`.
+5. New `ipcMain.handle('chats:legacy-status', event => { chatSenderTab(event, ['ask', 'settings']); return { legacyPending: legacyDeleteNoticeVisible() }; })`.
+6. `finishPendingLegacyChatDelete()`: after `removeLegacyChatKeySafely()` resolves (success **or** failure), call `broadcastSavedChats()`, so open pages update when the startup retry finishes. Also call `broadcastSavedChats()` after `removeLegacyChatKeySafely()` in `deleteAllSavedChats` (it already broadcasts before), and in the `chats:legacy-removed` handler after `legacyDeleteDone()`.
+
+**`src/preload.js`**: under `chats`, add `legacyStatus: () => ipcRenderer.invoke('chats:legacy-status')` and `onLegacyStatus(callback)`, using the same listener and unsubscribe pattern as `onChanged`, on channel `chats:legacy-status`.
+
+**`src/ask.html` / `src/ask.js`**
+- Add `<p class="legacy-delete-notice" id="legacy-delete-notice" role="status" hidden></p>` as a direct child of `.ask-page`, right after `#chat-history-panel` (before `#chat-thread`). It must not be inside the history panel, because that panel is hidden when saving is off.
+- In `applySavedChats(snapshot)`: set the notice's text to the pending message (reuse `LEGACY_DELETE_PENDING_TEXT.trim()`) and `hidden = !snapshot?.legacyPending`.
+
+**`src/settings.html` / `src/settings.js`**
+- Add the same `<p class="legacy-delete-notice" id="legacy-delete-notice" role="status" hidden>` directly under the "Save chats on this device" checkbox row.
+- On load, call `window.sovereign.chats.legacyStatus()` and render it, and subscribe with `onLegacyStatus`. Render the same text and the same hidden logic. Wrap the load in try/catch; on error, leave it hidden.
+
+**`src/styles.css`**: one small rule `.legacy-delete-notice { margin: 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); font-size: 13px; }` plus `.legacy-delete-notice[hidden] { display: none; }`. Use existing tokens only. In Ask AI it is a direct child of `.ask-page`, so the Task 1 flex rule gives it natural height. No other layout change.
+
+**No new network requests.**
+
+#### 3. Tests (write first)
+Extend `tests/electron/chat-deletion.test.js` (orchestrator plus phases). Add two phases, run by the orchestrator **after** the existing `verify` phase on the same profile, so existing assertions are untouched:
+1. **`pending-notice`**, with `SOVEREIGN_TEST_LEGACY_REMOVE=fail`. Before `require('../../src/main.js')`, read `<profile>/chat-deletions.json`, set `legacyDeletePending: true`, and write it back, keeping `deletedIds` and the existing file mode. After `verify`, the legacy localStorage key is already gone. That is deliberate: the Ask page then has nothing to migrate and can't clear the pending flag itself, so the notice must come from main's state. Then start the app, so the startup retry runs and fails because of the test hook. Then:
+   - Open **Settings**. `waitFor` `#legacy-delete-notice` to be visible (`!hidden`) with text containing "could not be removed yet".
+   - Open **Ask AI**. `waitFor` the same in its `#legacy-delete-notice`.
+   - Assert `chat-deletions.json` still has `legacyDeletePending: true`.
+2. **`pending-cleared`**, with no test hook. Start the app. The startup retry succeeds (the key is already absent, so `removeItem` and the check succeed). Open Settings and Ask AI, and `waitFor` both notices to be hidden. Assert `chat-deletions.json` has `legacyDeletePending: false`.
+After both phases, re-run the existing marker scan (or call the same scan helper), so the extra launches restore nothing.
+**Also fix a flaky assertion in the same test (found during Task 4's regression run, 2 failures in 3 runs, unrelated to this batch's product code):** in phase `main`, step 5 (~line 406), `clearStatus` is read with `waitFor(() => …textContent)`, which returns the first **non-empty** status. That is often the stale "Saved chat deleted." from the earlier single delete, because the file disappears before the Clear IPC returns and `setStatus` runs. Change it to wait until the status equals `Deleted ${FRAGMENTS_TEXT}` (with the normal `waitFor` timeout), and keep the same `expect` message if the wait times out (report the last status seen). Change no other existing assertion.
+
+Run `npm run test:electron:chat-deletion` if Electron starts in your environment. If it aborts (SIGABRT in the sandbox), say so in CHANGES; Claude will run it outside the sandbox.
+
+#### 4. Manual test steps (Sandeep)
+1. `npm run check` passes. `npm run test:electron:chat-deletion` passes (outside the sandbox).
+2. On a disposable profile copy with chats from an older build: `SOVEREIGN_USER_DATA_DIR=/tmp/sov-pending SOVEREIGN_TEST_LEGACY_REMOVE=fail npm start`. In Settings, turn saving off and choose Delete. The status mentions it could not be removed yet.
+3. Quit, then start again **with the same fail variable**. Without doing anything, open Settings: a boxed notice under "Save chats on this device" says chats saved by an older version could not be removed yet. Open Ask AI: the same notice appears above the conversation. (Opening Ask AI may itself remove the old data, in which case the notice disappears from both pages within a moment. That's correct: nothing is pending any more.)
+4. Quit and start **without** the variable. After a moment the notices are gone in both pages, and `chat-deletions.json` shows `"legacyDeletePending": false`.
+5. Normal profile, nothing pending: no notice in either page, and no layout change in Ask AI.
+
+### CHANGES (Codex)
+
+Implemented the PLAN, tests first:
+- `tests/electron/chat-deletion.test.js`: added `pending-notice` and `pending-cleared` launches after `verify`, on the same profile. The pending fixture preserves the deletion record's other fields and existing file mode. Both phases check Settings and Ask AI notices and the persisted pending flag; the existing final marker scan runs afterwards. Fixed Clear history's stale-status race by waiting for the exact expected wording, retaining the original failure message and last observed status.
+- `src/main.js`: tracks legacy removals in flight with a finally decrement; exposes an exception-safe pending-notice helper in saved-chat snapshots and restricted Ask/Settings status IPC. Settings broadcasts contain only `legacyPending`. Broadcasts now follow startup retries, bulk deletion cleanup, and Ask AI's legacy-removal acknowledgement.
+- `src/preload.js`: added `legacyStatus` and `onLegacyStatus` with listener unsubscribe support.
+- `src/ask.html`, `src/ask.js`: added the status notice outside the history panel, immediately before the conversation; saved-chat snapshots control its visibility and reuse the existing pending message.
+- `src/settings.html`, `src/settings.js`: added the notice below the saving checkbox, initial status loading with error handling, and live status subscription. Reused the same wording for the notice and deletion status.
+- `src/styles.css`: added only the planned notice styling and hidden rule using existing tokens.
+
+Validation:
+- Wrote the Electron tests before product changes. `npm run check` passed with tests added and again after implementation.
+- Attempted `npm run test:electron:chat-deletion` before and after implementation. Both attempts built successfully, then Electron aborted with SIGABRT before any assertions ran. Runtime behavior still needs verification outside this sandbox; no red/green runtime result is claimed.
+- `git diff --check` passed. No new network requests or cloud AI calls. Preserved existing unrelated edits. No commit or push.
+
+Manual testing: follow PLAN §4 on a disposable profile: force legacy removal to fail, delete old chats, restart with the failure variable and confirm both notices appear; restart without it and confirm both disappear and the pending flag is false. Also confirm a normal profile shows no notice or Ask AI layout change. Run `npm run test:electron:chat-deletion` outside the sandbox.
+
+### REVIEW (Claude)
+Reviewed 2026-11-09. Read the diff of `src/main.js`, `src/preload.js`, `src/ask.html`, `src/ask.js`, `src/settings.html`, `src/settings.js`, `src/styles.css` and `tests/electron/chat-deletion.test.js` against the PLAN.
+
+**MUST FIX:** none.
+
+**SHOULD FIX (minor):**
+- `LEGACY_DELETE_PENDING_TEXT` is now defined in both `ask.js` and `settings.js` (Settings' existing inline copy was replaced by the constant). The pages share no module, so this is acceptable; keep the two in sync if the wording changes.
+- In the `pending-cleared` phase, the notice starts hidden, so the hidden check alone could pass before the startup retry finishes. The phase also waits for `legacyDeletePending === false` in `chat-deletions.json`, so the phase as a whole still proves the cleanup.
+
+**OK:**
+- `savedChatSnapshot()` carries `legacyPending`, which is shown only when pending **and** no removal is in flight. So the notice doesn't flash during the startup retry. Settings tabs receive only `{ legacyPending }`, with no chat titles. The new `chats:legacy-status` IPC is limited to Ask AI and Settings by `chatSenderTab`.
+- Broadcasts happen after the startup retry, after the bulk-delete removal, and after `chats:legacy-removed`, so open pages update either way.
+- The Ask notice is a direct child of `.ask-page` (natural height under Task 1's flex rule), outside the history panel. The Settings notice sits under the checkbox. Both use `role="status"` and existing colour tokens.
+- The flaky Clear-history assertion now waits for the exact expected text.
+- **`npm run test:electron:chat-deletion` passed twice in a row** when I ran it outside the sandbox (`"ok": true`), including the new `pending-notice` and `pending-cleared` phases and the final marker scan. Before the fix, the same test failed 2 of 3 runs on the stale status.
+- No new network requests. `npm run check` passed.
+
+## Batch summary
+Batch of P2 fixes on `phase-0/chat-layout`, run 2026-11-09. Claude planned and reviewed every task, Codex built every task, and Claude ran all the Electron tests outside the sandbox. Nothing was committed.
+
+| # | Task | Status | Built by | Files changed |
+|---|---|---|---|---|
+| 1 | Chat layout overlap | DONE | Codex (before this run) | `src/styles.css` |
+| 2 | Address bar input | DONE | Codex | `src/address-input.js` (new), `src/main.js`, `src/newtab.js`, `package.json`, `tests/address-input.test.js` (new), `tests/electron/browser-features.test.js` |
+| 3 | Receipt: image redirects and late thumbnails | DONE (2 pre-existing issues raised as a question) | Codex | `src/privacy-attribution.js`, `src/privacy-receipt.js`, `src/main.js`, `src/ask.js`, `tests/privacy-attribution.test.js` |
+| 4 | Single instance and dataset profile | DONE | Codex | `src/main.js`, `src/dataset-collection.js`, `package.json`, `tests/dataset-collection.test.js`, `tests/electron/single-instance.test.js` (new) |
+| 5 | Docs: automatic source reading | DONE | Codex | `README.md`, `docs/privacy-audit.md` |
+| 6 | Pending deletion notice | DONE | Codex | `src/main.js`, `src/preload.js`, `src/ask.html`, `src/ask.js`, `src/settings.html`, `src/settings.js`, `src/styles.css`, `tests/electron/chat-deletion.test.js` |
+
+**Test results (final):**
+- `npm run check`: exit 0. It includes the new `tests/address-input.test.js` and the extended privacy-attribution and dataset-collection unit tests.
+- Electron, run outside the sandbox (Codex's sandbox aborts Electron with SIGABRT): `browser-features`, `single-instance`, `chat-deletion` (passed twice), `media-chat`, `ui-smoke`, `permissions`, `stage1-usability` and `home-attachments` all passed.
+- Scratch probes, not in the repo: the Ask AI layout at 3 window sizes × 3 panel states (no overlap), and receipt redirect/thumbnail attribution against a local server (both hosts listed; late thumbnail kept in its own receipt).
+
+**Open questions for Sandeep:**
+1. (Task 3) Two **pre-existing** redirect problems were found. Should they become their own tasks? (a) In Electron 38, `session.fetch` doesn't update `response.url` after a redirect, so the media preflight's "final URL must be public" check never sees the redirect target; a public image URL that redirects to a private address passes. (b) `net.fetch(..., { redirect: 'manual' })` rejects ("Redirect was cancelled") instead of returning the 3xx, so `source-reader.js` probably can't read any source page that redirects.
+2. (Task 1, follow-up) In short windows, the bottom stack (controls + attachment drop zone + composer) takes about 300px. Should the drop zone collapse to one line until it's used?
+
+**Answered (Sandeep, 2026-11-09):** Q1 yes, now fix list #16 "Safe redirect handling" (P1, high priority). Q2 yes, now fix list #17 "Compact drop zone" (P3). No code was changed for either yet.
+
+**Manual tests to run in the app:** see the "Manual tests" list in the chat summary for this batch, which is the same as each task's PLAN §4. In short: (1) long chat, receipt open, image cards, and 3 window sizes; (2) address bar and New Tab inputs; (3) the Wikimedia redirect download and a fast image→text question; (4) a second `npm start`, minimise/restore, and dataset mode alongside the browser; (5) read the README table and the audit steps; (6) the pending notice with `SOVEREIGN_TEST_LEGACY_REMOVE=fail` on a disposable profile.
