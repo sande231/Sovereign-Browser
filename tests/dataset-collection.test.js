@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { collectDataset } = require('../src/dataset-collection');
+const { collectDataset, datasetUserDataDir, seedDatasetPreferences } = require('../src/dataset-collection');
 const utils = require('../src/search-utils');
 
 (async () => {
@@ -10,6 +10,28 @@ const utils = require('../src/search-utils');
   const previousDelay = process.env.SOVEREIGN_DATASET_DELAY_MS;
   delete process.env.SOVEREIGN_DATASET_DELAY_MS;
   try {
+    assert.equal(datasetUserDataDir('/x/AppSupport'), '/x/AppSupport/sovereign-browser-dataset');
+    const normalPrefsPath = path.join(dir, 'normal.json');
+    const datasetDir = path.join(dir, 'dataset');
+    const seededPath = path.join(datasetDir, 'preferences.json');
+    const normal = JSON.stringify({ search: { endpoint: 'http://localhost:9090' }, bookmarks: ['private'], ai: { saveChatsOnDevice: true } });
+    fs.writeFileSync(normalPrefsPath, normal);
+    assert.equal(seedDatasetPreferences({ normalPrefsPath, datasetDir }), true);
+    assert.deepEqual(JSON.parse(fs.readFileSync(seededPath, 'utf8')), { search: { endpoint: 'http://localhost:9090' } });
+    assert.equal(fs.statSync(seededPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(datasetDir).mode & 0o777, 0o700);
+    assert.equal(fs.readFileSync(normalPrefsPath, 'utf8'), normal);
+    fs.writeFileSync(seededPath, '{"search":{"endpoint":"edited"}}');
+    assert.equal(seedDatasetPreferences({ normalPrefsPath, datasetDir }), false);
+    assert.equal(fs.readFileSync(seededPath, 'utf8'), '{"search":{"endpoint":"edited"}}');
+    for (const [name, contents] of [['missing', null], ['invalid', '{'], ['no-search', '{}'], ['null-search', '{"search":null}']]) {
+      const source = path.join(dir, name + '.json');
+      const target = path.join(dir, name);
+      if (contents !== null) fs.writeFileSync(source, contents);
+      assert.equal(seedDatasetPreferences({ normalPrefsPath: source, datasetDir: target }), false);
+      assert.equal(fs.existsSync(path.join(target, 'preferences.json')), false);
+    }
+    assert.equal(seedDatasetPreferences({ normalPrefsPath, datasetDir, fsImpl: { existsSync() { throw new Error('denied'); } } }), false);
     const questionsPath = path.join(dir, 'questions.txt');
     const outputPath = path.join(dir, 'output.jsonl');
     fs.writeFileSync(questionsPath, 'First?\n\nEmpty?\nThird?\n');

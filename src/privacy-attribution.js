@@ -104,7 +104,40 @@ function receiptCategoryForAppRequest({ resourceType, tabKind, baseCategory }) {
     : baseCategory;
 }
 
+function urlKey(url, scope = '') {
+  try {
+    const parsed = new URL(url);
+    return ['http:', 'https:'].includes(parsed.protocol) ? `${scope} ${parsed.href}` : '';
+  } catch {
+    return '';
+  }
+}
+
+function createUrlReceiptTracker({ maxEntries = 500 } = {}) {
+  const entries = new Map();
+  const limit = Number.isFinite(maxEntries) ? Math.max(0, Math.floor(maxEntries)) : 500;
+  function remember(key, receiptId) {
+    if (!key) return;
+    entries.delete(key);
+    entries.set(key, receiptId);
+    while (entries.size > limit) entries.delete(entries.keys().next().value);
+  }
+  function lookup(key) { return entries.get(key) || ''; }
+  return {
+    remember,
+    lookup,
+    forget(key) { entries.delete(key); },
+    follow(fromKey, toKey) {
+      const receiptId = lookup(fromKey);
+      if (receiptId) remember(toKey, receiptId);
+      return receiptId;
+    }
+  };
+}
+
 module.exports = {
+  createUrlReceiptTracker,
+  urlKey,
   receiptCategoryForAppRequest,
   IGNORED_SCHEMES,
   classifyPrivacyRequest,

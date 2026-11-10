@@ -21,6 +21,7 @@ const modelStatus = document.querySelector('#model-status');
 const downloadModelButton = document.querySelector('#download-model');
 const chatHistoryPanel = document.querySelector('#chat-history-panel');
 const chatHistoryList = document.querySelector('#chat-history-list');
+const chatHistoryToggle = document.querySelector('#chat-history-toggle');
 const clearChatHistoryButton = document.querySelector('#clear-chat-history');
 const privacyReceiptToggle = document.querySelector('#privacy-receipt-toggle');
 const privacyReceiptPanel = document.querySelector('#privacy-receipt-panel');
@@ -59,6 +60,8 @@ let chatId = messageId();
 let saveChatsOnDevice = false;
 let savedChatList = [];
 let savedChatsUnreadable = false;
+let chatHistoryExpanded = null;
+let dragDepth = 0;
 let closeDeletedChatWhenIdle = false;
 const deletedChatIds = new Set();
 let mediaTurns = [];
@@ -620,7 +623,7 @@ function renderMediaCards(container, message) {
       const image = document.createElement('img');
       image.src = item.thumbnailUrl;
       image.alt = item.title || `Media result ${index + 1}`;
-      image.loading = 'lazy';
+      image.loading = 'eager';
       image.decoding = 'async';
       image.referrerPolicy = 'no-referrer';
       image.addEventListener('error', () => { preview.textContent = 'Preview unavailable'; }, { once: true });
@@ -785,6 +788,7 @@ function shouldAutoScroll() {
 
 function renderThread(options = {}) {
   const autoScroll = options.forceScroll || shouldAutoScroll();
+  document.body.classList.toggle('ask-has-messages', messages.length > 0);
   chatThread.replaceChildren();
   if (messages.length === 0) {
     const empty = document.createElement('div');
@@ -801,6 +805,7 @@ function renderThread(options = {}) {
   retryButton.disabled = running || !lastRequest;
   exportMarkdownButton.disabled = running || !lastAssistantMessage();
   exportPdfButton.disabled = running || !lastAssistantMessage();
+  updateChatHistoryDisclosure();
 }
 
 function updateAssistant(id, patch) {
@@ -1221,8 +1226,13 @@ async function extractAttachment(file, item) {
   };
 }
 
+function updateAttachmentPanelCompact() {
+  attachmentPanel.classList.toggle('compact', attachments.length === 0 && dragDepth === 0);
+}
+
 function renderAttachments() {
   attachmentPanel.hidden = false;
+  updateAttachmentPanelCompact();
   attachmentList.replaceChildren();
   attachments.forEach(item => {
     const row = document.createElement('div');
@@ -1562,8 +1572,11 @@ function closeDeletedChat() {
   renderThread({ forceScroll: true });
 }
 
-// snapshot: { chats, unreadable } from the main process.
+// snapshot: { chats, unreadable, legacyPending } from the main process.
 function applySavedChats(snapshot) {
+  const notice = document.querySelector('#legacy-delete-notice');
+  notice.textContent = LEGACY_DELETE_PENDING_TEXT.trim();
+  notice.hidden = !snapshot?.legacyPending;
   const list = Array.isArray(snapshot) ? snapshot : snapshot?.chats;
   const next = Array.isArray(list) ? list : [];
   savedChatsUnreadable = Boolean(snapshot?.unreadable);
@@ -1678,6 +1691,18 @@ async function persistCurrentChat() {
   }
 }
 
+function chatHistoryIsExpanded() {
+  return savedChatsUnreadable || (chatHistoryExpanded ?? messages.length === 0);
+}
+
+function updateChatHistoryDisclosure() {
+  const expanded = chatHistoryIsExpanded();
+  chatHistoryList.hidden = !expanded;
+  chatHistoryToggle.setAttribute('aria-expanded', String(expanded));
+  chatHistoryToggle.textContent = savedChatList.length ? `Saved chats (${savedChatList.length})` : 'Saved chats';
+  chatHistoryPanel.classList.toggle('collapsed', !expanded);
+}
+
 function renderChatHistory() {
   if (!chatHistoryPanel || !chatHistoryList) {
     return;
@@ -1689,6 +1714,7 @@ function renderChatHistory() {
   if (chatHistoryPanel.hidden) {
     return;
   }
+  updateChatHistoryDisclosure();
   chatHistoryList.replaceChildren();
   if (savedChatsUnreadable) {
     const notice = document.createElement('div');
@@ -1725,7 +1751,8 @@ function renderChatHistory() {
         const requestId = messageId();
         try {
           await window.sovereign.privacy.startActivity({
-            requestId, type: 'ask', purpose: 'saved-chat-media', query: '', localOnly: false
+            requestId, type: 'ask', purpose: 'saved-chat-media', query: '', localOnly: false,
+            thumbnailUrls: restored.flatMap(message => (message.mediaResults || []).map(item => item.thumbnailUrl))
           });
           selectPrivacyReceiptForActivity(requestId);
         } catch {
@@ -1734,6 +1761,7 @@ function renderChatHistory() {
       }
       chatId = chat.id || messageId();
       messages = restored;
+      chatHistoryExpanded = null;
       mediaTurns = restored.filter(message => message.action?.type === 'answer-text' && message.mediaResults?.length).slice(-8).map(message => ({
         id: message.id,
         type: message.mediaResults[0].type,
@@ -2549,6 +2577,7 @@ async function handleModelSetupButton() {
 
 function newChat() {
   persistCurrentChat();
+  chatHistoryExpanded = null;
   attachments.forEach(item => {
     if (item.status === 'extracting' && typeof item.cancel === 'function') {
       item.cancel();
@@ -2625,6 +2654,22 @@ newChatButton.addEventListener('click', newChat);
 attachmentInput.addEventListener('change', () => {
   addFiles(attachmentInput.files).catch(error => setStatus(error.message, true));
 });
+document.addEventListener('dragenter', event => {
+  if (Array.from(event.dataTransfer?.types || []).includes('Files')) {
+    dragDepth += 1;
+    updateAttachmentPanelCompact();
+  }
+});
+document.addEventListener('dragleave', () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) updateAttachmentPanelCompact();
+});
+for (const type of ['drop', 'dragend']) {
+  document.addEventListener(type, () => {
+    dragDepth = 0;
+    updateAttachmentPanelCompact();
+  });
+}
 attachmentDropZone.addEventListener('dragover', event => {
   event.preventDefault();
   attachmentDropZone.classList.add('drag-over');
@@ -2647,6 +2692,10 @@ downloadModelButton.addEventListener('click', () => {
   handleModelSetupButton().catch(error => {
     setStatus(error.message, true);
   });
+});
+chatHistoryToggle.addEventListener('click', () => {
+  chatHistoryExpanded = !chatHistoryIsExpanded();
+  updateChatHistoryDisclosure();
 });
 clearChatHistoryButton.addEventListener('click', async () => {
   clearChatHistoryButton.disabled = true;

@@ -397,6 +397,7 @@ searchForm.addEventListener('submit', async event => {
     question,
     mode,
     autoRun: true,
+    ...(attachments.length === 0 ? { navigateIfAddress: true } : {}),
     handoffId
   });
 });

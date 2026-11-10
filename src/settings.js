@@ -8,6 +8,8 @@ const modelSelect = document.querySelector('#settings-model-select');
 const modelDetails = document.querySelector('#settings-model-details');
 const autoModel = document.querySelector('#settings-auto-model');
 const saveChats = document.querySelector('#settings-save-chats');
+const legacyDeleteNotice = document.querySelector('#legacy-delete-notice');
+const LEGACY_DELETE_PENDING_TEXT = ' Chats saved by an older version could not be removed yet; Sovereign will try again the next time it starts.';
 const startModelButton = document.querySelector('#settings-start-model');
 const cancelModelButton = document.querySelector('#settings-cancel-model');
 const restoreSession = document.querySelector('#settings-restore-session');
@@ -156,7 +158,7 @@ saveChats.addEventListener('change', async () => {
           : result.unreadable ? 'Unreadable saved chat history deleted' : 'Saved chat history deleted';
         message = `Chat saving turned off. ${what} from Sovereign's storage. Chromium may keep fragments in its internal files until it cleans them up.`;
         if (result.legacyPending) {
-          message += ' Chats saved by an older version could not be removed yet; Sovereign will try again the next time it starts.';
+          message += LEGACY_DELETE_PENDING_TEXT;
         }
       } else if (result.kept) {
         message = 'Chat saving turned off. Saved chats were kept; delete them from Ask AI with Clear history.';
@@ -269,3 +271,19 @@ loadSettings().catch(error => {
 window.sovereign.modelSetup.onState(state => {
   renderAiSettings(state.settings, state);
 });
+
+function renderLegacyStatus(snapshot) {
+  legacyDeleteNotice.textContent = LEGACY_DELETE_PENDING_TEXT.trim();
+  legacyDeleteNotice.hidden = !snapshot?.legacyPending;
+}
+
+async function loadLegacyStatus() {
+  try {
+    renderLegacyStatus(await window.sovereign.chats.legacyStatus());
+  } catch {
+    // Leave the notice hidden if the initial status cannot be read.
+  }
+}
+
+window.sovereign.chats.onLegacyStatus(renderLegacyStatus);
+loadLegacyStatus();

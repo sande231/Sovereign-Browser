@@ -3,6 +3,24 @@ const path = require('node:path');
 const os = require('node:os');
 const { SEARCH_ANSWER_VERSION, buildSourceAnswerMessages } = require('./search-utils');
 
+function datasetUserDataDir(appDataDir) {
+  return path.join(appDataDir, 'sovereign-browser-dataset');
+}
+
+function seedDatasetPreferences({ normalPrefsPath, datasetDir, fsImpl = fs }) {
+  try {
+    const destination = path.join(datasetDir, 'preferences.json');
+    if (fsImpl.existsSync(destination)) return false;
+    fsImpl.mkdirSync(datasetDir, { recursive: true, mode: 0o700 });
+    const preferences = JSON.parse(fsImpl.readFileSync(normalPrefsPath, 'utf8'));
+    if (!preferences?.search || typeof preferences.search !== 'object' || Array.isArray(preferences.search)) return false;
+    fsImpl.writeFileSync(destination, JSON.stringify({ search: preferences.search }), { mode: 0o600, flag: 'wx' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function expandPath(value) {
   return path.resolve(value.startsWith('~/') ? path.join(os.homedir(), value.slice(2)) : value);
 }
@@ -149,4 +167,4 @@ async function collectDataset({ questionsPath, outputPath, query, readSources,
   }
 }
 
-module.exports = { collectDataset, completedIds, expandPath };
+module.exports = { collectDataset, completedIds, expandPath, datasetUserDataDir, seedDatasetPreferences };

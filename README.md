@@ -129,7 +129,7 @@ The local search service must be running for searches through this endpoint to s
 | Search the web | Choose **Search** and enter a query |
 | Ask a question | Choose **Ask AI** and send a message |
 | Research with online evidence | Enable web retrieval in Ask AI |
-| Read more source material | Use **Read sources for a fuller answer**, where available |
+| Read more source material | Turn on **Search the web** in Ask AI. Sovereign automatically reads up to the top 3 source pages and answers from them; each page appears in the Privacy Receipt as a `source-page` entry |
 | Ask about a document | Attach a supported file and wait for extraction |
 | Find an image | Request an image and enable image retrieval when prompted |
 | Save an image | Use **Download** on the selected image card |

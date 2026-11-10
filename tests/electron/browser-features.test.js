@@ -135,6 +135,19 @@ async function main() {
   await chrome.executeJavaScript(`window.sovereign.detachTab(${beforeDetachState.activeTabId}, { screenX: 520, screenY: 160 })`, true);
   await waitFor(() => chromeContents().length >= 2 ? true : null);
 
+  await chrome.executeJavaScript('window.sovereign.newTab()', true);
+  const home = await waitFor(() => contentsByUrl('sovereign://newtab/'));
+  await waitFor(() => home.executeJavaScript("Boolean(document.querySelector('#home-query'))", true));
+  const typedAddress = `127.0.0.1:${server.address().port}/home-typed`;
+  await home.executeJavaScript(`
+    document.querySelector('#home-query').value = ${JSON.stringify(typedAddress)};
+    document.querySelector('#home-search').requestSubmit();
+  `, true);
+  await waitFor(() => liveContents().some(contents => contents.getURL() === `http://${typedAddress}`));
+  if (liveContents().some(contents => contents.getURL().startsWith('sovereign://search'))) {
+    throw new Error('New Tab sent a typed address to Search.');
+  }
+
   console.log(JSON.stringify({
     profile,
     bookmarkCount: bookmarks.bookmarks.length,

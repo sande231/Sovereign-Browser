@@ -350,6 +350,7 @@ module.exports = {
   fetchWithReceipt,
   getOrCreateBackgroundReceipt,
   getLatestReceipt,
+  getReceipt,
   getReceipts,
   resetForTests,
   onUpdate

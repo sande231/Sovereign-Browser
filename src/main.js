@@ -3,6 +3,9 @@ const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const packageMetadata = require('../package.json');
 const {
+  classifyAddressInput, normalizeAddress, normalizeInternalUrl, normalizeSearchQuestion, looksLikeHostAddress
+} = require('./address-input');
+const {
   app,
   BaseWindow,
   BrowserWindow,
@@ -33,14 +36,21 @@ const privacyReceipts = require('./privacy-receipt');
 const { createPermissionController } = require('./permission-policy');
 const { createChatStore, legacyChatIds, parseLegacyChats } = require('./chat-store');
 const { testHook } = require('./test-hooks');
+const { datasetUserDataDir, seedDatasetPreferences } = require('./dataset-collection');
 const datasetBatchEnabled = Boolean(process.env.SOVEREIGN_DATASET_BATCH);
 let datasetWindow = null;
 const {
   IGNORED_SCHEMES: PRIVACY_RECEIPT_IGNORED_SCHEMES,
   classifyPrivacyRequest,
   receiptCategoryForAppRequest,
+  createUrlReceiptTracker,
+  urlKey,
   originFromUrl
 } = require('./privacy-attribution');
+
+const preflightRedirects = createUrlReceiptTracker();
+const preflightRedirectDetails = new Map();
+const thumbnailReceipts = createUrlReceiptTracker({ maxEntries: 1000 });
 
 const UI_HEIGHT = 92;
 const UI_HEIGHT_COMPACT = 174;
@@ -221,7 +231,39 @@ function pruneAskHandoffs() {
 
 if (process.env.SOVEREIGN_USER_DATA_DIR) {
   app.setPath('userData', process.env.SOVEREIGN_USER_DATA_DIR);
+} else if (datasetBatchEnabled) {
+  const dir = datasetUserDataDir(app.getPath('appData'));
+  seedDatasetPreferences({ normalPrefsPath: path.join(app.getPath('userData'), 'preferences.json'), datasetDir: dir });
+  app.setPath('userData', dir);
+  console.log(`Dataset collection uses its own profile: ${dir}`);
 }
+
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  console.log('Sovereign is already running with this profile; focusing the existing window.');
+  app.quit();
+}
+
+function focusExistingWindow() {
+  if (!hasSingleInstanceLock) return;
+  let target;
+  if (datasetBatchEnabled) {
+    target = datasetWindow;
+  } else {
+    target = [...windows.values()].reverse().find(state => !state.window.isDestroyed())?.window;
+    if (!target) {
+      createWindow();
+      return;
+    }
+  }
+  if (target && !target.isDestroyed()) {
+    if (target.isMinimized()) target.restore();
+    target.show();
+    target.focus();
+  }
+}
+
+app.on('second-instance', () => focusExistingWindow());
 
 const logStreams = new Map();
 
@@ -386,86 +428,6 @@ function setupInternalProtocol() {
   });
 }
 
-function normalizeInternalUrl(input) {
-  let parsed;
-  try {
-    parsed = new URL(String(input || ''));
-  } catch {
-    return null;
-  }
-
-  if (parsed.protocol !== 'sovereign:') {
-    return null;
-  }
-
-  const host = parsed.hostname.toLowerCase();
-  if (!['newtab', 'search', 'ask', 'downloads', 'settings', 'bookmarks'].includes(host)) {
-    return null;
-  }
-
-  parsed.pathname = '/';
-  parsed.hash = '';
-  if (host !== 'search' && host !== 'ask') {
-    parsed.search = '';
-  }
-  return parsed.toString();
-}
-
-function looksLikeNavigableAddress(raw) {
-  const value = String(raw || '').trim();
-  if (!value || /\s/.test(value)) {
-    return false;
-  }
-  if (/^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(value)) {
-    return true;
-  }
-  if (/^localhost(?::\d{1,5})?(?:\/|$)/i.test(value)) {
-    return true;
-  }
-  if (/^\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?(?:\/|$)/.test(value)) {
-    return true;
-  }
-  return /^[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:[:/]|$)/i.test(value);
-}
-
-function normalizeSearchQuestion(input) {
-  return String(input || '').replace(/\s+/g, ' ').trim().slice(0, 300);
-}
-
-function classifyAddressInput(input) {
-  const raw = String(input || '').trim();
-  if (!raw) {
-    return { kind: 'error', error: 'Enter a website address or search question.' };
-  }
-
-  const internal = normalizeInternalUrl(raw);
-  if (internal) {
-    return { kind: 'internal', url: internal };
-  }
-
-  const unsupportedScheme = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(raw) &&
-    !/^https?:\/\//i.test(raw) &&
-    !/^localhost:\d{1,5}(?:\/|$)/i.test(raw);
-  if (unsupportedScheme) {
-    return { kind: 'error', error: 'Sovereign only opens http and https websites.' };
-  }
-
-  if (!looksLikeNavigableAddress(raw)) {
-    return { kind: 'search', question: normalizeSearchQuestion(raw), mode: 'search' };
-  }
-
-  const checked = normalizeAddress(raw);
-  if (checked.ok) {
-    return { kind: 'url', url: checked.url };
-  }
-
-  if (/^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(raw)) {
-    return { kind: 'error', error: checked.error };
-  }
-
-  return { kind: 'search', question: normalizeSearchQuestion(raw), mode: 'search' };
-}
-
 function tabDebugInfo(tab) {
   if (!tab || tab.view.webContents.isDestroyed()) {
     return null;
@@ -481,37 +443,6 @@ function tabDebugInfo(tab) {
     canGoBack: history.canGoBack(),
     canGoForward: history.canGoForward()
   };
-}
-
-function normalizeAddress(input) {
-  const raw = String(input || '').trim();
-  if (!raw) {
-    return { ok: false, error: 'Enter a website address.' };
-  }
-
-  let candidate = raw;
-  if (!/^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(candidate)) {
-    const localLike = /^localhost(?::\d{1,5})?(?:\/|$)/i.test(candidate) ||
-      /^\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?(?:\/|$)/.test(candidate);
-    candidate = `${localLike ? 'http' : 'https'}://${candidate}`;
-  }
-
-  let parsed;
-  try {
-    parsed = new URL(candidate);
-  } catch {
-    return { ok: false, error: 'That address is not a valid URL.' };
-  }
-
-  if (!['http:', 'https:'].includes(parsed.protocol)) {
-    return { ok: false, error: 'Sovereign only opens http and https websites.' };
-  }
-
-  if (!parsed.hostname) {
-    return { ok: false, error: 'That address needs a website host.' };
-  }
-
-  return { ok: true, url: parsed.toString() };
 }
 
 function findWindowStateBySender(sender) {
@@ -1104,11 +1035,49 @@ function recordPrivacyWebRequest(details) {
         : 'trusted app/AI request – no cookies, auth headers, request body, prompt, or AI output logged'
   };
 
+  const thumbnailReceiptId = details.webContentsId
+    ? thumbnailReceipts.lookup(urlKey(details.url, String(details.webContentsId))) : '';
+  if (thumbnailReceiptId && privacyReceipts.getReceipt(thumbnailReceiptId)) {
+    privacyReceipts.addEntry(thumbnailReceiptId, entry);
+    return;
+  }
   if (target.action === 'receipt' && target.receiptId) {
     privacyReceipts.addEntry(target.receiptId, entry);
     return;
   }
   privacyReceipts.addBackgroundEntry(entry);
+}
+
+function recordPrivacyRedirect(details) {
+  try {
+    if (details.webContentsId) {
+      const scope = String(details.webContentsId);
+      thumbnailReceipts.follow(urlKey(details.url, scope), urlKey(details.redirectURL, scope));
+      return;
+    }
+    const fromKey = urlKey(details.url, 'preflight');
+    const toKey = urlKey(details.redirectURL, 'preflight');
+    if (!fromKey || !toKey) return;
+    const receiptId = preflightRedirects.follow(fromKey, toKey);
+    if (!receiptId) return;
+    const pending = preflightRedirectDetails.get(receiptId);
+    const fromHost = new URL(details.url).host;
+    let base = 'media validation request – no query, prompt, or AI output sent';
+    for (const call of pending || []) {
+      if (call.keys.has(fromKey)) {
+        call.keys.add(toKey);
+        base = call.whatWasSent || base;
+      }
+    }
+    privacyReceipts.addEntry(receiptId, {
+      category: 'image',
+      method: details.method || 'GET',
+      url: details.redirectURL,
+      whatWasSent: base.replace('request', `redirect from ${fromHost}`)
+    });
+  } catch (error) {
+    logAi('privacy redirect attribution failed', { error: error?.message || String(error) });
+  }
 }
 
 function sendPrivacyReceipt(receipt) {
@@ -2144,10 +2113,28 @@ async function fetchForDownloadPreflight(targetSession, url, options, receiptDet
     : session.defaultSession;
   const fetchImpl = (requestUrl, requestOptions) => downloadSession.fetch(requestUrl, requestOptions);
   if (receiptDetails?.receiptId) {
-    return privacyReceipts.fetchWithReceipt(fetchImpl, receiptDetails.receiptId, url, options, {
-      category: receiptDetails.category || 'other',
-      whatWasSent: receiptDetails.whatWasSent || 'download validation request – no request body logged'
-    });
+    const receiptId = receiptDetails.receiptId;
+    const key = urlKey(url, 'preflight');
+    const call = { keys: new Set(key ? [key] : []), whatWasSent: receiptDetails.whatWasSent };
+    preflightRedirects.remember(key, receiptId);
+    const pending = preflightRedirectDetails.get(receiptId) || new Set();
+    pending.add(call);
+    preflightRedirectDetails.set(receiptId, pending);
+    try {
+      return await privacyReceipts.fetchWithReceipt(fetchImpl, receiptId, url, options, {
+        category: receiptDetails.category || 'other',
+        whatWasSent: receiptDetails.whatWasSent || 'download validation request – no request body logged'
+      });
+    } finally {
+      pending.delete(call);
+      for (const registeredKey of call.keys) {
+        if (preflightRedirects.lookup(registeredKey) === receiptId &&
+            ![...pending].some(other => other.keys.has(registeredKey))) {
+          preflightRedirects.forget(registeredKey);
+        }
+      }
+      if (!pending.size) preflightRedirectDetails.delete(receiptId);
+    }
   }
   return fetchImpl(url, options);
 }
@@ -4054,6 +4041,7 @@ function recordAiNetwork(details) {
 }
 
 function setupAiNetworkMonitor() {
+  session.defaultSession.webRequest.onBeforeRedirect(details => recordPrivacyRedirect(details));
   session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
     if (aiWebContentsIds.has(details.webContentsId)) {
       recordAiNetwork(details);
@@ -4197,6 +4185,7 @@ async function runDatasetCollection() {
 }
 
 app.whenReady().then(async () => {
+  if (!hasSingleInstanceLock) return;
   app.setName('Sovereign');
   setupPermissionHandling(session.defaultSession);
   loadPreferences();
@@ -4238,6 +4227,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  if (!hasSingleInstanceLock) return;
   isAppQuitting = true;
   if (saveSessionTimer) {
     clearTimeout(saveSessionTimer);
@@ -4266,6 +4256,13 @@ ipcMain.on('browser:open-search', (event, payload) => {
       setSidebarVisible(state, false);
     }
     const input = payload && typeof payload === 'object' ? payload : { question: payload };
+    if (input.navigateIfAddress === true && !input.handoffId) {
+      const classified = classifyAddressInput(input.question);
+      if (classified.kind !== 'search') {
+        navigateActive(state, input.question);
+        return;
+      }
+    }
     if (input.mode === 'ask') {
       createInternalTab(state, 'ask', true, {
         question: input.question,
@@ -4475,6 +4472,11 @@ ipcMain.handle('privacy:start-activity', (event, request) => {
     localOnly: Boolean(input.localOnly)
   });
   assignPrivacyReceiptToSender(event.sender, receipt.id);
+  if (input.purpose === 'saved-chat-media' && Array.isArray(input.thumbnailUrls)) {
+    for (const url of input.thumbnailUrls.filter(value => typeof value === 'string').slice(0, 200)) {
+      thumbnailReceipts.remember(urlKey(url, String(event.sender.id)), receipt.id);
+    }
+  }
   return receipt;
 });
 
@@ -4669,6 +4671,9 @@ ipcMain.handle('search:media', async (event, request) => {
     assignPrivacyReceiptToSender(event.sender, receipt.id);
     const fixtureResult = mediaFixtureResults(input.query, category);
     if (fixtureResult) {
+      for (const item of fixtureResult.results) {
+        if (item.thumbnailUrl) thumbnailReceipts.remember(urlKey(item.thumbnailUrl, String(event.sender.id)), receipt.id);
+      }
       pushSearchActivity(requestActivityEntry({
         endpoint: fixtureResult.endpoint,
         query: fixtureResult.query,
@@ -4688,6 +4693,9 @@ ipcMain.handle('search:media', async (event, request) => {
       signal: controller.signal,
       fetchImpl: makeReceiptFetch(receipt.id, 'search', `${category === 'videos' ? 'Video' : 'Image'} search query: ${query}`)
     });
+    for (const item of result.results) {
+      if (item.thumbnailUrl) thumbnailReceipts.remember(urlKey(item.thumbnailUrl, String(event.sender.id)), receipt.id);
+    }
     recordSearxngForwardingSafely(receipt.id, result);
     pushSearchActivity(requestActivityEntry({
       endpoint: result.endpoint,
@@ -4859,6 +4867,7 @@ ipcMain.handle('settings:update-ai', (_event, patch) => updateAiSettings(patch))
 // Saved Ask AI chats: one file in the user-data folder, owned by the main process.
 // Local file I/O only; no network request, so nothing to add to the Privacy Receipt.
 let savedChatStore = null;
+let legacyRemovalsInFlight = 0;
 
 function chatStore() {
   if (!savedChatStore) {
@@ -4867,10 +4876,19 @@ function chatStore() {
   return savedChatStore;
 }
 
-// What Ask AI pages get: the valid chats, plus whether an unreadable file is on disk.
+function legacyDeleteNoticeVisible() {
+  try {
+    return chatStore().legacyDeletePending() && legacyRemovalsInFlight === 0;
+  } catch (error) {
+    console.log(`[Sovereign] could not check pending legacy chat deletion: ${error.message}`);
+    return false;
+  }
+}
+
+// What Ask AI pages get: valid chats, unreadable-file status, and pending legacy cleanup.
 function savedChatSnapshot() {
   const status = chatStore().status();
-  return { chats: chatStore().list(), unreadable: status.unreadable };
+  return { chats: chatStore().list(), unreadable: status.unreadable, legacyPending: legacyDeleteNoticeVisible() };
 }
 
 function chatSenderTab(event, kinds) {
@@ -4888,6 +4906,9 @@ function broadcastSavedChats() {
     for (const tab of state.tabs.values()) {
       if (tab.kind === 'ask' && !tab.view.webContents.isDestroyed()) {
         tab.view.webContents.send('chats:changed', snapshot);
+      }
+      if (tab.kind === 'settings' && !tab.view.webContents.isDestroyed()) {
+        tab.view.webContents.send('chats:legacy-status', { legacyPending: snapshot.legacyPending });
       }
     }
   }
@@ -5000,18 +5021,21 @@ async function removeLegacyChatKey() {
 // Returns false if the key could not be removed; the delete stays recorded as pending, and
 // the next start (or the next time Ask AI opens) removes the key without importing it.
 async function removeLegacyChatKeySafely() {
+  legacyRemovalsInFlight += 1;
   try {
     return await removeLegacyChatKey();
   } catch (error) {
     console.log(`[Sovereign] could not remove chats saved by an older version: ${error.message}`);
     return false;
+  } finally {
+    legacyRemovalsInFlight -= 1;
   }
 }
 
 // After startup: finish a legacy delete that could not complete earlier.
 function finishPendingLegacyChatDelete() {
   if (chatStore().legacyDeletePending()) {
-    removeLegacyChatKeySafely();
+    removeLegacyChatKeySafely().then(() => broadcastSavedChats());
   }
 }
 
@@ -5049,8 +5073,14 @@ async function deleteAllSavedChats(state, { message, keepLabel }) {
   chatStore().clear({ legacy: true, extraIds: legacyIds });
   broadcastSavedChats();
   const legacyRemoved = await removeLegacyChatKeySafely();
+  broadcastSavedChats();
   return { status, confirmed: true, legacyPending: !legacyRemoved };
 }
+
+ipcMain.handle('chats:legacy-status', event => {
+  chatSenderTab(event, ['ask', 'settings']);
+  return { legacyPending: legacyDeleteNoticeVisible() };
+});
 
 ipcMain.handle('chats:list', event => {
   chatSenderTab(event, ['ask']);
@@ -5098,6 +5128,7 @@ ipcMain.handle('chats:legacy-removed', event => {
   chatSenderTab(event, ['ask']);
   if (chatStore().legacyDeletePending()) {
     chatStore().legacyDeleteDone();
+    broadcastSavedChats();
   }
   return true;
 });

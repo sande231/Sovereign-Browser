@@ -128,6 +128,8 @@ function orchestrate() {
 
   runPhase('verify', profile);
   expect(legacyPending() === false, 'The next start removed the key and cleared the pending delete');
+  runPhase('pending-notice', profile, { SOVEREIGN_TEST_LEGACY_REMOVE: 'fail' });
+  runPhase('pending-cleared', profile, { SOVEREIGN_TEST_LEGACY_REMOVE: '' });
   const atEnd = leftoversOf([...DELETED_MARKERS, ...LATER_MARKERS]);
   expect(Object.keys(atEnd.outside).length === 0, "No deleted chat text in Sovereign's own files", atEnd.outside);
   expect(!fs.existsSync(path.join(profile, 'saved-chats.json')), 'No saved chats were restored');
@@ -403,7 +405,15 @@ async function main() {
   await askPage.executeJavaScript("document.querySelector('#clear-chat-history').click()", true);
   await waitFor(() => !fs.existsSync(chatFile));
   expect(savedChatFiles(profile).length === 0, 'Clear history leaves no saved-chat files', savedChatFiles(profile));
-  const clearStatus = await waitFor(() => askPage.executeJavaScript("document.querySelector('#chat-status').textContent", true));
+  let clearStatus;
+  try {
+    await waitFor(async () => {
+      clearStatus = await askPage.executeJavaScript("document.querySelector('#chat-status').textContent", true);
+      return clearStatus === `Deleted ${FRAGMENTS_TEXT}`;
+    });
+  } catch {
+    expect(false, 'Clear history uses the honest wording', clearStatus);
+  }
   expect(clearStatus === `Deleted ${FRAGMENTS_TEXT}`, 'Clear history uses the honest wording', clearStatus);
   await waitFor(async () => (await askState(askPage)).panelHidden);
 
@@ -564,6 +574,33 @@ async function verify() {
   await delay(500);
 }
 
+// ---------- phases 5–6: persistent pending notice and successful retry ----------
+
+async function pendingNotice() {
+  const profile = process.env.CHAT_TEST_PROFILE;
+  const pending = PHASE === 'pending-notice';
+  if (pending) {
+    const file = path.join(profile, 'chat-deletions.json');
+    const record = deletionRecord(profile);
+    record.legacyDeletePending = true;
+    // Updating the existing file preserves its mode and all other fields, including deletedIds.
+    fs.writeFileSync(file, JSON.stringify(record));
+  }
+  const chrome = await launch();
+  const settingsPage = await settingsFirst(chrome);
+  const noticeMatches = page => page.executeJavaScript(`(() => {
+    const notice = document.querySelector('#legacy-delete-notice');
+    return Boolean(notice && notice.hidden === ${!pending}
+      && (${!pending} || notice.textContent.includes('could not be removed yet')));
+  })()`, true);
+  await waitFor(() => noticeMatches(settingsPage));
+  const askPage = await openAskTab(chrome);
+  await waitFor(() => noticeMatches(askPage));
+  await waitFor(() => deletionRecord(profile).legacyDeletePending === pending);
+  expect(deletionRecord(profile).legacyDeletePending === pending,
+    'Deletion record matches the pending notice', deletionRecord(profile));
+}
+
 // ---------- entry ----------
 
 if (PHASE === 'orchestrate') {
@@ -575,7 +612,7 @@ if (PHASE === 'orchestrate') {
     app.exit(1);
   }
 } else {
-  ({ 'seed-residue': seedResidue, seed, main, 'seed-legacy': seedLegacy, 'fail-remove': failRemove, verify }[PHASE] || main)()
+  ({ 'seed-residue': seedResidue, seed, main, 'seed-legacy': seedLegacy, 'fail-remove': failRemove, verify, 'pending-notice': pendingNotice, 'pending-cleared': pendingNotice }[PHASE] || main)()
     .then(() => app.quit())
     .catch(error => {
       console.error(error);
