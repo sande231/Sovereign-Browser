@@ -14,7 +14,8 @@
     'Synthesize one combined answer instead of describing each result separately.',
     'State each distinct supported point once; do not repeat the same claim with different citations.',
     'Use concise prose with citations like [1] and [2].',
-    'If the snippets do not contain enough evidence, say the evidence is insufficient.'
+    'If the snippets do not contain enough evidence, say the evidence is insufficient.',
+    'You cannot see, show, create, generate, or retrieve images, photos, videos, or maps. If the user asks for pictures or other media, reply in one sentence that you cannot show images here and that they can turn on Search the web to find real images. Never describe imaginary images, never invent image titles, captions, file names, or links, and never use placeholders such as "Image 1".'
   ].join(' ');
 
   function normalizeText(value) {

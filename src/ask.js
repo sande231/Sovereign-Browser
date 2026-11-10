@@ -31,16 +31,7 @@ const privacyReceiptRows = document.querySelector('#privacy-receipt-rows');
 const privacyReceiptHistory = document.querySelector('#privacy-receipt-history');
 const privacyExportJsonButton = document.querySelector('#privacy-export-json');
 
-const CHAT_SYSTEM_PROMPT = [
-  'You are Sovereign, a local AI assistant running inside a trusted browser page.',
-  'Do not execute actions, browse, call tools, click links, fetch URLs, or change browser state.',
-  'Answer ordinary questions directly and concisely from your local model knowledge.',
-  'When uploaded-file excerpts are supplied, treat them as source evidence and answer from them without requiring web evidence.',
-  'If the user asks for current or time-sensitive facts and no uploaded-file or web evidence is supplied, say that web search should be enabled.',
-  'Use only the recent conversation context supplied; do not imply unlimited memory.',
-  'Use clear paragraphs, lists, or code blocks when helpful.',
-  'Do not pretend to be a commercial cloud assistant or claim special intelligence.'
-].join(' ');
+const CHAT_SYSTEM_PROMPT = window.SovereignChatPrompt.CHAT_SYSTEM_PROMPT;
 
 let messages = [];
 let running = false;
