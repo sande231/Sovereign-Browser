@@ -2829,3 +2829,12 @@ button:disabled {
 .web-offline-note[hidden] {
   display: none;
 }
+
+.sensitive-notice { margin: 12px 0; padding: 12px; border: 1px solid #b6a678; border-radius: 8px; background: #fff9e9; color: #35301f; white-space: pre-wrap; }
+.sensitive-notice p { margin: 0 0 10px; }
+.sensitive-notice button { margin: 4px 8px 4px 0; }
+.sensitive-panel { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+.sensitive-panel textarea, .sensitive-panel p, .sensitive-preview { width: 100%; box-sizing: border-box; }
+.sensitive-query { min-height: 80px; padding: 10px; color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 6px; }
+.sensitive-preview { white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; margin: 0; border: 1px solid currentColor; border-radius: 6px; }
+:root[data-theme="dark"] .sensitive-notice { background: #302c20; border-color: #8d805b; color: #f2e7c9; }

@@ -111,6 +111,13 @@
         <p class="settings-help">Observed bottleneck so far: the small local model sometimes ignores citation instructions or emits invalid citation numbers. Sovereign validates the output and falls back to source excerpts when needed. A later model upgrade should be evaluated with measured citation reliability, latency, and memory use before changing models.</p>
       </section>
 
+      <section class="settings-section" aria-label="Sensitive topics">
+        <h2>Sensitive topics</h2>
+        <label class="settings-check"><input type="radio" name="sensitive-topics" id="sensitive-strict" value="strict" checked><span>Strict — Health, legal, money and mental-health topics are never searched without asking. Most private.</span></label>
+        <label class="settings-check"><input type="radio" name="sensitive-topics" id="sensitive-standard" value="standard"><span>Standard — These topics are searched unless the question is about you or someone close to you.</span></label>
+        <p class="settings-help">Crisis support is always on.</p>
+      </section>
+
       <section class="settings-section" aria-label="Downloads">
         <h2>Downloads</h2>
         <label class="settings-check">

@@ -81,3 +81,16 @@ vm.runInContext(`${body('safeFetchResolve')}\n${body('gatedSafeFetch')}\nthis.re
   assert.equal(calls, 0);
   console.log('network-exits tests passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
+
+// All SearXNG calls belong to handlers with an authoritative sensitive gate.
+let unguardedSearch = source;
+for (const name of ['handleSearchQuery', 'handleMediaSearch']) {
+ const handler = body(name);
+ assert.ok(handler.indexOf('sensitiveGate(') >= 0, name);
+ for (const call of ['searchSearxng(', 'searchSearxngMedia(', 'createReceipt(', 'pushSearchActivity(']) {
+  if (handler.includes(call)) assert.ok(handler.indexOf('sensitiveGate(') < handler.indexOf(call), name);
+ }
+ unguardedSearch = unguardedSearch.replace(handler, '');
+}
+assert.ok(!/\bsearchSearxng(?:Media)?\s*\(/.test(unguardedSearch), 'sensitive-exits');
+assert.match(body('handleReadSources'), /allowedSearchRequests/);

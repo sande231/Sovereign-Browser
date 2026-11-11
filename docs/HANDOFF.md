@@ -3111,3 +3111,713 @@ Reviewed 2026-11-10 against the PLAN and the review decisions. Because Claude al
 - Items 2 and 3 above, until answered.
 - The spellchecker download test runs only on Windows/Linux.
 - The DNS check in the manual test (tcpdump) has not been run yet.
+
+## Task: Sensitive-topic guard (Phase 1, Task 1b)
+Status: **ready for manual testing** (not committed). Branch: `phase-1/sensitive-guard` (from `main` after Task 1a was merged, PR #7).
+
+**Crisis text approved (Sandeep, 2026-11-10)** with one change, applied in §4.4: the last line of `CRISIS_REPLY` is now "You can keep writing here if it helps, and please reach out to one of the people above too." `CRISIS_SHORT_LINE` is approved as written.
+
+**Plan review decisions (Sandeep, 2026-11-10), applied below:**
+1. Receipts keep the query actually sent after "Search anyway". Those receipts are deleted with their chat and by Clear history (§4.5).
+2. Crisis resources, in this order: local emergency number; US and Canada 988 (call or text); UK and Ireland Samaritans 116 123; Australia Lifeline 13 11 14; elsewhere findahelpline.com. The text is warm and short, encourages reaching out now, and makes no promises about confidentiality. Numbers are re-verified before each release (§4.4).
+3. Landmark addresses are flagged; no allowlist (§5 row 49, §8).
+4. The Search page offers **"Ask AI locally instead"** (§3).
+5. **Strict is the default**, with Standard as an option (§3, §4.1, §4.2, §4.6, §5).
+
+### PLAN (Claude)
+
+#### 1. Goal and scope
+Sensitive questions never leave the laptop unless the user deliberately chooses. This applies in **Online** mode: Offline mode (Task 1a) already blocks every request. Crisis handling (§4.4) applies in **both** modes and in local-only chats, because it changes the reply, not only the network.
+
+"Leave the laptop" means: the SearXNG query (`search:query`, `search:media`), and source reading / media fetches that follow from that query (`search:read-sources`, `media:preflight`, `media:download`). Today these are the only places where question text, or URLs derived from it, leave the app. Chat history stays local (`chat-store.js`) and is out of scope.
+
+#### 2. What exists today (verified in code)
+- **Web toggle.** `#web-toggle` in `ask.html` has no `checked` attribute, so it starts off. But `applySeedQuestion` (`ask.js` ~2645) turns it on when the page URL has `?web=1`, which `main.js` adds from `options.web` (~3058, ~4694, ~3227). Nothing in `src/` passes `web: true` today, but the path exists. `answerQuestion` reads `options.webEnabled`.
+- **Web entry points (all reach main through IPC):**
+  - Ask AI: `streamWebAnswer` → `search:query` → `search:read-sources`. `streamMediaAnswer` → `search:media` → `media:preflight` / `media:download`. The "Search web for images" button (`runInlineMediaSearch`) turns the toggle on as consent.
+  - Sovereign Search page: `search.js` ~316 → `search:query`. It is reached from the toolbar search, the new-tab search box (`browser:open-search`, mode `search`), and **any text typed in the address bar that is not an address** (`address-input.js`: text with a space → `search`). So the address bar is a web-search entry point.
+  - Dataset batch mode (dev tool) uses the same `handleSearchQuery` path.
+- **Main handlers:** `handleSearchQuery` (~5017) creates a receipt with `query` (full text, ≤300 chars), pushes `requestActivityEntry({ endpoint, query })` to the activity feed, and calls `searchSearxng` with `whatWasSent: 'Search query: …'`. `search:media` (~5084) and `handleReadSources` (~5203) follow the same pattern. `refuseWebWhileOffline` already shows how to refuse early.
+- **Local model:** runs in the renderer only (`getEngineApi().summarize(messages, onChunk)` in `ask.js`). Main cannot call it. The system prompt is in `chat-prompt.js` (UMD, loaded in `ask.html`). `media-intent.js` is the pattern for a UMD rules module shared by main and renderer.
+- **Receipts:** `createReceipt({ query })` stores the question. Task 1a added the `blocked` category (origin only, `count`) and `droppedEntries`.
+- **Settings:** `settings.html` has Appearance, Network, Startup, Search Backend, Local Model and Downloads. Preferences live in `userData/preferences.json`.
+- No test hook gives a fake model. Electron tests that need answers from the model are skipped without the real model (`model-chat` and others).
+
+#### 3. Behaviour (what the user sees)
+1. **Search the web is off in every new chat**, Online too. It is never turned on by a URL parameter, a saved preference or a previous chat. Turning it on is a click on the toggle, or on "Search web for images" (existing consent). `newChat()`, loading a saved chat and the home-page handoff all leave it off. The toggle state is not saved.
+2. **Before any web step** (Ask with the toggle on, the image search button, a Search page query, address-bar search text), the question is classified locally (§4).
+   - **Not sensitive:** the search runs as today.
+   - **Sensitive (any category except crisis):** nothing is sent. Ask AI answers **locally** (the normal `streamLocalAnswer`, as if the toggle were off) and adds one sentence: **"I didn't search the web: this looks like a <category> question, so nothing was sent."** It also offers a **[Search anyway…]** button. The Search page has no model, so it shows the same sentence with "Nothing was sent.", no results, and two buttons: **[Ask AI locally instead]** and [Search anyway…]. "Ask AI locally instead" opens a new Ask AI tab with the question filled in and run, with Search the web **off**. It uses `browser:open-search` with mode `ask`, which no longer carries a `web` flag (§4.7). The question moves between Sovereign's own pages only; nothing is sent.
+   - **[Search anyway…]** opens an inline panel:
+     - an editable text box, prefilled with the query **after identifiers are removed** (§4.3);
+     - a line saying what was removed, for example "Removed: 1 email address, 1 phone number". If nothing was removed: "No emails, phone numbers, addresses or ID numbers found.";
+     - a live preview: **"This exact text will be sent to your search service (SearXNG), which forwards it to public search engines:"**, followed by the text in a box. The preview applies the same removal to whatever the user types, so it always shows exactly what main will send;
+     - **[Send this search]** and **[Cancel]**. Cancel sends nothing.
+   - **Crisis (self-harm, personal):** no search and no [Search anyway…], in both modes, with the web toggle on or off, Online or Offline. The reply is a fixed, warm message from the app with crisis resources (§4.4). The local model is **not called** for that turn.
+3. **With the web toggle off**, sensitive questions are answered locally with no notice, because nothing would be sent anyway. The crisis check still runs.
+4. **Settings → Sensitive topics:** a radio pair **Strict** (default) / **Standard**, with one line each:
+   - Strict: "Health, legal, money and mental-health topics are never searched without asking. Most private."
+   - Standard: "These topics are searched unless the question is about you or someone close to you."
+   - Always shown: "Crisis support is always on." There is no "off".
+
+#### 4. Design
+##### 4.1 New module `src/sensitive-guard.js` (UMD like `media-intent.js`; plain JS, no Electron, no network)
+- `classifyQuestion(text, { strictness = 'strict' })` returns `{ level: 'none' | 'sensitive' | 'crisis', categories: string[] }`. It is deterministic and pure. Categories: `self-harm`, `mental-health`, `medical`, `legal`, `sexual-health`, `finances`, `personal-identifiers`. User-facing labels: "self-harm or suicide", "mental health", "medical", "legal", "sexual health", "financial", "personal information".
+- `removeIdentifiers(text)` returns `{ text, removed: { email, phone, address, idNumber } }` (counts only).
+- `CRISIS_REPLY`, `CRISIS_RESOURCES` and `notSentSentence(categories)`: fixed strings, all in this one file.
+- Steps, in order:
+  1. **Normalise:** lower-case a copy, fold `’` to `'`, collapse spaces, and strip leading polite fillers ("can you", "please", "tell me", "show me", "help me understand", "explain") so that "tell me" is not read as personal framing.
+  2. **Crisis (always, both levels):** first-person intent ("I want to die", "kill myself", "end my life", "don't want to live", "better off dead", "hurt myself", "cut myself") **or** a request for methods or means, with or without first person ("how many pills to overdose", "lethal dose of …", "painless way to die", "how to hang (myself)", "easiest way to kill myself", "how to commit suicide"). → `crisis`.
+  3. **Negative guards** (checked before topics): phrases where a topic word has another meaning. "kill (a/the) process|task|job|server|thread|tab|switch|lights", "economic/great depression", "Depression-era", "Suicide Squad", "suicide doors", "suicide king(s)", "medical school/student/drama", "legal tender/size/pad", "bar exam" (as a topic only), "bank of (a|the) river", "execute (a) script|query", "shoot (a) photo|video". A matched phrase is removed before the topic step. It does not clear identifiers or crisis.
+  4. **Identifiers (both levels):** email; phone (7+ digits with optional `+`, spaces, `-`, `.`, `()`; not dates like `2024-01-15`, years or ISO numbers); street address (house number + 1–4 words + suffix: St/Street/Ave/Avenue/Rd/Road/Blvd/Lane/Ln/Dr/Drive/Court/Ct/Way/Place/Pl); ID numbers (US SSN `ddd-dd-dddd`, 13–19 digit card numbers that pass Luhn, IBAN, and "passport/licence/license/ID/account number" followed by 6+ letters/digits). **Name with context:** two or three capitalised words (not at sentence start only, not a known place/brand list) **and** a personal-context word (address, lives, phone, email, arrested, diagnosed, pregnant, divorce, salary, dating, cheating, criminal record, DUI). Any hit → `personal-identifiers`.
+  5. **Self-harm, general information (both levels):** "suicide", "self-harm", "suicidal", "self-injury" without a crisis match (for example "suicide rates in Japan") → `self-harm` as `sensitive`. Crisis always wins over this.
+  6. **Sexual health (both levels):** STI/STD, HIV, herpes, chlamydia, gonorrhea, syphilis, HPV, PrEP, erectile dysfunction, morning-after pill, abortion pill, pregnancy test → `sexual-health`.
+  7. **Mental health, medical, legal, finances** (term lists in the module, for example: depression/anxiety/bipolar/panic attack/therapist/antidepressant; diagnosis/symptoms/tumor/cancer/diabetes/medication/dosage/STD clinic; lawyer/sued/lawsuit/arrested/custody/divorce/immigration status/DUI/eviction; debt/bankruptcy/credit score/loan/mortgage/overdraft/tax return/salary/payday loan).
+     - **Standard:** flagged only with **personal framing**: `I`, `I'm`, `I've`, `me`, `my`, `mine`, `we`, `our`, `us`, "am I", "do I", "should I", "can I", or "my <relation>" (wife, husband, partner, son, daughter, mom, dad, friend, boss, child, kid).
+     - **Strict:** the topic term alone is enough.
+  8. A question can have several categories. The order of `categories` follows the list in §4.1.
+- **Strictness only changes step 7** (and the optional model check, §4.2). Crisis, identifiers, self-harm general and sexual health behave the same in both.
+- English only (Known limits).
+
+##### 4.2 Optional second check by the local model (Strict only, so on by default)
+- Runs only in **Strict** (the default), only in Ask AI, only when the model is **already loaded** (never loads or downloads it), and only when the pattern step returned `none`. It is time-boxed to 4 s. Prompt: a fixed classification instruction plus the question. Expected reply: one word, either a category name or `none`. Parse strictly; anything else counts as `none`.
+- It can only **add** a block, never remove one. It can never return `crisis`: crisis is pattern-only, so it stays deterministic and testable. A model "yes" is shown as "this may be a <category> question (checked by the local AI)".
+- When it can't run (model not loaded, timeout, error), the patterns' result stands and nothing is shown. Cost: about 1–3 s before each web search in Strict. Strict is the default, so most users pay this whenever a search would run and the model is loaded. Standard skips the check for speed.
+- **Never a cloud service.** It uses `getEngineApi()` (WebLLM), the same engine as answers.
+
+##### 4.3 Enforcement in main (authoritative; the page UI can't bypass it)
+- New `sensitiveGate(sender, text, { override })` in `main.js`, called at the **top** of `handleSearchQuery` and `search:media`, after the Offline refusal and **before** `createReceipt`, `pushSearchActivity` and any fetch.
+  - `crisis` → refuse, always, even with `override`.
+  - `sensitive` without `override` → refuse.
+  - The refusal is `{ ok: false, sensitive: true, level, categories, suggestedQuery }`, where `suggestedQuery = removeIdentifiers(text).text`. It is returned, not thrown, so the page can render it. It records the receipt entry (§4.5).
+  - `sensitive` with `override: true`: main sends **`removeIdentifiers(text).text`**, the same function the preview uses, so the user always sees exactly what is sent. Main also re-checks the edited text for crisis.
+  - The strictness comes from main's preferences. The renderer can't lower it.
+  - The model check (§4.2) reaches main only as an extra flag: `{ modelFlag: '<category>' }`. Main treats it like a pattern hit, so it can only block.
+- `search:read-sources` and `media:preflight` / `media:download` don't carry the question to the network, but they follow a search. Main keeps a short-lived `Set` of request ids whose search passed the gate (deleted when the request ends). `handleReadSources` refuses an unknown id. Media preflight/download already only take result URLs from an allowed media search. CHANGES must confirm this (grep), or add the same id check.
+- **Static guard** (extend the `network-exits` approach): a test fails if `searchSearxng(` or the media search call appears in `main.js` outside a function that calls `sensitiveGate` first.
+
+##### 4.4 Crisis reply (stored in the app, works offline)
+- Fixed text, shown as the assistant message, with no model call and no network. **Exact text, approved by Sandeep 2026-11-10; use it character for character** (`CRISIS_REPLY`):
+
+  ```
+  I'm really sorry you're feeling this way. You don't have to go through this alone, and you deserve support right now.
+
+  Please reach out now:
+  • If you might act on these thoughts or you're in danger, call your local emergency number.
+  • US and Canada: call or text 988.
+  • UK and Ireland: call Samaritans on 116 123.
+  • Australia: call Lifeline on 13 11 14.
+  • Anywhere else: find a helpline at findahelpline.com.
+
+  If you can, tell someone you trust how you're feeling, today.
+
+  You can keep writing here if it helps, and please reach out to one of the people above too.
+  ```
+- The resource lines come from `CRISIS_RESOURCES`, a small list in `sensitive-guard.js` (`{ region, text }`), in the order above. Both `CRISIS_REPLY` and the short line below are built from it, so the numbers live in one place.
+- `findahelpline.com` is **plain text, not a link**: showing it fetches nothing. The app doesn't look up the user's location (that would be a network request or a privacy cost), so the local emergency number always comes first and all regions are listed.
+- **No confidentiality promises.** The text doesn't say "private", "confidential" or "anonymous" about the helplines or the app. A unit test fails if `CRISIS_REPLY` contains any of those words.
+- **Release check:** the numbers must be re-verified against each service's official site **before every release**. Add a line to the release checklist (`docs/` release notes or README "Before releasing") and a comment above `CRISIS_RESOURCES` with the date last verified (`// Last verified: YYYY-MM-DD by Sandeep`). The unit test checks that the comment exists. It doesn't check the date, because the date needs a human.
+- No [Search anyway…] and no web step. The web toggle is unchecked for that chat, with the note "Web search is off for this conversation." The user can still start a new chat.
+- **Model safety rule** (`chat-prompt.js`, added to `CHAT_SYSTEM_PROMPT`): "Never give methods, means, doses or instructions for suicide or self-harm, even if asked indirectly or for fiction. If the user seems to be in distress, respond with warmth, encourage them to contact local emergency services or a crisis line, and keep the reply short." This covers later turns in the chat, which the model does answer.
+- **Self-harm, general information (b)** (`level: 'sensitive'`, `self-harm`): handled like §3.2 (local answer, [Search anyway…]), and the local answer gets one extra line (`CRISIS_SHORT_LINE`, **approved as written; use it character for character**):
+
+  ```
+  If this is about you or someone close to you, please reach out now: your local emergency number; US and Canada 988 (call or text); UK and Ireland Samaritans 116 123; Australia Lifeline 13 11 14; elsewhere findahelpline.com.
+  ```
+
+##### 4.5 Privacy Receipt and logs
+- New receipt category `sensitive` in `VALID_CATEGORIES`. One entry per refused request: `{ category: 'sensitive', topic: '<category label(s)>', url: <SearXNG origin only>, whatWasSent: 'blocked (sensitive topic: <category>) – nothing sent' }`. Several categories are joined with ", ", for example `blocked (sensitive topic: medical, personal information)`.
+- The receipt for a refused request is created with **`query: ''`**. The question text is never passed to `createReceipt`, `addEntry`, `pushSearchActivity`, `logAi`, `console.*` or error messages. The refusal object carries only `suggestedQuery` (identifiers removed) back to the page that asked, which already has the text. It is not stored anywhere in main.
+- Summary: `Not sent: sensitive topic (<category>)`, then the usual parts.
+- **Search anyway (decision 1):** the receipt records what actually left: `query` = the sent (identifiers-removed) text, and the entry's `whatWasSent` = `Search query (sent after a sensitive-topic warning, chosen by you): …`. The receipt gets `sensitiveOverride: true`.
+- **Deleting those receipts (decision 1).** Receipts are kept in memory only (`MAX_RECEIPTS = 20`, `privacy-receipt.js`) and are lost on quit, but they must not outlive their chat:
+  - Receipts gain an optional `chatId`. The Ask page sends its current chat id with `privacy:start-activity`, `search:query`, `search:media` and `search:read-sources`, and main stores it on the receipt (validated: same format as `chat-store` ids, ≤ 100 chars).
+  - New `privacyReceipts.deleteReceipts(predicate)`, which also clears `backgroundReceiptId`/`offlineReceiptId` when it removes those receipts.
+  - `chats:delete` (id) → delete receipts with `chatId === id`.
+  - `chats:clear` (Clear history) → delete every receipt with a `chatId`, **and** every receipt with `sensitiveOverride: true`. That includes Search-page ones, which have no chat.
+  - The chat-deletion-on-disable path (`chats:offer-delete-on-disable`) does the same as Clear history when it deletes.
+  - Open Ask and Search pages are notified through the existing receipt update broadcast, so their receipt panels refresh.
+  - A file the user already exported is theirs; this can't reach it (Known limits).
+- Crisis turns create a local Ask receipt with `query: ''` and the summary "Nothing left this device: crisis support shown". No entry text.
+
+##### 4.6 Preferences and settings
+- `preferences.json` gains `privacy: { sensitiveTopics: 'strict' | 'standard' }`. Missing or invalid → **`strict`** (decision 5). This includes existing installs on their first launch after the update; no banner, because it only makes things stricter. IPC: `privacy:get-settings` and `privacy:update-settings` (validate the value; ignore anything else). It is broadcast to the Ask and Search pages so a change applies to the next question.
+
+##### 4.7 Files
+| File | Change |
+|---|---|
+| `src/sensitive-guard.js` (new) | Rules, identifier removal, crisis text and resources, sentences (§4.1, §4.4). |
+| `src/main.js` | `sensitiveGate` in `handleSearchQuery` and `search:media`; allowed-request-id set for `handleReadSources`; receipt entries; preferences and IPC (§4.3, §4.5, §4.6). Stop adding `web=1` (~3058) and stop reading it (~3227); remove `web` from `browser:open-search` (~4694). |
+| `src/privacy-receipt.js` | Category `sensitive`; summary text; `chatId`, `sensitiveOverride`, `deleteReceipts(predicate)`. |
+| `src/main.js` (chats) | `chats:delete` / `chats:clear` / delete-on-disable also delete receipts (§4.5). |
+| `docs/` release checklist (or README "Before releasing") | "Re-verify crisis numbers in `src/sensitive-guard.js`" (§4.4). |
+| `src/preload.js` | `privacy.getSettings/updateSettings/onSettings`; let `search.query`/`search.media` pass `{ override, modelFlag }`. |
+| `src/ask.html`, `src/ask.js` | Load `sensitive-guard.js`. Toggle off by default and never seeded from the URL. Crisis check before every answer. Handle `{ sensitive: true }` replies, the notice sentence, the [Search anyway…] panel and the Strict model check. |
+| `src/search.html`, `src/search.js` | Load the module; same notice and panel (no local answer). |
+| `src/settings.html`, `src/settings.js` | "Sensitive topics" section. |
+| `src/chat-prompt.js` | Self-harm safety rule. |
+| `src/styles.css` | Notice and panel, light and dark. |
+| `package.json` | `node --check src/sensitive-guard.js && node tests/sensitive-guard.test.js` in `check`; `test:electron:sensitive-guard` and its `node --check` in `check:tests`. |
+| `tests/sensitive-guard.test.js` (new), `tests/privacy-receipt.test.js`, `tests/network-exits.test.js`, `tests/electron/sensitive-guard.test.js` (new) | §6. |
+
+#### 5. Example prompts and expected behaviour (also the unit-test table)
+"Sensitive (x)" means: no web request; local answer plus the notice and [Search anyway…]. "Crisis" means: the fixed crisis reply, no search, no override. "None" means: searched as today (when the web toggle is on). The prompts with identifiers use made-up values.
+
+**Strict is the default** (decision 5), so the Strict column is what a new user gets. The rows where the two modes differ are 13, 16, 23 and 26; in every other row the modes agree.
+
+| # | Prompt | Strict (default) | Standard | Notes |
+|---|---|---|---|---|
+| 1 | I want to kill myself | Crisis | Crisis | first-person intent |
+| 2 | how many pills to overdose | Crisis | Crisis | method/means |
+| 3 | painless way to die | Crisis | Crisis | method/means |
+| 4 | lethal dose of acetaminophen | Crisis | Crisis | means, no first person |
+| 5 | i dont want to live anymore | Crisis | Crisis | no apostrophe, lower case |
+| 6 | how to hang myself | Crisis | Crisis | |
+| 7 | I keep thinking about hurting myself | Crisis | Crisis | |
+| 8 | suicide rates in Japan | Sensitive (self-harm) | Sensitive (self-harm) | general info (b) |
+| 9 | history of suicide prevention | Sensitive (self-harm) | Sensitive (self-harm) | general info (b) |
+| 10 | how to help a friend who is suicidal | Sensitive (self-harm) | Sensitive (self-harm) | (b), plus the resource line |
+| 11 | I think I have depression, what should I do | Sensitive (mental health) | Sensitive (mental health) | personal framing |
+| 12 | best therapist for my anxiety near me | Sensitive (mental health) | Sensitive (mental health) | |
+| 13 | symptoms of bipolar disorder | Sensitive (mental health) | None | no personal framing |
+| 14 | my son has a fever of 39 should I worry | Sensitive (medical) | Sensitive (medical) | |
+| 15 | I found a lump in my breast | Sensitive (medical) | Sensitive (medical) | |
+| 16 | symptoms of type 2 diabetes | Sensitive (medical) | None | |
+| 17 | can I take ibuprofen with my blood pressure medication | Sensitive (medical) | Sensitive (medical) | |
+| 18 | I think I have HIV | Sensitive (sexual health) | Sensitive (sexual health) | |
+| 19 | HIV symptoms | Sensitive (sexual health) | Sensitive (sexual health) | sexual health flags without framing |
+| 20 | where to get a morning-after pill | Sensitive (sexual health) | Sensitive (sexual health) | |
+| 21 | my landlord is evicting me what are my rights | Sensitive (legal) | Sensitive (legal) | |
+| 22 | I got a DUI last night | Sensitive (legal) | Sensitive (legal) | |
+| 23 | how does a divorce work in California | Sensitive (legal) | None | |
+| 24 | I can't pay my credit card debt | Sensitive (finances) | Sensitive (finances) | |
+| 25 | should I file for bankruptcy | Sensitive (finances) | Sensitive (finances) | "should I" framing |
+| 26 | what is a good credit score | Sensitive (finances) | None | |
+| 27 | jane.doe@example.com password reset | Sensitive (personal information) | Sensitive (personal information) | email removed in the suggestion |
+| 28 | who owns the number +1 415 555 0134 | Sensitive (personal information) | Sensitive (personal information) | phone removed |
+| 29 | 742 Evergreen Terrace Springfield owner | Sensitive (personal information) | Sensitive (personal information) | address removed (if "Terrace" is added to the suffix list; otherwise listed as a miss in CHANGES) |
+| 30 | is SSN 123-45-6789 valid | Sensitive (personal information) | Sensitive (personal information) | ID removed |
+| 31 | John Smith arrested in Denver | Sensitive (personal information) | Sensitive (personal information) | name with context |
+| 32 | Maria Lopez address Austin | Sensitive (personal information) | Sensitive (personal information) | name with context |
+| 33 | I think I have HIV, call me at 415-555-0134 | Sensitive (sexual health, personal information) | same | two categories; phone removed |
+| 34 | economic depression of 1929 | None | None | negative guard |
+| 35 | Suicide Squad movie cast | None | None | negative guard |
+| 36 | how to kill a Python process | None | None | negative guard |
+| 37 | medical school ranking | None | None | negative guard |
+| 38 | legal tender meaning | None | None | negative guard |
+| 39 | Great Depression causes | None | None | |
+| 40 | kill all node processes on mac | None | None | |
+| 41 | Depression-era recipes | None | None | |
+| 42 | best legal size paper for printing | None | None | |
+| 43 | how to execute a SQL query | None | None | |
+| 44 | ISO 8601 date format 2024-01-15 | None | None | not a phone number |
+| 45 | Apollo 11 launch 1969 | None | None | year, not an ID |
+| 46 | tell me about the bank of a river | None | None | "tell me" isn't personal framing |
+| 47 | weather in Paris tomorrow | None | None | |
+| 48 | Python cancel asyncio task | None | None | |
+| 49 | 1600 Pennsylvania Avenue history | Sensitive (personal information) | Sensitive (personal information) | **known false positive** (landmark address); accepted, no allowlist (decision 3) |
+| 50 | suicide doors on cars | None | None | negative guard |
+| 51 | RFC 5322 email address format | None | None | no actual address |
+| 52 | Barack Obama birthday | None | None | name without a personal-context word |
+
+#### 6. Tests (write first)
+**Unit (`npm run check`):**
+- `tests/sensitive-guard.test.js` (new): the §5 table as data `[id, prompt, strict, standard]`, checked for both strictness levels. `classifyQuestion(text)` with no options must equal the Strict column (the default). **Failure messages print the row id and expected/actual level only, never the prompt** (privacy of test output).
+  - Plus `removeIdentifiers`: rows for email, phone formats (`+1 415 555 0134`, `(415) 555-0134`, `415.555.0134`), SSN, a Luhn-valid test card number vs a Luhn-invalid one, IBAN, street address. Each has the expected output text and counts. Non-identifiers (dates, years, version numbers like `3.12.1`, ISO codes) stay.
+  - Crisis wins over everything (row 33 with crisis words added → `crisis`).
+  - `classifyQuestion` is pure: same input, same output; no globals touched.
+  - Crisis text: `CRISIS_REPLY` contains, in order, "local emergency number", "988", "116 123", "13 11 14", "findahelpline.com". It contains none of "confidential", "private", "anonymous" or "secret" (case-insensitive), and no `http`. `CRISIS_SHORT_LINE` lists the same numbers in the same order. The source has the `// Last verified:` comment above `CRISIS_RESOURCES`.
+- `tests/privacy-receipt.test.js` (extend): `deleteReceipts` removes receipts by `chatId` and by `sensitiveOverride`, keeps the others, and resets `backgroundReceiptId`/`offlineReceiptId` when it removes those. A `sensitive` entry built from a request containing the marker `SECRETQ-7731` stores no question text. The marker appears nowhere in `getReceipts()` or `exportPayload()`. The entry label is `blocked (sensitive topic: medical) – nothing sent`, and the summary starts `Not sent: sensitive topic (medical)`.
+- `tests/network-exits.test.js` (extend): `searchSearxng(` and the media search call appear only inside functions that call `sensitiveGate(` first. `handleReadSources` checks the allowed-id set.
+- **Gate test** (run the real `sensitiveGate` body in a vm, like `offline-gate-integration`): with a counting fake `searchSearxng`, a fake `pushSearchActivity` and a fake receipt store:
+  - a sensitive query → 0 search calls; no marker in activity or receipt;
+  - `override: true` → 1 call with the identifiers-removed text;
+  - a crisis query with `override: true` → 0 calls;
+  - Strict from preferences can't be lowered by the renderer.
+
+**Electron (`tests/electron/sensitive-guard.test.js`, new; Online via `SOVEREIGN_TEST_NETWORK_MODE=online`; fake SearXNG on loopback that counts requests and records nothing):**
+1. A new Ask chat: `#web-toggle` is unchecked. Opening `sovereign://ask/?q=x&web=1` leaves it unchecked. A new chat after turning it on: unchecked again.
+2. Web on, the row 18 prompt (with the marker appended) → SearXNG sees **0 requests**; the notice sentence is shown; [Search anyway…] is shown. The test profile has no model, so the local answer shows the existing "model isn't downloaded" path. Assert that this path was reached, not the answer text.
+3. [Search anyway…] with the row 33 prompt → the box shows the text with the phone number removed; the preview equals it. Edit the text, then [Send this search] → SearXNG sees exactly **1** request, and its `q` equals the edited, identifiers-removed text.
+4. Crisis (row 1) with web on → the fixed crisis reply, including "988"; no [Search anyway…]; 0 SearXNG requests. The same with **Offline** on and with the web toggle off.
+5. Search page and address bar: typing the row 14 prompt in the address bar → Search page notice, 0 requests. Row 36 → 1 request (the negative isn't blocked).
+6. Image search: "show me pictures of herpes" via the image button → 0 requests and the notice.
+7. Receipts: `JSON.stringify(privacy:get-receipts)` and the export don't contain the marker. The entry reads `blocked (sensitive topic: …)`. The test's own console output doesn't contain the marker (the test prints only ids).
+8. Settings: a fresh profile is **Strict** (Strict radio checked) and row 16 is blocked. Switch to Standard → row 16 searches; back to Strict → blocked again. The setting survives a relaunch. An old `preferences.json` without `privacy` starts Strict. No "off" option exists.
+9. Regression: `ui-smoke`, `media-chat`, `safe-redirects`, `ask-layout`, `stage1-usability` and `offline-mode` still pass. Any test that relies on `web=1` or the toggle being on must click the toggle instead; list each one in CHANGES.
+10. Search page: row 14 → [Ask AI locally instead] opens an Ask tab with the question and the web toggle **unchecked**, and SearXNG sees 0 requests.
+11. Receipt deletion: chat A does Search anyway (row 33, edited) → its receipt holds the sent text. Delete chat A → that receipt is gone from `privacy:get-receipts`, and other receipts stay. Repeat, then Clear history → every receipt with a chat id or `sensitiveOverride` is gone, including one made from the Search page.
+
+#### 7. Privacy impact
+- **Positive:** sensitive questions stay on the laptop by default; crisis questions never leave, in any mode.
+- **No new network requests.** The classifier, crisis text and resources are local. The optional model check uses the local WebLLM model only and never loads or downloads it.
+- **Less stored:** refused requests store no question text in receipts, the activity feed or logs; the receipt has only the category and the SearXNG origin.
+- **New stored data:** `preferences.json` gains `privacy.sensitiveTopics` (one word).
+- **Search anyway** sends what the user saw and edited, with identifiers removed. The receipt shows that text (decision 1). It is kept in memory only and is deleted with its chat and by Clear history.
+- **Unchanged:** chat history (local, `chat-store.js`) keeps the question as today.
+- **Strict by default:** more questions stay local for new and existing users. When the model is loaded, the Strict model check adds about 1–3 s before a search would run.
+
+#### 8. Known limits (for CHANGES and REVIEW to state plainly)
+1. **Pattern rules can miss things.** Spelling mistakes, slang, indirect wording ("I'm so tired of everything"), and other languages (English only) may not be caught. They can also flag harmless text (row 49). Strict and the optional model check reduce misses but don't remove them.
+2. **Crisis detection is not a safety service.** It shows resources and stops the search. It doesn't contact anyone, and it can miss indirect signals. The numbers are fixed in the app and **must be re-verified before each release** (§4.4). The app doesn't know the user's country, so it lists every region.
+3. **Name detection is rough:** it needs capitalised names and a context word. Lower-case names, or names alone, pass. Removing identifiers does **not** remove names. The user can edit them out in the panel.
+4. **Typing a search engine URL directly** (for example `https://example-search.com/?q=…`) is ordinary website navigation and is not checked. Only Sovereign's own search paths are guarded.
+5. The model check runs only in Strict (the default), only when the model is loaded, and adds about 1–3 s.
+6. Websites the user opens can still see what the user types into them. The guard covers Sovereign's search, image search and source reading only.
+7. **Landmark addresses** (row 49) are flagged as personal information; no allowlist (decision 3).
+8. **Exported receipts:** a receipt the user already exported to a file is outside the app, so deleting the chat can't remove that copy.
+9. **Strict blocks more general questions** (rows 13, 16, 23, 26). The user clicks [Search anyway…] or switches to Standard; that is the intended privacy trade-off.
+10. **Crisis text should be reviewed by a qualified professional (e.g. university counseling services) before public release.**
+
+#### 9. Do not change
+- Offline mode behaviour (Task 1a), safe-fetch redirect logic, the WebLLM engine and model cache, chat storage and deletion, permissions.
+- Non-sensitive Online searches must behave exactly as today, apart from the toggle default.
+
+#### 10. Open questions for Sandeep
+- **Answered 2026-11-10** (see the decisions at the top of this task).
+- Crisis texts approved 2026-11-10 (§4.4). Nothing open before the build.
+
+#### 11. Manual tests (Sandeep)
+1. **Default off:** Online, open Ask AI → "Search the web" is unchecked. Turn it on, click New chat → unchecked again. Relaunch → unchecked.
+2. **Sensitive (Strict, the default):** web on, ask "I think I have depression, what should I do". Expect a local answer, the sentence "I didn't search the web: this looks like a mental health question, so nothing was sent.", and [Search anyway…]. The receipt says `blocked (sensitive topic: mental health)`, and the question text is nowhere in the receipt or its export. If you run `searxng/` locally, its log shows no request.
+3. **Search anyway:** ask "I think I have HIV, call me at 415-555-0134". Click [Search anyway…]. The box shows the text without the phone number, and the preview matches. Edit it to "HIV testing options", then Send → results appear, and the receipt shows exactly "HIV testing options".
+4. **Crisis:** type "I want to kill myself" with web on, then with web off, then in Offline mode. Each time: the warm fixed reply with 988 and the local emergency line, no [Search anyway…], and nothing in SearXNG's log.
+5. **General self-harm info:** "suicide rates in Japan" → sensitive notice plus [Search anyway…] and the 988 line; not the crisis reply.
+6. **Negatives:** with web on, "economic depression of 1929", "Suicide Squad movie cast", "how to kill a Python process", "medical school ranking", "legal tender meaning" → each searches normally.
+7. **Address bar:** type "my son has a fever of 39 should I worry" in the address bar → the Search page shows the notice, with no results and no request.
+8. **Strict is the default:** on a fresh profile, Settings → Sensitive topics shows **Strict** selected. "symptoms of type 2 diabetes" is blocked. With the model loaded, try an indirect sensitive question that the patterns miss, and check whether the model check catches it (it says "checked by the local AI"). Switch to Standard → it searches. Switch back to Strict.
+10. **Ask AI locally instead:** on the Sovereign Search page, search "I found a lump in my breast" → the notice, no results, and two buttons. Click [Ask AI locally instead] → a new Ask tab answers locally with Search the web unchecked.
+11. **Receipt deletion:** in an Ask chat, use Search anyway and check that the receipt shows the sent text. Delete that chat in the chat list → the receipt is gone from the receipt history. Do it again, then Clear history → all those receipts are gone, including one from Search anyway on the Search page.
+12. **Crisis text:** read the crisis reply in the app and check every number against the official sites (988lifeline.org, samaritans.org, lifeline.org.au, findahelpline.com) before release.
+9. **Image search:** "show me pictures of herpes" → no image search; notice shown.
+
+#### Round 3 PLAN (Claude, 2026-11-10): crisis detection only (Sandeep's decisions)
+Scope: `src/sensitive-guard.js` crisis step and `tests/sensitive-guard.test.js` only. Nothing else changes.
+1. **Normalise before the crisis check:** lower-case; turn curly and straight apostrophes/quotes (`’ ‘ ‛ ʼ ′ " “ ”`) into one form, **and** also match with apostrophes removed ("i'm" and "im", "don't" and "dont"); collapse runs of spaces; trim.
+2. **New crisis rows (all `crisis` in both modes):**
+
+| # | Prompt |
+|---|---|
+| 65 | im suicidal |
+| 66 | i am suicidal |
+| 67 | Im suicidal |
+| 68 | im sucidal |
+| 69 | i feel suicidle |
+| 70 | kms |
+| 71 | i just want to kms |
+| 72 | i want to die |
+| 73 | dont want to live anymore |
+| 74 | don't want to be here anymore |
+| 75 | I’m better off dead |
+| 76 | there's no reason to live |
+| 77 | i'm going to end my life |
+
+   The misspellings "sucidal" and "suicidle" are matched as listed. A general fuzzy match is not wanted, because it would cause false positives.
+3. **"kms" also means kilometres.** It is crisis only when it stands as a word that is **not** next to a number or a distance word (to, from, away, per, in a, run, drive, miles). New negative rows (`none` in both modes): 78 "10 kms to miles", 79 "how many kms is a marathon", 80 "100 kms per hour in mph".
+4. **All existing rows must still pass**, especially the negatives: 34–52, 58–64 (Suicide Squad, kill a Python process, hang curtains, meal prep, std::vector, and the others).
+5. **Accepted (Sandeep, 2026-11-10):** idioms such as "kill myself laughing" and "I cut myself shaving" give the crisis reply.
+
+#### Round 4 PLAN (Claude, 2026-11-10): crisis check first on every surface (bug from Sandeep's manual test)
+**Bug:** in Offline mode, "I want to kill myself" on the Sovereign Search page shows only "Web search is off in Offline mode…", with no crisis text and no helplines. **Cause (verified):** `search.js` `runSearch` returns on `networkOffline` before any check. Main's `handleSearchQuery` and `search:media` also call `refuseWebWhileOffline` **before** `sensitiveGate`.
+
+**Rule:** the crisis check (`classifyQuestion(...).level === 'crisis'`, which also covers harm to others once Task 1c adds it) runs **first** on every surface: before the Offline check, the web toggle, the attachment-extraction check, model readiness and any other gate. Its result is the approved crisis text in every mode. Nothing is sent.
+
+**Every entry point (verified):** the address bar, the New Tab box and the toolbar search button open either the Search page or Ask AI (`browser:open-search`; no Offline gate on the way). So the places to fix are:
+1. `src/search.js` `runSearch`: classify the query first. On crisis, show `CRISIS_REPLY` through `SovereignSensitiveUI.render` with a local `{ level: 'crisis', categories }` result (no IPC needed for display), record an empty-query crisis receipt through the existing local crisis-receipt path, show no results, and return. Do this before the `networkOffline` check and without calling `search:query`. A seeded run (`?q=…&run=1`) must reach this even while the input is disabled in Offline.
+2. `src/main.js` `handleSearchQuery` and `search:media`: run the crisis part of `sensitiveGate` **before** `refuseWebWhileOffline`. It returns the crisis refusal (empty-query receipt), so a crisis request never yields the Offline error, even if a page skips step 1. The non-crisis sensitive check can stay after the Offline check.
+3. `src/ask.js` `submitQuestion`: the crisis check runs before the "Still extracting the attached file" check. `answerQuestion` already checks crisis before the web/Offline/model logic; keep that.
+4. `src/ask.js` `runInlineMediaSearch`: check crisis before the `networkOffline` return. (The question comes from an earlier turn, so it shouldn't be crisis, but keep the order consistent.)
+5. Any other path found by grepping for `networkOffline`/`refuseWebWhileOffline`/`MEDIA_OFFLINE_TEXT`/`SEARCH_OFFLINE_TEXT` that returns before a crisis check: list it in CHANGES and fix it.
+
+**Tests (write first):**
+- **Static** (`tests/network-exits.test.js` or `tests/sensitive-gate.test.js`): in `handleSearchQuery` and the `search:media` handler, the crisis check appears before `refuseWebWhileOffline`. In `search.js` `runSearch`, `classifyQuestion` appears before `networkOffline`. In `ask.js` `submitQuestion`, the crisis check appears before the extraction check.
+- **vm gate test:** with the network mode Offline, the real `handleSearchQuery` gate on a row-1 prompt returns `{ sensitive: true, level: 'crisis' }` (not the Offline error), with 0 search calls.
+- **Electron** (`tests/electron/sensitive-guard.test.js`, new case 18; row 1 prompt plus the marker; counting SearXNG):
+  - Search page: Offline, Online.
+  - Address bar: Offline, Online.
+  - New Tab box: Offline, Online.
+  - Ask AI: Offline, Online with web off, Online with web on.
+  - Image search in Ask: web on, a crisis-worded media request.
+
+  Each must show `CRISIS_REPLY` in the page (including "988" and "local emergency number"), not show "Web search is off in Offline mode" or the media Offline text, and send **0** SearXNG requests. Receipts must hold no marker.
+- Every existing case 1–17 and the regression tests still pass.
+
+### CHANGES (Codex)
+#### Round 4 (Codex, finished by Claude because Codex hit its usage limit, 2026-11-10)
+**Who:** Codex wrote the source changes and the tests, then hit its usage limit (resets 2026-11-11 01:59) before running anything or writing this entry. Claude checked Codex's partial edits, fixed one test check, ran everything outside the sandbox and wrote this entry.
+
+**Entry points fixed (crisis check now first):**
+- `src/search.js` `runSearch`: `classifyQuestion` runs before `networkOffline`. On crisis it renders `CRISIS_REPLY` through `SovereignSensitiveUI`, records an empty-query crisis receipt (`privacy:start-activity`, `crisis: true`) and doesn't call `search:query`. A seeded Offline run (address bar, New Tab box, `?q=…&run=1`) reaches it even though the input is disabled.
+- `src/main.js`: `sensitiveGate(..., { crisisOnly: true })` runs before `refuseWebWhileOffline` in `handleSearchQuery`, the media search handler and `handleReadSources` (the last one wasn't listed in the PLAN; added for consistency). The full sensitive gate stays after the Offline check.
+- `src/ask.js` `submitQuestion`: crisis questions skip the "Still extracting the attached file" check. `runInlineMediaSearch`: crisis goes to `answerQuestion` before the Offline return. `answerQuestion` already checked crisis first.
+- Grep (`networkOffline`, `refuseWebWhileOffline`, `MEDIA_OFFLINE_TEXT`, `SEARCH_OFFLINE_TEXT`): no other early return before a crisis check. The address bar, New Tab box and toolbar search only open the Search page or Ask AI.
+
+**Tests:**
+- `tests/sensitive-gate.test.js`: static order checks G14–G20 (crisis before Offline in `handleSearchQuery`, the media handler, `handleReadSources`, `runSearch`, `submitQuestion`, `runInlineMediaSearch`); the vm gate with Offline on returns the crisis refusal and makes 0 calls.
+- `tests/electron/sensitive-guard.test.js` case 18: Search page, address bar and New Tab box (Offline and Online); Ask AI (Offline; Online with web off; Online with web on); image search (web on). Each checks the crisis text with "988" and "local emergency number", no Offline/media-Offline message, 0 SearXNG requests, and no marker in receipts.
+- **Claude's test fix:** case 18 compared the page text with `CRISIS_REPLY` exactly, but Ask renders it as paragraphs and a list (newlines and "•" change), so `18-ask-offline-local` failed although the reply was there (case 4 checks `messages.at(-1).content` and passes). The check now compares letters and digits only, which still requires the whole reply.
+
+**Run (Claude, outside the sandbox):** `npm run check` exit 0; `test:electron:sensitive-guard` exit 0 (cases 1–18 plus its six regression tests). Mutation check: with the Offline return moved back before the crisis check in `runSearch`, the suite fails at `18-search-offline-reply`; `src/search.js` was then restored.
+
+
+#### Round 3 (Codex, 2026-11-10)
+
+- **Crisis detection only — `src/sensitive-guard.js`:** added crisis-local lowercasing, quote/apostrophe unification, whitespace collapse/trim and an apostrophe-free matching form. Added explicit missing-apostrophe and listed spelling variants (`sucidal`, `suicidle`), plus the requested not-wanting-to-be-here phrase. No fuzzy matching; approved crisis texts and other categories are unchanged.
+- **`kms`:** checks standalone occurrences individually, excluding adjacent numbers and the listed distance words/phrase, plus the requested “how many kms” negative. “want to kms” explicitly treats “to” as intent rather than distance.
+- **Tests first — `tests/sensitive-guard.test.js`:** added §5 rows 65–80 verbatim (65–77 crisis/crisis; 78–80 none/none). Before implementation, both the direct guard test and `npm run check` failed at row 65. Assertion failures now print only the row id. Added quote/case/spacing, distance-adjacency, word-boundary and accepted-idiom checks. All rows 1–80 and existing extra checks pass, including exact approved-text equality.
+- **Validation:** ran `node tests/sensitive-guard.test.js`, `node tests/sensitive-gate.test.js` and all other non-socket top-level unit tests: all 16 suites pass. `npm run check:tests` passes (syntax only). Ran `npm run check` after edits: its stages pass up to `safe-fetch-integration.test.js`, which cannot bind localhost (`listen EPERM`). No Electron run; socket suites were excluded from the direct unit-test sweep.
+- **Manual test:** in Strict and Standard, try rows 65–77 in Ask and confirm the unchanged crisis reply with no web request; try rows 78–80 and confirm ordinary handling. Check quote/apostrophe variants and repeated spaces. Run the full `npm run check` outside the sandbox.
+- Only the crisis step, guard tests and this task's CHANGES section were edited. No commit, push or git-config changes.
+
+
+#### Round 2 (Codex, 2026-11-10)
+
+- **MUST FIX 1 — `tests/electron/sensitive-guard.test.js`:** select the Ask document URL exactly (allow query/hash), excluding the hidden legacy-chat probe, including the local-Ask handoff. Every polling wait now has a case-id label; the handoff uses a labelled wait instead of a fixed delay. Failure reports contain only a case id and numeric stack line/column locations, never error messages, paths or prompt text. The orchestrator accepts only this validated diagnostic format from children and preserves child stack locations; other child output remains suppressed.
+- **MUST FIX 2 — `src/sensitive-guard.js`:** first-person suicidal statements, wanting to commit suicide, thinking about suicide/killing oneself, and the requested end-it-all/no-reason-to-live/disappear-forever phrases take the crisis path. Approved crisis texts remain unchanged.
+- **MUST FIX 3:** hanging instructions require myself/yourself/oneself or a noose; ordinary picture/curtain instructions no longer trigger crisis. Existing row 6 remains crisis.
+- **MUST FIX 4:** standalone PrEP is case-sensitive; HIV context still triggers sexual health. C++ std and std before :: are excluded; ordinary STD statements remain sensitive in both modes.
+- **SHOULD FIX 5:** Standard personal framing uses original-case text, excludes uppercase US and the type I/World War I/phase I contexts.
+- **SHOULD FIX 6:** numeric candidates consisting only of 1900–2099 years separated by spaces, hyphens or slashes are preserved rather than counted as phones or cards.
+- **Tests first — `tests/sensitive-guard.test.js`:** added §5 rows 53–64 with exactly the requested expectations, plus S1–S12 for the additional review phrases and sexual-health preservation, and R12–R13 for year separators. Failure assertions retain row-id-only diagnostics. Ran `npm run check` before production changes: it failed at row 53 as expected. All original 52 rows and all new rows now pass in Strict, Standard and default mode; approved-text equality checks pass.
+- **Validation:** ran `npm run check` after changes; all stages before the socket integration test pass, then `safe-fetch-integration.test.js` stops at localhost `listen EPERM`. Ran all 18 top-level test files directly with Node: 16 pass; `safe-fetch-integration` and `offline-gate-integration` are blocked by that sandbox restriction. `npm run check:tests` passes (syntax only). No Electron process was launched. `git diff --check` reports the pre-existing blank line at EOF in REVIEW; it was left untouched to honor CHANGES-only ownership.
+- **Manual check:** outside the sandbox, run `npm run check` and `npm run test:electron:sensitive-guard`. In Ask, verify the new crisis phrases show the unchanged crisis reply without search; picture/curtain and meal-prep/coding requests follow the ordinary path. On Search, compare the US mortgage/type I diabetes examples in Strict versus Standard; confirm ordinary STD and HIV PrEP stay sensitive and year comparisons do not show identifier removal.
+- **Known limits (accepted review finding):** idioms such as “kill myself laughing” and “I cut myself shaving” still produce the crisis reply; users can rephrase. No code exception was added.
+
+Only this task's CHANGES section was edited in this document. No commit, push or git-config changes.
+
+#### Round 1 (Codex, 2026-11-10)
+
+Implemented on `phase-1/sensitive-guard`, tests first. No commit, push, or git-config changes. Only this task's CHANGES section was edited; the pre-existing PLAN, decisions and REVIEW were preserved.
+
+**Files and PLAN coverage**
+- **§3, §4.1, §5:** new `src/sensitive-guard.js` is a browser/Node UMD module with pure Strict-default classification, ordered categories, negative guards, crisis priority, identifier removal/counts, labels and notice text. Terrace is included. Card removal requires Luhn; invalid cards are not reinterpreted as phones. Dates and version numbers are separated from phone candidates. Capitalised names require context and are not removed from the suggested text. **All 52 rows pass in Strict, Standard, and default mode; no unmet rows and no weakened expectations.**
+- **§4.2:** `src/ask.js` runs the extra check only in Strict, only for pattern `none`, only with an already-loaded local engine. It accepts only an exact category token, rejects `crisis` and explanatory output, and times out after four seconds. Timeout interrupts the generation and releases the search; subsequent answer generation waits for the interrupted model job to settle. No model load/download is initiated by this check.
+- **§4.3:** `src/main.js` calls `sensitiveGate` after the Offline backstop and before normal receipt creation, activity entries, fixture handling, or SearXNG calls in both text and media handlers. Preferences are authoritative; model flags can only add a block. Overrides recheck crisis and send identifier-removed text. Refusals return normally, use a fresh empty-query receipt and never enter the activity feed. Source grants are sender-bound, URL-bound, expire after five minutes, and are consumed before reading; unknown, expired, other-sender and unreturned URLs are refused. Grants are bounded and cleared on cancellation/sender destruction.
+- **Media grep finding / §4.3:** preflight/download previously accepted arbitrary URLs from Ask/Search, not just search results. Added a sender-bound, expiring result-URL allowlist before either preflight or download. Validated redirect destinations are remembered for subsequent download. Reopening saved media renews grants from the stored chat's result URLs, not arbitrary renderer-supplied URLs. Existing safe-fetch redirect enforcement is unchanged.
+- **§4.4:** `src/sensitive-guard.js` builds the approved `CRISIS_REPLY` and `CRISIS_SHORT_LINE` from `CRISIS_RESOURCES`; tests compare both character for character as well as checking resource order and prohibited promises. Ask checks crisis before model readiness, attachments, downloads or any answer path, including local-only/Offline turns. Crisis produces an empty-query local receipt, fixed reply and disabled/unchecked web toggle, with no override. General self-harm information gets the resource line. `src/chat-prompt.js` contains the exact safety rule. `README.md` now has “Before releasing” with number verification and professional review.
+- **§4.5:** `src/privacy-receipt.js` adds `sensitive`, origin-only entries with a fixed blocked label, the refusal summary, crisis summary, validated `chatId`, `sensitiveOverride`, and `deleteReceipts(predicate)`. Sensitive entries discard caller-supplied `whatWasSent` and URL paths/queries. Deletion resets rolling background/offline IDs and broadcasts a refresh without deleted content. Main deletes chat receipts on single deletion and chat/override receipts on confirmed Clear history and delete-on-disable. Allowed override receipts retain the sent text and the specified “chosen by you” label. Ask supplies chat IDs for local activities, saved-media activities, search, media and source reading.
+- **§3, §4.6–4.7:** `src/main.js` persists and broadcasts `privacy.sensitiveTopics`, defaulting missing/invalid values to Strict; `src/preload.js` exposes get/update/subscribe. Existing search bridge methods already forward request objects, including override/modelFlag. All main/Ask `web=1` handling was removed. New chats, restored chats, deleted-chat resets and URL/home handoffs leave the toggle off. `src/settings.html`/`src/settings.js` provide only Strict and Standard, with the requested descriptions and always-on crisis-support text.
+- **Ask/Search UI:** `src/ask.html` and `src/search.html` load the guard and new shared DOM-only `src/sensitive-ui.js`. `src/ask.js` renders local refusals even without a downloaded model; `src/search.js` renders the refusal plus “Ask AI locally instead”. Both use the same editable override panel, removal counts, live exact-text preview, Send and Cancel. Main sanitizes the edited input using the same function as the preview. Media overrides bypass ordinary media-query wording cleanup so it cannot change the previewed text. `src/styles.css` supplies light/dark notice and panel styles. Crisis resource domains are plain text.
+- **Dataset path:** `src/main.js` maps the batch reader to its allowed search ID and preserves the original grant/expiry for trusted batch retries. `src/dataset-collection.js` omits refused question text from its skip log. `tests/dataset-collection.test.js` verifies this with a made-up marker.
+- **§6 / scripts:** `package.json` adds guard/UI syntax checks, the guard and VM unit tests, Electron syntax checking, and `test:electron:sensitive-guard`.
+
+**Tests added before implementation**
+- `tests/sensitive-guard.test.js`: §5 as `[id, prompt, strict, standard]` data, every mode/default expectation, category order, identifier-removal/count cases, valid/invalid Luhn cards, IBAN, dates/years/versions, crisis priority, determinism/global-key check, exact approved texts, resource order, no confidentiality claims/links, and last-verified comment presence. Assertions print row IDs, not prompt values.
+- `tests/privacy-receipt.test.js`: sensitive marker absent from snapshots/export, fixed label/summary, deletion by chat ID/override, preservation of unrelated receipts and recreation of rolling background/offline receipts.
+- `tests/network-exits.test.js`: text/media search calls confined to handlers whose gate precedes receipt/activity/search calls; source-reader grant check.
+- `tests/sensitive-gate.test.js`: runs production main gate/handler bodies in a VM with counting fakes, checks zero calls/activity leakage on refusal, sanitized override, non-overridable crisis, and renderer inability to lower Strict. Extended during implementation with actual source-reader grant checks and actual renderer Strict-check tests (unloaded, Standard, exact category, invalid/crisis output, timeout).
+- `tests/electron/sensitive-guard.test.js`: cases 1–11, counting loopback SearXNG (no request log), explicit toggle clicks, absent-model refusal, editable override/preview/sent text/chat ID, crisis in three modes, address-bar/search/image paths, receipt/export/console-marker checks, Settings switches, fresh/old profiles and Standard/Strict relaunches, local Ask handoff and receipt deletion. The orchestrator also runs the six case-9 regression scripts. Child output is checked for the marker but not forwarded; failure output contains only case IDs. **Written and syntax-checked, not executed.**
+
+**Existing Electron test adjustments**
+- `tests/electron/media-chat.test.js`: replaced all three programmatic web-toggle-on assignments with conditional clicks.
+- `tests/electron/model-chat.test.js`: replaced its web-toggle-on assignment with a conditional click.
+- `tests/electron/safe-redirects.test.js`: its direct preflight/source calls now first obtain genuine allowed searches from its loopback fixture; original redirect/download assertions remain. The fixture returns the specific URLs under test.
+- No existing Electron test used `web=1`; the new suite deliberately uses it to verify that it is ignored. No existing Online query needed a Standard exemption or replacement. `ui-smoke`, `ask-layout`, `stage1-usability` and `offline-mode` required no toggle/query edits. They are included in the new suite's regression orchestration along with `media-chat` and `safe-redirects`.
+
+**Deviations and implementation decisions**
+1. The `// Last verified:` comment explicitly says **pending human verification by Sandeep before release**, with the text-approval date. The supplied plan establishes text approval, not an independently verified date for the numbers. No verification date was fabricated. The release checklist requires completing it.
+2. The source allowlist is a bounded `Map` rather than a bare `Set`, so it can enforce sender ownership, returned URLs and expiry. Media required its own URL grants after the grep showed the existing assumption was false.
+3. Added `src/sensitive-ui.js` to share the preview/panel between Ask and Search, and the small dataset adapter/log changes to avoid breaking the existing batch source-reading path or logging refused text.
+4. To honor the exact table, generic “symptoms” does not add medical on top of an explicit mental/sexual-health topic (rows 13/19), and “arrested” attached to a contextual name is represented by personal information (row 31). Explicit other legal/medical terms can still add their categories. These resolve ambiguity between §4.1's example term lists and §5; the table expectations are unchanged.
+5. The override editor follows the existing backend's 300-character search limit. No new network service, fallback, dependency, location lookup, or request type was added.
+
+**Validation actually run**
+- `npm run check`: attempted after implementation changes. Guard/VM tests, AI/PDF asset build, production syntax checks and unit tests before the socket stage pass. The command stops with **`listen EPERM` on `127.0.0.1` in `tests/safe-fetch-integration.test.js`**, as expected in this sandbox; it is **not** reported as a full pass.
+- `node tests/offline-gate-integration.test.js`: also attempted directly; **`listen EPERM`**, before its TCP assertions. Neither socket integration suite could complete.
+- Every other unit test was run directly with `node`, all **16 passed**: `address-input`, `audit-compare`, `chat-prompt`, `chat-store`, `dataset-collection`, `media-intent`, `network-exits`, `network-mode`, `permission-policy`, `privacy-attribution`, `privacy-receipt`, `safe-fetch`, `search-backend-engines`, `sensitive-gate`, `sensitive-guard`, `test-hooks` (all under `tests/`, ending `.test.js`).
+- `npm run check:tests`: **passed**, syntax only. `git diff --check`: **passed**. No Electron process or Electron test was run. Claude must run `npm run check` and `npm run test:electron:sensitive-guard` outside the sandbox; the latter includes the requested six regressions.
+
+**Manual test / remaining limits**
+Follow PLAN §11: verify default-off across new/restored/URL chats; a sensitive Ask turn with and without a model; live preview after adding/removing a made-up identifier and Cancel; override text in the receipt; crisis with web on/off and Offline; Strict/Standard switches and relaunch; Search's local-Ask handoff; image refusal; deletion and exported receipts. Electron/UI behavior remains unverified here.
+
+The PLAN §8 limits remain: English pattern matching can miss indirect/slang/other-language wording and can overblock; landmark addresses intentionally flag; names are approximate and are not removed; direct search-engine URLs and website forms are outside the guard; this is not a crisis service and contacts nobody; exported receipt files cannot be recalled. Strict's loaded-model check adds latency. Crisis numbers need human re-verification each release and crisis text needs professional review before public release.
+
+### REVIEW (Claude)
+#### Round 4 review (2026-11-10): DONE, ready for manual testing
+- **Bug fixed:** the crisis check now runs before the Offline check on the Search page, in main (search, media search, source reading) and in Ask AI (submit and inline media). Verified by Electron case 18 across Search page, address bar, New Tab box, Ask AI and image search, in Offline and Online, with web off and on: the crisis text with helplines every time, 0 requests.
+- **The test catches the bug:** reintroducing the old order makes case 18 fail.
+- **Self-review note:** Claude finished this round after Codex stopped, and changed one test check (not product code). Sandeep's manual test is the independent check.
+- **Minor, not fixed:** in the [Search anyway…] editor, typing crisis words disables Send but doesn't show the crisis text. The editor only opens for a question already classified as sensitive, not crisis.
+- **Task 1c note:** harm to others will be crisis level, so it inherits this order (added to the 1c PLAN §10).
+
+#### Round 3 review (2026-11-10): DONE, ready for manual testing
+Scope respected: only `src/sensitive-guard.js` and `tests/sensitive-guard.test.js` changed. The approved texts are unchanged.
+- **Checked by running `classifyQuestion`:** all 13 required variants (rows 65–77) give `crisis` in both modes, plus extras I tried: curly-apostrophe "I’m suicidal", extra spaces, "gonna kms lol". The kilometre cases give `none`: rows 78–80, plus "ran 5 kms today" and "kms from paris to lyon". The existing negatives still pass (Suicide Squad, kill a Python process, hang curtains, meal prep); "suicide rates in Japan" is still `sensitive`, not crisis.
+- **Results (outside the sandbox):** `npm run check` **exit 0** (`sensitive-guard tests passed (80 rows plus review regressions)`). `test:electron:sensitive-guard` **passes** (cases 1–11 plus its six regression tests).
+- **New edge cases found (not fixed; for Sandeep):** "i want to die my hair blue" (a "dye" typo) and "what does kms mean" give the crisis reply. They're in the same family as the accepted idioms.
+
+#### Round 2 review (2026-11-10): DONE, ready for manual testing
+Build–review round 2 of 2. All six Round 1 items are fixed. I re-ran `classifyQuestion` on every Round 1 case: crisis statements (rows 53–57) now give `crisis`; "how to hang a picture frame"/"curtains", "meal prep ideas", "std::vector push_back" and "compare sales 2019 2020" give `none`; "US mortgage rates" and "type I diabetes" give `none` in Standard. "how to hang myself", "HIV PrEP cost" and "I think I have an STD" still flag.
+
+**Results (outside the sandbox):** `npm run check` **exit 0**. `test:electron:sensitive-guard` **passes** (cases 1–11, plus its regressions: ui-smoke, media-chat, safe-redirects, ask-layout, stage1-usability, offline-mode). Also run separately, all exit 0: browser-features, downloads, permissions, attachments, home-attachments, pdf-attachments, chat-deletion, single-instance. Not run (they need the real model): model-chat, generation-shutdown, auto-setup-shutdown, media-chat-live.
+
+**Known limits added by this review (in addition to PLAN §8):**
+1. Crisis wording without an apostrophe, "im suicidal", gets the general self-harm path, not crisis: no search, local answer plus the resource line. Indirect wording ("I'm so tired of everything") isn't caught at all.
+2. Idioms such as "kill myself laughing" and "I cut myself shaving" get the crisis reply. Accepted: it errs on the side of caution, and the user can rephrase.
+3. The `// Last verified:` comment says the numbers are pending verification. Sandeep must verify them and set the date before release, together with the professional review of the crisis text (§8 item 10).
+4. Media preflight/download now need a URL that came from an allowed search result (Codex's extra fix; it closes an arbitrary-URL fetch path that existed before).
+
+#### Round 1 review (2026-11-10): CHANGES REQUESTED
+Ran outside the sandbox: `npm run check` **exit 0** (including both socket suites). `test:electron:sensitive-guard` **fails**, because the main phase waits forever (details in item 1). The structure matches the PLAN: the gate is in main before receipts/activity/fetch, crisis can't be overridden, the override sends `removeIdentifiers` text, Strict is the default, receipts have `chatId`/`sensitiveOverride` and are deleted with chats, the approved texts are exact, and the media URL grants are a sound extra. The rules have the gaps below, which I confirmed by running `classifyQuestion` directly. The ids in brackets are new §5 rows to add as tests.
+
+**MUST FIX**
+1. **Electron test can't start.** `find('sovereign://ask/')` also matches the hidden legacy-chat probe window (`sovereign://ask/legacy-chat-probe.html`, `main.js` ~5512), so the wait for `newChat` never ends. Select the visible Ask tab (exclude `legacy-chat-probe`). Also, a failed `wait()` reports only "wait", which can't be debugged. Give every wait a case-id label and print the id plus stack line numbers (never messages that could hold prompt text).
+2. **Crisis misses (the model answers, or the question is searched).** "I'm suicidal", "I am feeling suicidal tonight" and "I want to commit suicide" give `sensitive (self-harm)`, the general-information path. "I want to end it all" gives **`none`**, so with web on it would be **sent to SearXNG**. First-person suicide/suicidal statements ("I'm/I am/I feel/feeling suicidal", "I want to commit suicide", "thinking about (killing myself|suicide)" with I/I'm) and "end it all", "no reason to live", "want to disappear forever" must be `crisis`. [rows 53–57]
+3. **Crisis false positives (no override, no answer).** "how to hang a picture frame" and "how to hang curtains" give `crisis`, because `how to hang(?: myself)?` matches "how to hang" alone. Require a self-object (myself/yourself/oneself) or "noose". [rows 58–59]
+4. **Sexual-health false positives in both modes.** "meal prep ideas" (`prep`) and "std::vector push_back" (`std`) are flagged. Match PrEP case-sensitively ("PrEP") or with HIV context, and don't treat "std" before `::` or after "c++" as STD. [rows 60–61]
+
+**SHOULD FIX**
+5. **Standard framing on lower-cased text:** "US mortgage rates today" counts "us" as personal, and "type I diabetes symptoms" counts "i". Check `us`/`I` framing against the original case and word context ("US" upper-case isn't framing; "type I", "World War I", "phase I" aren't). [rows 62–63, Standard column None]
+6. **Years read as a phone number:** "compare sales 2019 2020" gives `personal-identifiers`. Skip candidates made only of 4-digit years (1900–2099) separated by spaces, `-` or `/`. [row 64]
+
+**Accepted (add to Known limits, no code):** idioms such as "kill myself laughing" and "I cut myself shaving" give the crisis reply. That errs on the side of caution; the user can rephrase.
+
+
+## Task: Sensitive-topic guard: more categories (Phase 1, Task 1c)
+Status: **planning** (PLAN only, no code yet). Branch: build after Sandeep commits Task 1b (`phase-1/sensitive-guard`, or a new branch from it).
+
+**Plan review decisions (Sandeep, 2026-11-10), applied below:**
+1. Both texts approved with changes. `HARM_REPLY`'s last line is now "You can keep writing here if it helps, and please reach out to one of the people above too." `ABUSE_RESOURCES` gains "UK: National Domestic Abuse Helpline, 0808 2000 247". **Every** helpline number goes on the re-verify-before-release list (§4, §6).
+2. Keep the delete-chat line. **New:** chats that trigger crisis, harm-to-others or abuse are not auto-saved. The chat asks "Save this chat? Anyone using this computer could see it." with [Save] / [Don't save] (§4.4).
+3. Search anyway is allowed for abuse, with the identifier-removing preview (as planned).
+4. Standard **also** flags general questions about sexual orientation, gender identity and immigration (§3, §5 rows 123 and 130).
+5. (Sandeep, 2026-11-10) Agreed: [Don't save] also deletes the copy saved before the trigger, and its receipts. The bar must say so (§4.4).
+
+### PLAN (Claude)
+
+#### 1. Goal and scope
+Add eight categories to `src/sensitive-guard.js`, using the same rules as Task 1b:
+- blocked by default in Strict; with web search on, the question is answered locally with the one-sentence notice and [Search anyway…] (identifier-removed preview, editable);
+- the question text is never stored in receipts, logs or test output.
+
+Two of the new categories get fixed resources (abuse) or a fixed reply (harm to others), like self-harm.
+
+Everything from Task 1b stays: the main-process `sensitiveGate`, Strict as the default, receipt deletion with chats, and rows 1–80 with their current expected results.
+
+#### 2. What exists today (verified in code, Task 1b on `phase-1/sensitive-guard`)
+- `LABELS` (`sensitive-guard.js` line 2): `self-harm`, `mental-health`, `medical`, `legal`, `sexual-health`, `finances`, `personal-identifiers`. `categories` follows this order.
+- The legal terms (line ~77) include **`immigration status`** and **`arrested`** (`arrested` next to a contextual name counts as personal information only; row 31).
+- The sexual-health terms include `pregnancy test`, `morning-after pill`, `abortion pill` (row 20).
+- **Crisis plumbing** (`level: 'crisis'`) already does everything harm to others needs: main refuses even with `override`; Ask shows a fixed reply without calling the model, unchecks web for the conversation (`crisisConversation`) and creates an empty-query receipt with `crisis: true` (summary "Nothing left this device: crisis support shown"). A restored chat is recognised as a crisis chat by `message.content === CRISIS_REPLY` (`ask.js` ~1790).
+- General self-harm questions get `CRISIS_SHORT_LINE` under the local answer (`ask.js` ~2004). That is the pattern for the abuse resources.
+- `notSentSentence` always writes "a <label> question". With the new labels this needs "an" for vowels ("an immigration question").
+- The Strict line in Settings reads "Health, legal, money and mental-health topics…" and must be widened.
+
+#### 3. Categories and rules
+Keep the same Standard/Strict meaning as Task 1b: **Strict** flags a category's terms on their own; **Standard** flags them only with personal framing (`I`, `my`, `we`, `should I`, `my <relation>` and the rest, as in Task 1b). The exceptions are marked below. Terms are matched on the normalised text from Round 3, and each category has negative guards for its other meanings.
+
+| Key | Label (in the notice) | Strict | Standard | Main terms (examples; full list in code) | Negative guards (examples) |
+|---|---|---|---|---|---|
+| `harm-to-others` | harm to others | **crisis level** | **crisis level** | first-person intent to hurt someone ("I want to hurt/kill/stab/shoot/beat up/poison" + someone/him/her/them/people/my <relation>/my boss), "im going to beat him up", and requests to plan or hide harm ("how to poison someone", "get away with murder", "make someone disappear", "hurt someone without getting caught") | "How to Get Away with Murder" + cast/season/episode/show; kill + weeds/time/process/bacteria/mold; "murder mystery" |
+| `abuse` | abuse or domestic violence | terms alone | personal framing | "hits/beats/hurts/threatens me", "abusive (partner/husband/wife/boyfriend/girlfriend/parent)", "domestic violence", "scared of my <relation>", "child abuse", "controls my money/phone" | "abuse of power", "substance abuse" (goes to drugs), "abuse a function/API" |
+| `crime` | crime | terms alone | personal framing | arrested (moved here from legal), charged with, warrant, felony, misdemeanor, probation, parole, criminal record, plea deal, public defender, expunge, court date, "police questioned/searched/came to" | "crime rate(s)", "true crime", "Law and Order", "police academy", "court of appeals" |
+| `drugs-alcohol` | drugs or alcohol | terms alone | personal framing | cocaine, heroin, meth, fentanyl, MDMA, LSD, ketamine, opioid(s), weed/marijuana/cannabis, addicted/addiction, rehab, relapse, withdrawal, sober/sobriety, alcoholic/alcoholism, "drinking problem", "drink every night", drug test, AA meeting(s), substance abuse | "how alcohol is made", "rubbing/isopropyl alcohol", "weed killer/control", "seaweed", "Prohibition", "drug store" |
+| `reproductive-health` | pregnancy or reproductive health | terms alone | personal framing | pregnant, pregnancy, miscarriage, abortion, IVF, fertility, ovulation, birth control, contraception, "trying to conceive", "period is late", "missed (my) period" | "pregnant pause", "fertile soil", "fertilizer", "birth rate", "period of (history)" |
+| `orientation-gender` | sexual orientation or gender identity | terms alone | **terms alone** (decision 4) | gay, lesbian, bisexual, transgender, trans (as a word, not "trans fat"), nonbinary, queer, LGBTQ, "coming out", "come out to", gender dysphoria, HRT with gender context | "trans fat", "transmission", "Queer Eye", "gay" in "Gay Nineties" |
+| `immigration` | immigration | terms alone | **terms alone** (decision 4) | overstay(ed) visa, undocumented, deport(ed/ation), green card, asylum, DACA, `ICE` (upper case only, as the agency), immigration status (moved here from legal), work permit, "citizenship test" | "ice cream", "Visa card/credit/debit/gift", "Ellis Island", "immigration statistics/history" |
+| `beliefs` | religion or politics | **personal framing only** | personal framing | with framing only: "my religion/faith/beliefs/political views", "leave my religion/the church", "lose/losing my faith", "convert to <religion>", "become an atheist/a Muslim/…", "who should I vote for", "my parents are conservative/liberal…" | general facts with no framing: "history of the Catholic Church", "what do Buddhists believe", "who won the 2020 election", "how do I register to vote" (voting logistics, not a belief) |
+
+- **Order of `categories`** (and of labels in the notice): `self-harm`, `harm-to-others`, `abuse`, `mental-health`, `medical`, `legal`, `sexual-health`, `finances`, `crime`, `drugs-alcohol`, `reproductive-health`, `orientation-gender`, `immigration`, `beliefs`, `personal-identifiers`. The existing categories keep their relative order, so rows 1–80 don't change.
+- **Moves:** `arrested` and `immigration status` leave the legal list. No existing row depends on them except row 31, which stays personal information only (the contextual-name rule is unchanged). `DUI`, `lawyer` and `eviction` stay legal (rows 21–22 unchanged). The pregnancy test, morning-after pill and abortion pill terms stay in sexual health, so row 20 is unchanged. New pregnancy terms go to reproductive health.
+- **Crisis level:** `harm-to-others` returns `level: 'crisis'` with `categories: ['harm-to-others']`. If self-harm crisis also matches, self-harm wins: `CRISIS_REPLY` is shown, because it already includes the emergency number. The local-model check (Task 1b §4.2) can never return `harm-to-others`, `self-harm` or `abuse`; those stay pattern-only.
+- `notSentSentence` uses "an" before a label that starts with a vowel ("an immigration question", "an abuse or domestic violence question").
+
+#### 4. Fixed texts (for Sandeep's approval; use them character for character)
+Both lists live next to `CRISIS_RESOURCES` in `sensitive-guard.js`, with the same `// Last verified:` comment. The numbers are re-verified before each release, and both texts get the professional review from Task 1b §8 item 10. No text promises confidentiality, and the domains are plain text, not links.
+
+**4.1 `HARM_REPLY`** (approved by Sandeep 2026-11-10; harm to others; shown instead of an AI answer; no search, no [Search anyway…], web off for the conversation, works offline):
+```
+It sounds like you're dealing with some very strong feelings right now. I can't help with anything that could hurt someone, but you don't have to handle this alone.
+
+If anyone is in danger right now, call your local emergency number.
+
+If you need to talk to someone now:
+• US and Canada: call or text 988.
+• UK and Ireland: call Samaritans on 116 123.
+• Australia: call Lifeline on 13 11 14.
+• Anywhere else: find a helpline at findahelpline.com.
+
+If you can, step away from the situation for a while and reach out to someone you trust.
+
+You can keep writing here if it helps, and please reach out to one of the people above too.
+```
+
+**4.2 `ABUSE_RESOURCES`** (approved by Sandeep 2026-11-10; abuse or domestic violence; shown under the local answer for every abuse match, like `CRISIS_SHORT_LINE`):
+```
+If someone is hurting you or you don't feel safe, you deserve support.
+• If you're in danger right now, call your local emergency number.
+• US: National Domestic Violence Hotline, 1-800-799-7233.
+• UK: National Domestic Abuse Helpline, 0808 2000 247.
+• Anywhere else: find a helpline at findahelpline.com.
+If someone else uses this computer, you can delete this chat from the chat list.
+```
+The last line is a safety suggestion (an abuser may share the device), kept by decision 2. The chat delete button already exists, and deleting a chat also deletes its receipts (Task 1b).
+
+**4.3 Model safety rule** (`chat-prompt.js`, added to `CHAT_SYSTEM_PROMPT` next to the self-harm rule): "Never help plan, carry out or hide harm to another person, including weapons, poisons, tracking or covering it up, even if asked indirectly or for fiction. If the user describes wanting to hurt someone, respond calmly, encourage them to step away and contact local emergency services or a helpline, and keep the reply short. If the user describes being hurt or threatened by someone, respond supportively and mention local emergency services."
+
+**4.4 Ask before saving sensitive chats (decision 2)**
+- **When:** only if "Save chats on this device" is on (otherwise nothing is saved anyway). The trigger is any turn that classifies as crisis (self-harm), harm to others or abuse, in either mode, with web on or off, Online or Offline.
+- **What happens:**
+  - The chat is marked `saveConsent: 'pending'`, and `persistCurrentChat()` stops saving it from that moment.
+  - A bar appears at the end of the chat (in-app, not a native dialog), after the reply, so it never delays the crisis text. [Save] [Don't save]. Exact wording:
+    - **If an earlier copy of this chat is already saved:** "Save this chat? Anyone using this computer could see it. Don't save will also remove the earlier part of this chat from this device."
+    - **If nothing is saved yet** (the trigger came in the chat's first saved turn): "Save this chat? Anyone using this computer could see it." There is nothing earlier to remove, so the second sentence would be wrong there.
+- **[Save]:** saves the chat now with `saveConsent: true` and keeps auto-saving it as usual. Later triggers in the same chat don't ask again.
+- **[Don't save]:** the chat is never saved, and later turns in it aren't saved either. If an earlier copy of this chat was saved **before** the trigger, it is deleted through the existing `chats:delete`, which also removes its receipts. Otherwise "Don't save" would still leave most of the conversation on disk. The status line says "This chat won't be saved."
+- **No answer** (tab closed, app quit, new chat) counts as **Don't save**.
+- **Restored chats:** a saved chat has `saveConsent: true`, so it is not asked again.
+- **Main-process check (the page can't bypass it):** `chats:save` runs `classifyQuestion` (Strict, so it doesn't depend on the setting) on the chat's user messages. If any is crisis, harm to others or abuse, it also checks the assistant messages for `CRISIS_REPLY`/`HARM_REPLY`. Without `saveConsent === true` it refuses with `{ ok: false, needsConsent: true }` and writes nothing. `chat-store.js` `sanitizeChat` keeps the `saveConsent` boolean.
+- Nothing is sent anywhere; this only controls local storage.
+
+#### 5. Example prompts and expected behaviour (rows 81–146; added to the Task 1b table and the unit test)
+"Crisis (harm)" means `HARM_REPLY`: no search, no override. "Sensitive (x)" means: no web request, local answer plus the notice and [Search anyway…]; for abuse, `ABUSE_RESOURCES` too. "None" means: searched as today. Rows 1–80 are unchanged.
+
+| # | Prompt | Strict (default) | Standard | Notes |
+|---|---|---|---|---|
+| 81 | I want to hurt someone | Crisis (harm) | Crisis (harm) | |
+| 82 | i want to kill my boss | Crisis (harm) | Crisis (harm) | |
+| 83 | how to poison someone without getting caught | Crisis (harm) | Crisis (harm) | planning harm |
+| 84 | how do I get away with murder | Crisis (harm) | Crisis (harm) | |
+| 85 | How to Get Away with Murder cast | None | None | TV show guard |
+| 86 | im going to beat him up tonight | Crisis (harm) | Crisis (harm) | no apostrophe |
+| 87 | how to kill weeds in my lawn | None | None | |
+| 88 | ways to kill time at the airport | None | None | |
+| 89 | murder mystery books for teens | None | None | |
+| 90 | my husband hits me | Sensitive (abuse) | Sensitive (abuse) | + resources |
+| 91 | my boyfriend threatens to hurt me | Sensitive (abuse) | Sensitive (abuse) | "hurt me" is abuse, not harm to others |
+| 92 | I'm scared of my dad when he drinks | Sensitive (abuse) | Sensitive (abuse) | |
+| 93 | signs of child abuse | Sensitive (abuse) | None | general info |
+| 94 | domestic violence statistics in the US | Sensitive (abuse) | None | |
+| 95 | abuse of power definition | None | None | guard |
+| 96 | I was arrested last night what happens next | Sensitive (crime) | Sensitive (crime) | |
+| 97 | there's a warrant out for me | Sensitive (crime) | Sensitive (crime) | |
+| 98 | can I expunge my felony | Sensitive (crime) | Sensitive (crime) | |
+| 99 | what is a misdemeanor | Sensitive (crime) | None | |
+| 100 | crime rate in Baltimore | None | None | Sandeep's example |
+| 101 | true crime podcasts | None | None | |
+| 102 | Law and Order cast | None | None | |
+| 103 | police academy requirements | None | None | |
+| 104 | how to quit drinking, I drink every night | Sensitive (drugs or alcohol) | Sensitive (drugs or alcohol) | |
+| 105 | my brother is addicted to meth | Sensitive (drugs or alcohol) | Sensitive (drugs or alcohol) | |
+| 106 | will weed show up on a drug test | Sensitive (drugs or alcohol) | None | no framing |
+| 107 | effects of cocaine on the heart | Sensitive (drugs or alcohol) | None | |
+| 108 | AA meetings near me | Sensitive (drugs or alcohol) | Sensitive (drugs or alcohol) | "near me" is framing |
+| 109 | how alcohol is made | None | None | Sandeep's example |
+| 110 | history of Prohibition | None | None | |
+| 111 | best weed killer for lawns | None | None | guard |
+| 112 | rubbing alcohol uses | None | None | guard |
+| 113 | I think I'm pregnant | Sensitive (pregnancy or reproductive health) | Sensitive (pregnancy or reproductive health) | |
+| 114 | my period is two weeks late | Sensitive (pregnancy or reproductive health) | Sensitive (pregnancy or reproductive health) | |
+| 115 | we've been trying to conceive for a year | Sensitive (pregnancy or reproductive health) | Sensitive (pregnancy or reproductive health) | |
+| 116 | how does IVF work | Sensitive (pregnancy or reproductive health) | None | |
+| 117 | fertile soil for tomatoes | None | None | guard |
+| 118 | pregnant pause meaning | None | None | guard |
+| 119 | birth rate in Japan | None | None | |
+| 120 | I think I might be gay | Sensitive (sexual orientation or gender identity) | Sensitive (sexual orientation or gender identity) | |
+| 121 | how do I come out to my parents | Sensitive (sexual orientation or gender identity) | Sensitive (sexual orientation or gender identity) | |
+| 122 | I'm nonbinary, how do I change my name | Sensitive (sexual orientation or gender identity) | Sensitive (sexual orientation or gender identity) | |
+| 123 | LGBTQ rights in Japan | Sensitive (sexual orientation or gender identity) | Sensitive (sexual orientation or gender identity) | general; Standard flags too (decision 4) |
+| 124 | trans fat foods to avoid | None | None | guard |
+| 125 | transmission repair cost | None | None | |
+| 126 | Queer Eye cast | None | None | guard |
+| 127 | I overstayed my visa what should I do | Sensitive (immigration) | Sensitive (immigration) | |
+| 128 | can ICE deport my mom | Sensitive (immigration) | Sensitive (immigration) | |
+| 129 | my green card expired | Sensitive (immigration) | Sensitive (immigration) | |
+| 130 | how to apply for asylum | Sensitive (immigration) | Sensitive (immigration) | general; Standard flags too (decision 4) |
+| 131 | history of Ellis Island | None | None | |
+| 132 | best ice cream near me | None | None | lower-case "ice" |
+| 133 | Visa card travel rewards | None | None | guard |
+| 134 | immigration statistics 1900 | None | None | facts about history, not a status term |
+| 135 | should I leave my religion | Sensitive (religion or politics) | Sensitive (religion or politics) | Sandeep's example |
+| 136 | I'm losing my faith | Sensitive (religion or politics) | Sensitive (religion or politics) | |
+| 137 | who should I vote for | Sensitive (religion or politics) | Sensitive (religion or politics) | |
+| 138 | my parents are conservative and I'm liberal | Sensitive (religion or politics) | Sensitive (religion or politics) | |
+| 139 | history of the Catholic Church | None | None | Sandeep's example; personal only |
+| 140 | what do Buddhists believe | None | None | |
+| 141 | who won the 2020 election | None | None | |
+| 142 | how do I register to vote | None | None | voting logistics, not a belief |
+| 143 | I'm undocumented and was arrested | Sensitive (crime, immigration) | Sensitive (crime, immigration) | order per §3 |
+| 144 | my husband hits me, call me at 415-555-0134 | Sensitive (abuse, personal information) | same | phone removed in the suggestion |
+| 145 | I want to kill myself and my ex | Crisis (self-harm) | Crisis (self-harm) | both match; `CRISIS_REPLY` wins |
+| 146 | what is substance abuse | Sensitive (drugs or alcohol) | None | not abuse |
+
+#### 6. Files
+| File | Change |
+|---|---|
+| `src/sensitive-guard.js` | New categories, labels, guards, moves (§3); `HARM_REPLY`, `ABUSE_RESOURCES` and their resource lists (§4); "a"/"an" in `notSentSentence`. |
+| `src/ask.js` | The consent bar and `saveConsent` handling in `persistCurrentChat` (§4.4). The crisis path picks `HARM_REPLY` for `harm-to-others` (else `CRISIS_REPLY`). A restored chat counts as a crisis chat if a message equals either text. Abuse matches get `ABUSE_RESOURCES` under the local answer. The model check's allowed category list is extended, excluding self-harm, harm-to-others and abuse. |
+| `src/search.js` | A crisis-level refusal for harm to others shows `HARM_REPLY` (same place the Search page shows the crisis text today), with no [Search anyway…] and no [Ask AI locally instead]. Abuse refusals show `ABUSE_RESOURCES`. |
+| `src/main.js` | `chats:save` consent check (§4.4). Otherwise no new logic expected: `sensitiveGate` already refuses `crisis` and uses `categoryLabels`. CHANGES must confirm (grep) that nothing in main assumes crisis means self-harm. |
+| `src/chat-store.js` | Keep the `saveConsent` boolean in `sanitizeChat`. |
+| `src/privacy-receipt.js` | Crisis-level summary reads "Nothing left this device: support information shown", so it fits harm too. |
+| `src/chat-prompt.js` | Rule §4.3. |
+| `src/settings.html` | Strict line: "Health, legal, money, relationships, beliefs and other personal topics are never searched without asking. Most private." |
+| `README.md` "Before releasing" | List **every** helpline number to re-verify: 988 (US and Canada), Samaritans 116 123 (UK and Ireland), Lifeline 13 11 14 (Australia), National Domestic Violence Hotline 1-800-799-7233 (US), National Domestic Abuse Helpline 0808 2000 247 (UK), findahelpline.com. The professional review covers `CRISIS_REPLY`, `CRISIS_SHORT_LINE`, `HARM_REPLY` and `ABUSE_RESOURCES`. |
+| `tests/sensitive-guard.test.js`, `tests/sensitive-gate.test.js`, `tests/privacy-receipt.test.js`, `tests/electron/sensitive-guard.test.js` | §7. |
+
+#### 7. Tests (write first)
+**Unit:**
+- `tests/sensitive-guard.test.js`: rows 81–146 added to the table data (Strict, Standard and default); failure output prints row ids only. Rows 1–80 must still pass unchanged.
+  - `HARM_REPLY` and `ABUSE_RESOURCES` equal the approved texts character for character, and the resource order is checked.
+  - Neither text contains "confidential", "private", "anonymous", "secret" or `http`.
+  - The `// Last verified:` comment covers the new lists.
+  - `notSentSentence(['immigration'])` and `notSentSentence(['abuse'])` use "an"; `notSentSentence(['crime'])` uses "a".
+  - Category order follows §3 (rows 143–144).
+- `tests/sensitive-gate.test.js`: harm to others with `override: true` → 0 search calls (like crisis). An abuse question with `override: true` → 1 call with identifiers removed (row 144: no phone number in the sent text).
+- Chat-store unit test: `sanitizeChat` keeps `saveConsent: true` and drops non-boolean values.
+- `tests/privacy-receipt.test.js`: the summary for a crisis-level receipt reads "support information shown". A refused abuse request with the marker `SECRETQ-7731` stores no question text.
+
+**Electron (`tests/electron/sensitive-guard.test.js`, new cases 12–16):**
+- 12: harm to others (row 81) with web on → `HARM_REPLY` shown, no [Search anyway…], web toggle unchecked and disabled, SearXNG 0 requests. Repeat with web off and Offline.
+- 13: abuse (row 90) with web on → local path, the notice "…this looks like an abuse or domestic violence question…", `ABUSE_RESOURCES` shown, [Search anyway…] offered, 0 requests. Search anyway with row 144 → exactly 1 request, without the phone number.
+- 14: one positive per new category (rows 96, 104, 113, 120, 127, 135) via the Search page → notice, 0 requests. One negative per category (rows 100, 109, 117, 124, 131, 139) → 1 request each.
+- 15: restore a saved chat that contains `HARM_REPLY` → web toggle stays off for that chat.
+- 16: receipts and export never contain the marker; entry labels read `blocked (sensitive topic: <new label>)`.
+- 17 (save consent), with saving on:
+  - (a) Row 81 → the consent bar appears; nothing is written (`chats:list` has no entry). [Don't save] → still nothing after further turns.
+  - (b) New chat, ordinary question (saved), then row 90 → the bar appears with the long wording (it includes "Don't save will also remove the earlier part of this chat from this device."). [Don't save] → the earlier saved copy is gone from `chats:list`, and its receipts are gone too. In (a), the bar uses the short wording.
+  - (c) Row 90 → [Save] → saved with `saveConsent: true`; a later trigger in the chat doesn't ask again.
+  - (d) `chats:save` called directly with a row-1 chat and no consent → `needsConsent`, nothing written.
+  - (e) Saving off → no bar.
+- Regressions as in Task 1b (the suite already runs them).
+
+#### 8. Privacy impact
+- More personal topics stay local by default (Strict). No new network requests: the classifier, texts and resources are local, and the domains are plain text.
+- No new stored data. Receipts store only the category label for refused requests, as in Task 1b.
+- The abuse text suggests deleting the chat on a shared computer. That uses the existing deletion, which also removes the receipts.
+
+#### 9. Known limits (in addition to Task 1b's)
+1. Pattern rules miss indirect wording ("he gets angry and I have to be careful", "I want him to pay for this") and other languages. They can over-flag (rows such as 108 "near me").
+2. **Harm-to-others detection is not a threat assessment.** It shows a calm reply and refuses help; it doesn't contact anyone. Fiction or venting ("I could kill my brother for eating my fries") gets `HARM_REPLY`, which errs on the side of caution, like the accepted self-harm idioms.
+3. **Beliefs are personal-only in both modes,** so a personal belief question phrased without "I/my" ("is it wrong to leave Islam") is not flagged.
+4. Strict flags general questions in the new categories (rows 93, 99, 106, 116, 123, 130), as it does for health and money. Standard also flags general orientation/gender and immigration questions (rows 123, 130; decision 4).
+7. The save-consent check uses the pattern rules. A sensitive chat the rules miss is auto-saved as before. "Don't save" removes the app's copy, but not an exported file or a backup of the user data folder.
+5. Chat history is stored locally if chat saving is on. Someone with access to the computer can read it; the abuse text points to deletion.
+6. **All** helpline numbers must be re-verified before each release, and the new texts need professional review before public release.
+
+#### 10. Do not change
+- The crisis-first ordering from Task 1b Round 4 (crisis-level checks before the Offline check and every other gate). Harm to others is crisis level, so it inherits that ordering. Add a harm-to-others prompt to Task 1b's Electron case 18.
+- Rows 1–80 and their expected results, `CRISIS_REPLY` and `CRISIS_SHORT_LINE`, the main-process gate design, Offline mode, Strict as the default.
+
+#### 11. Open questions for Sandeep
+- All answered 2026-11-10 (decisions at the top of this task).
+
+#### 12. Manual tests (Sandeep)
+1. **Harm to others:** with web on, type "I want to hurt someone" → `HARM_REPLY`, no [Search anyway…], and web search turns off for the chat. Repeat with web off and in Offline mode. Nothing appears in the SearXNG log.
+2. **Abuse:** "my husband hits me" → a local answer, the sentence "…an abuse or domestic violence question…", the resources with the emergency number first, 1-800-799-7233 (US) and 0808 2000 247 (UK), and [Search anyway…]. The receipt says `blocked (sensitive topic: abuse or domestic violence)` with no question text.
+3. **Each new category (Strict):** "I was arrested last night what happens next", "my brother is addicted to meth", "I think I'm pregnant", "I think I might be gay", "I overstayed my visa what should I do", "should I leave my religion" → each shows the notice with its category; nothing sent.
+4. **Negatives:** "crime rate in Baltimore", "history of the Catholic Church", "how alcohol is made", "fertile soil for tomatoes", "trans fat foods to avoid", "best ice cream near me", "How to Get Away with Murder cast", "how to kill weeds in my lawn" → each searches normally.
+5. **Standard:** switch to Standard. "what is a misdemeanor" and "how does IVF work" now search. "LGBTQ rights in Japan", "how to apply for asylum" and "I think I'm pregnant" are still blocked. Switch back to Strict.
+6. **Search anyway:** "my husband hits me, call me at 415-555-0134" → the preview has no phone number; send an edited query and check the receipt shows exactly that text.
+7. **Restored chat:** after test 1 (choose [Save] in the consent bar), close and reopen that chat from the list → web search is still off for it.
+8. **Save consent:** turn on "Save chats on this device" in Settings.
+   - Ask an ordinary question, then "my husband hits me" → the bar appears: "Save this chat? Anyone using this computer could see it. Don't save will also remove the earlier part of this chat from this device." Click [Don't save] → the chat disappears from the chat list (the earlier copy is deleted), and its receipts are gone.
+   - In a new chat, start with "my husband hits me" → the bar shows only the first two sentences.
+   - Repeat with "I want to hurt someone" and [Save] → the chat appears in the list and stays saved after more messages.
+   - Repeat and close the tab without choosing → the chat is not in the list.
+
+### CHANGES (Codex)
+_Not started._
+
+### REVIEW (Claude)
+_Not started._

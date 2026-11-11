@@ -199,3 +199,6 @@ Sovereign is under active development. Features and interfaces may change as the
 ## Acknowledgments
 
 Built using Electron, WebLLM, SearXNG, and the open-source tools that support them.
+## Before releasing
+
+- Re-verify crisis numbers in `src/sensitive-guard.js` against the official services, update its last-verified comment, and have the crisis text reviewed by a qualified professional before public release.
