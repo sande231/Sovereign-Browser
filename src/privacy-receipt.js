@@ -21,6 +21,7 @@ const VALID_CATEGORIES = new Set([
   'model-download',
   'permission',
   'blocked',
+  'sensitive',
   'other'
 ]);
 
@@ -116,6 +117,9 @@ function originOnly(value) {
 }
 
 function buildSummary(receipt) {
+  if (receipt.crisis) return 'Nothing left this device: crisis support shown';
+  const sensitive = receipt.entries.filter(entry => entry.category === 'sensitive');
+  if (sensitive.length) return `Not sent: sensitive topic (${[...new Set(sensitive.map(entry => entry.topic))].join(', ')})` + (receipt.type === 'ask' ? ' · AI generated locally' : '');
   const allEntries = Array.isArray(receipt.entries) ? receipt.entries : [];
   const blockedEntries = allEntries.filter(entry => entry.category === 'blocked');
   const entries = allEntries.filter(entry => entry.category !== 'blocked');
@@ -183,6 +187,9 @@ function sanitizeReceipt(receipt) {
     type: receipt.type,
     label: receipt.label,
     query: receipt.query,
+    chatId: receipt.chatId,
+    sensitiveOverride: Boolean(receipt.sensitiveOverride),
+    crisis: Boolean(receipt.crisis),
     localOnly: Boolean(receipt.localOnly),
     offline: Boolean(receipt.offline),
     droppedEntries: receipt.droppedEntries || 0,
@@ -206,13 +213,20 @@ function notify(receipt) {
   }
 }
 
-function createReceipt({ id, type = 'activity', label = '', query = '' } = {}) {
+function validChatId(value) {
+  return typeof value === 'string' && value.length <= 100 && value.trim() && !/[\x00-\x1f\x7f]/.test(value) ? value.trim() : '';
+}
+
+function createReceipt({ id, type = 'activity', label = '', query = '', chatId = '', sensitiveOverride = false, crisis = false } = {}) {
   const receiptId = safeString(id, 100) || `receipt-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const existing = receipts.find(receipt => receipt.id === receiptId);
   if (existing) {
     existing.type = safeString(type, 40) || existing.type;
     existing.label = safeString(label, 120) || existing.label;
-    existing.query = safeString(query, 300) || existing.query;
+    existing.query = safeString(query, 300);
+    existing.chatId = validChatId(chatId) || existing.chatId;
+    existing.sensitiveOverride = Boolean(sensitiveOverride);
+    existing.crisis = Boolean(crisis);
     if (arguments[0] && Object.prototype.hasOwnProperty.call(arguments[0], 'localOnly')) {
       existing.localOnly = Boolean(arguments[0].localOnly);
     }
@@ -228,6 +242,9 @@ function createReceipt({ id, type = 'activity', label = '', query = '' } = {}) {
     type: safeString(type, 40) || 'activity',
     label: safeString(label, 120),
     query: safeString(query, 300),
+    chatId: validChatId(chatId),
+    sensitiveOverride: Boolean(sensitiveOverride),
+    crisis: Boolean(crisis),
     localOnly: Boolean(arguments[0]?.localOnly),
     offline: offlineMode,
     droppedEntries: 0,
@@ -257,14 +274,16 @@ function addEntry(receiptId, details = {}) {
   if (category === 'blocked') {
     return addBlocked(target, details);
   }
-  const url = cleanUrl(details.url);
+  const topic = category === 'sensitive' ? safeString(details.topic, 160) : '';
+  const url = category === 'sensitive' ? originOnly(details.url) : cleanUrl(details.url);
   const entry = {
     timestamp: timestamp(),
     category,
     method: safeString(details.method || 'GET', 12).toUpperCase() || 'GET',
     host: hostFromUrl(url),
     url,
-    whatWasSent: safeString(details.whatWasSent || 'request metadata only; no request body logged', 500)
+    ...(category === 'sensitive' ? { topic } : {}),
+    whatWasSent: category === 'sensitive' ? `blocked (sensitive topic: ${topic}) – nothing sent` : safeString(details.whatWasSent || 'request metadata only; no request body logged', 500)
   };
   target.entries.push(entry);
   if (target.entries.length > MAX_ENTRIES_PER_RECEIPT) {
@@ -437,6 +456,16 @@ function exportPayload({ appVersion = '' } = {}) {
   };
 }
 
+function deleteReceipts(predicate) {
+  const removed = receipts.filter(predicate);
+  receipts = receipts.filter(receipt => !removed.includes(receipt));
+  if (removed.some(receipt => receipt.id === backgroundReceiptId)) backgroundReceiptId = '';
+  if (removed.some(receipt => receipt.id === offlineReceiptId)) offlineReceiptId = '';
+  // Broadcast a deletion event without retaining the deleted receipt's contents.
+  if (removed.length) for (const listener of listeners) { try { listener(null); } catch {} }
+  return removed.length;
+}
+
 function resetForTests() {
   receipts = [];
   backgroundReceiptId = '';
@@ -451,6 +480,7 @@ function onUpdate(callback) {
 
 module.exports = {
   CLOUD_AI_HOSTS,
+  deleteReceipts,
   addEntry,
   addBackgroundEntry,
   addPermissionEntry,

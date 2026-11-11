@@ -145,6 +145,14 @@ const utils = require('../src/search-utils');
     });
     assert.deepEqual(await sourceRefused.promise, { collected: 0, skipped: 2, resumed: 0 });
 
+    const marker = 'SECRETQ-7731';
+    const blockedQuestions = path.join(dir, 'blocked-questions.txt');
+    const blockedOutput = path.join(dir, 'blocked.jsonl');
+    fs.writeFileSync(blockedQuestions, marker);
+    await collectDataset({ questionsPath: blockedQuestions, outputPath: blockedOutput,
+      query: async () => ({ sensitive: true }), readSources: async () => { throw Error('D1'); }, wait: async () => {} });
+    assert.ok(!fs.readFileSync(blockedOutput + '.skipped.txt', 'utf8').includes(marker), 'D2');
+
     process.env.SOVEREIGN_DATASET_DELAY_MS = '17';
     const configured = await run('configured', [true, true]);
     await configured.promise;

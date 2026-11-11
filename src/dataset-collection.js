@@ -121,6 +121,13 @@ async function collectDataset({ questionsPath, outputPath, query, readSources,
           continue;
         }
         const response = search.value;
+        if (response.sensitive) {
+          // A refused question must not enter the diagnostic skip log.
+          skip(id, '', 'sensitive_topic');
+          emptyStreak = 0;
+          await onProgress(index + 1, questions.length);
+          continue;
+        }
         if (!response.results?.length) {
           skip(id, question, 'no_results');
           emptyStreak++;

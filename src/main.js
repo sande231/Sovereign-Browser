@@ -1,3 +1,5 @@
+const sensitiveGuard = require('./sensitive-guard');
+let privacySettings = { sensitiveTopics: 'strict' };
 const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
@@ -977,6 +979,8 @@ function assignPrivacyReceiptToSender(sender, receiptId) {
   if (alreadyTracked) return;
   sender.once?.('destroyed', () => {
     activePrivacyReceiptsByWebContentsId.delete(sender.id);
+    for (const [id, grant] of allowedSearchRequests) if (grant.senderId === sender.id) allowedSearchRequests.delete(id);
+    for (const [key, grant] of allowedMediaUrls) if (grant.senderId === sender.id) allowedMediaUrls.delete(key);
   });
 }
 
@@ -1127,9 +1131,6 @@ function recordPrivacyRedirect(details) {
 }
 
 function sendPrivacyReceipt(receipt) {
-  if (!receipt) {
-    return;
-  }
   for (const state of windows.values()) {
     const targets = [state.uiView?.webContents, state.sidebarView?.webContents];
     for (const tab of state.tabs.values()) {
@@ -1302,6 +1303,7 @@ function loadPreferences() {
   try {
     const raw = fs.readFileSync(preferencesPath(), 'utf8');
     const parsed = JSON.parse(raw);
+    privacySettings = { sensitiveTopics: parsed?.privacy?.sensitiveTopics === 'standard' ? 'standard' : 'strict' };
     const downloadsPrefs = parsed?.downloads && typeof parsed.downloads === 'object'
       ? parsed.downloads
       : {};
@@ -1383,6 +1385,7 @@ function savePreferences() {
       choiceMade: Boolean(networkSettings.choiceMade),
       offlineAllowlist: [...networkSettings.offlineAllowlist]
     },
+    privacy: { ...privacySettings },
     session: savedSession
   };
   fs.writeFileSync(file, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
@@ -3054,9 +3057,6 @@ function internalUrlForKind(kind, options = {}) {
     if (question) {
       url.searchParams.set('q', question);
     }
-    if (options.web) {
-      url.searchParams.set('web', '1');
-    }
     if (options.autoRun) {
       url.searchParams.set('run', '1');
     }
@@ -3224,7 +3224,6 @@ function createTab(state, address = DEFAULT_HOME, makeActive = true) {
         const parsed = new URL(address);
         options = {
           question: parsed.searchParams.get('q') || '',
-          web: parsed.searchParams.get('web') === '1',
           autoRun: parsed.searchParams.get('run') === '1'
         };
       } catch {
@@ -4582,11 +4581,22 @@ async function runDatasetCollection() {
   try {
     await datasetWindow.loadFile(path.join(__dirname, 'dataset-collection.html'));
     const event = { sender: datasetWindow.webContents };
+    let datasetSearchId = '';
+    let datasetSearchGrant = null;
     await collectDataset({
       questionsPath: expandPath(process.env.SOVEREIGN_DATASET_BATCH),
       outputPath,
-      query: request => handleSearchQuery(event, { ...request, endpoint: searchSettings.endpoint }),
-      readSources: request => handleReadSources(event, request),
+      query: async request => {
+        const result = await handleSearchQuery(event, { ...request, endpoint: searchSettings.endpoint });
+        datasetSearchId = request.requestId;
+        datasetSearchGrant = allowedSearchRequests.get(datasetSearchId);
+        return result;
+      },
+      readSources: request => {
+        // Trusted batch retries may reuse only the original search's URLs and expiry.
+        if (datasetSearchGrant) allowedSearchRequests.set(datasetSearchId, datasetSearchGrant);
+        return handleReadSources(event, { ...request, requestId: datasetSearchId });
+      },
       onProgress: async (done, total) => {
         const label = `Dataset collection — ${done} / ${total}`;
         console.log(label);
@@ -4691,7 +4701,6 @@ ipcMain.on('browser:open-search', (event, payload) => {
     if (input.mode === 'ask') {
       createInternalTab(state, 'ask', true, {
         question: input.question,
-        web: Boolean(input.web),
         autoRun: Boolean(input.autoRun),
         handoffId: input.handoffId
       });
@@ -4874,6 +4883,18 @@ ipcMain.on('ai:update-tab-state', (_event, tabId, patch) => {
 
 ipcMain.handle('ai:get-network-log', () => aiNetworkEvents.slice(-100));
 
+ipcMain.handle('privacy:get-settings', () => ({ ...privacySettings }));
+ipcMain.handle('privacy:update-settings', (_event, patch) => {
+  if (['strict', 'standard'].includes(patch?.sensitiveTopics)) {
+    privacySettings = { sensitiveTopics: patch.sensitiveTopics };
+    savePreferences();
+    for (const state of windows.values()) for (const tab of state.tabs.values()) {
+      if (['ask', 'search', 'settings'].includes(tab.kind) && !tab.view.webContents.isDestroyed()) tab.view.webContents.send('privacy:settings', { ...privacySettings });
+    }
+  }
+  return { ...privacySettings };
+});
+
 ipcMain.handle('privacy:get-latest-receipt', () => privacyReceipts.getLatestReceipt());
 
 ipcMain.handle('privacy:get-receipts', () => privacyReceipts.getReceipts());
@@ -4893,11 +4914,15 @@ ipcMain.handle('privacy:start-activity', (event, request) => {
     id: receiptId,
     type: receiptType,
     label: input.purpose === 'saved-chat-media' ? 'Saved chat image previews' : receiptType === 'ask' ? 'Ask AI' : 'Search',
-    query: String(input.query || '').replace(/\s+/g, ' ').trim().slice(0, 300),
-    localOnly: Boolean(input.localOnly)
+    query: input.crisis ? '' : String(input.query || '').replace(/\s+/g, ' ').trim().slice(0, 300),
+    localOnly: Boolean(input.localOnly),
+    chatId: input.chatId,
+    crisis: input.crisis === true
   });
   assignPrivacyReceiptToSender(event.sender, receipt.id);
   if (input.purpose === 'saved-chat-media' && Array.isArray(input.thumbnailUrls)) {
+    const saved = chatStore().list().find(chat => chat.id === input.chatId);
+    if (saved) rememberAllowedSearch(event.sender, receiptId, saved.messages.flatMap(message => message.mediaResults || []), true);
     for (const url of input.thumbnailUrls.filter(value => typeof value === 'string').slice(0, 200)) {
       thumbnailReceipts.remember(urlKey(url, String(event.sender.id)), receipt.id);
     }
@@ -5014,6 +5039,47 @@ function recordSearxngForwardingSafely(receiptId, result) {
   }
 }
 
+// Grants are scoped to the sender, bounded and expire; reading consumes a grant.
+const allowedSearchRequests = new Map();
+const allowedMediaUrls = new Map();
+function rememberAllowedSearch(sender, requestId, results, media = false) {
+  const now = Date.now();
+  for (const [key, grant] of allowedSearchRequests) if (grant.expires <= now) allowedSearchRequests.delete(key);
+  for (const [key, grant] of allowedMediaUrls) if (grant.expires <= now) allowedMediaUrls.delete(key);
+  const expires = now + 5 * 60 * 1000;
+  allowedSearchRequests.set(requestId, { senderId: sender.id, expires, urls: new Set((results || []).map(item => item.url)) });
+  if (media) for (const item of results || []) for (const url of [item.mediaUrl, item.originalMediaUrl, item.thumbnailUrl, item.downloadUrl]) {
+    if (url) allowedMediaUrls.set(urlKey(url, String(sender.id)), { expires, senderId: sender.id });
+  }
+  while (allowedSearchRequests.size > 100) allowedSearchRequests.delete(allowedSearchRequests.keys().next().value);
+  while (allowedMediaUrls.size > 1000) allowedMediaUrls.delete(allowedMediaUrls.keys().next().value);
+}
+function requireAllowedMedia(sender, url) {
+  const grant = allowedMediaUrls.get(urlKey(url, String(sender.id)));
+  if (!grant || grant.expires <= Date.now()) throw new Error('Media request requires an allowed search.');
+}
+function sensitiveGate(sender, text, options = {}) {
+  const result = sensitiveGuard.classifyQuestion(text, { strictness: privacySettings.sensitiveTopics });
+  if (options.crisisOnly && result.level !== 'crisis') return { ok: true };
+  const modelFlag = Object.hasOwn(sensitiveGuard.LABELS, options.modelFlag) ? options.modelFlag : '';
+  if (result.level !== 'crisis' && modelFlag && !result.categories.includes(modelFlag)) {
+    result.level = 'sensitive';
+    result.categories = Object.keys(sensitiveGuard.LABELS).filter(category => category === modelFlag || result.categories.includes(category));
+  }
+  const query = options.override === true ? sensitiveGuard.removeIdentifiers(text).text : String(text || '').replace(/\s+/g, ' ').trim();
+  if (result.level === 'crisis' || (result.level === 'sensitive' && options.override !== true)) {
+    // Do not reuse caller ids: an earlier receipt may already contain query text.
+    const receipt = privacyReceipts.createReceipt({ type: findTabBySender(sender).tab?.kind === 'search' ? 'search' : 'ask', label: 'Sensitive topic', query: '', chatId: options.chatId, crisis: result.level === 'crisis', localOnly: true });
+    if (result.level !== 'crisis') privacyReceipts.addEntry(receipt.id, {
+      category: 'sensitive', topic: sensitiveGuard.categoryLabels(result.categories),
+      url: options.endpoint || searchSettings.endpoint
+    });
+    assignPrivacyReceiptToSender(sender, receipt.id);
+    return { ok: false, sensitive: true, ...result, modelFlag: Boolean(modelFlag), suggestedQuery: sensitiveGuard.removeIdentifiers(text).text };
+  }
+  return { ok: true, query, sensitiveOverride: options.override === true };
+}
+
 async function handleSearchQuery(event, request) {
   const tab = datasetWindow && event.sender === datasetWindow.webContents
     ? { kind: 'ask' }
@@ -5023,6 +5089,8 @@ async function handleSearchQuery(event, request) {
   }
 
   const input = request && typeof request === 'object' ? request : {};
+  const crisis = sensitiveGate(event.sender, input.query, { ...input, crisisOnly: true });
+  if (!crisis.ok) return crisis;
   const requestId = String(input.requestId || '').slice(0, 80);
   if (!requestId) {
     throw new Error('Search request is missing an id.');
@@ -5033,17 +5101,21 @@ async function handleSearchQuery(event, request) {
 
   const endpoint = normalizeSearxngEndpoint(input.endpoint || searchSettings.endpoint);
   refuseWebWhileOffline(event.sender, endpoint);
+  allowedSearchRequests.delete(requestId);
+  const gate = sensitiveGate(event.sender, input.query, input);
+  if (!gate.ok) return gate;
   searchSettings.endpoint = endpoint;
   const controller = new AbortController();
   activeSearchRequests.set(requestId, controller);
 
   let query = '';
   try {
-    query = String(input.query || '').replace(/\s+/g, ' ').trim();
+    query = gate.query;
     const receipt = privacyReceipts.createReceipt({
       id: requestId,
       type: tab.kind === 'ask' ? 'ask' : 'search',
       label: tab.kind === 'ask' ? 'Ask AI web retrieval' : 'Search',
+      chatId: input.chatId, sensitiveOverride: gate.sensitiveOverride,
       query
     });
     assignPrivacyReceiptToSender(event.sender, receipt.id);
@@ -5052,8 +5124,9 @@ async function handleSearchQuery(event, request) {
       query,
       endpoint,
       signal: controller.signal,
-      fetchImpl: makeReceiptFetch(receipt.id, 'search', `Search query: ${query}`)
+      fetchImpl: makeReceiptFetch(receipt.id, 'search', `${gate.sensitiveOverride ? 'Search query (sent after a sensitive-topic warning, chosen by you)' : 'Search query'}: ${query}`)
     });
+    rememberAllowedSearch(event.sender, requestId, result.results);
     recordSearxngForwardingSafely(receipt.id, result);
     pushSearchActivity(requestActivityEntry({
       endpoint,
@@ -5081,14 +5154,16 @@ async function handleSearchQuery(event, request) {
 }
 ipcMain.handle('search:query', handleSearchQuery);
 
-ipcMain.handle('search:media', async (event, request) => {
+async function handleMediaSearch(event, request) {
   const { tab } = findTabBySender(event.sender);
   if (!tab || !['search', 'ask'].includes(tab.kind)) {
     throw new Error('Media search is only available from Sovereign Search and Ask AI tabs.');
   }
-  refuseWebWhileOffline(event.sender, searchSettings.endpoint);
 
   const input = request && typeof request === 'object' ? request : {};
+  const crisis = sensitiveGate(event.sender, input.query, { ...input, crisisOnly: true });
+  if (!crisis.ok) return crisis;
+  refuseWebWhileOffline(event.sender, searchSettings.endpoint);
   const requestId = String(input.requestId || '').slice(0, 80);
   if (!requestId) {
     throw new Error('Media search request is missing an id.');
@@ -5097,21 +5172,25 @@ ipcMain.handle('search:media', async (event, request) => {
     throw new Error('That media search request is already running.');
   }
 
+  allowedSearchRequests.delete(requestId);
+  const gate = sensitiveGate(event.sender, input.query, input);
+  if (!gate.ok) return gate;
   const controller = new AbortController();
   activeSearchRequests.set(requestId, controller);
   const category = input.type === 'videos' ? 'videos' : 'images';
 
   try {
-    const query = String(input.query || '').replace(/\s+/g, ' ').trim();
+    const query = gate.query;
     const receipt = privacyReceipts.createReceipt({
       id: requestId,
       type: tab.kind === 'ask' ? 'ask' : 'search',
       label: category === 'videos' ? 'Media video retrieval' : 'Media image retrieval',
-      query
+      query, chatId: input.chatId, sensitiveOverride: gate.sensitiveOverride
     });
     assignPrivacyReceiptToSender(event.sender, receipt.id);
-    const fixtureResult = mediaFixtureResults(input.query, category);
+    const fixtureResult = mediaFixtureResults(query, category);
     if (fixtureResult) {
+      rememberAllowedSearch(event.sender, requestId, fixtureResult.results, true);
       for (const item of fixtureResult.results) {
         if (item.thumbnailUrl) thumbnailReceipts.remember(urlKey(item.thumbnailUrl, String(event.sender.id)), receipt.id);
       }
@@ -5128,12 +5207,13 @@ ipcMain.handle('search:media', async (event, request) => {
       };
     }
     const result = await searchSearxngMedia({
-      query: input.query,
+      query,
       type: category,
       endpoint: input.endpoint || searchSettings.endpoint,
       signal: controller.signal,
-      fetchImpl: makeReceiptFetch(receipt.id, 'search', `${category === 'videos' ? 'Video' : 'Image'} search query: ${query}`)
+      fetchImpl: makeReceiptFetch(receipt.id, 'search', `${gate.sensitiveOverride ? 'Search query (sent after a sensitive-topic warning, chosen by you)' : 'Media search query'}: ${query}`)
     });
+    rememberAllowedSearch(event.sender, requestId, result.results, true);
     for (const item of result.results) {
       if (item.thumbnailUrl) thumbnailReceipts.remember(urlKey(item.thumbnailUrl, String(event.sender.id)), receipt.id);
     }
@@ -5153,7 +5233,7 @@ ipcMain.handle('search:media', async (event, request) => {
     if (error?.name !== 'AbortError') {
       pushSearchActivity(requestActivityEntry({
         endpoint: input.endpoint || searchSettings.endpoint,
-        query: String(input.query || ''),
+        query: gate.query,
         status: `${category}-media-error`,
         error: error?.message || String(error)
       }));
@@ -5162,7 +5242,8 @@ ipcMain.handle('search:media', async (event, request) => {
   } finally {
     activeSearchRequests.delete(requestId);
   }
-});
+}
+ipcMain.handle('search:media', handleMediaSearch);
 
 ipcMain.handle('media:preflight', async (event, request) => {
   const { tab } = findTabBySender(event.sender);
@@ -5171,15 +5252,18 @@ ipcMain.handle('media:preflight', async (event, request) => {
   }
   const input = request && typeof request === 'object' ? request : {};
   refuseWebWhileOffline(event.sender, input.url);
+  requireAllowedMedia(event.sender, input.url);
   const mediaType = input.type === 'videos' ? 'videos' : 'images';
   const receiptId = privacyReceiptIdForSender(event.sender);
-  return preflightMediaUrlForRequest(input.url, mediaType, event.sender.session, receiptId
+  const checked = await preflightMediaUrlForRequest(input.url, mediaType, event.sender.session, receiptId
     ? {
         receiptId,
         category: 'image',
         whatWasSent: 'media validation request – no query, prompt, or AI output sent'
       }
     : null);
+  if (checked.url) allowedMediaUrls.set(urlKey(checked.url, String(event.sender.id)), { expires: Date.now() + 5 * 60 * 1000, senderId: event.sender.id });
+  return checked;
 });
 
 ipcMain.handle('media:download', async (event, request) => {
@@ -5189,6 +5273,7 @@ ipcMain.handle('media:download', async (event, request) => {
   }
   const input = request && typeof request === 'object' ? request : {};
   refuseWebWhileOffline(event.sender, input.url);
+  requireAllowedMedia(event.sender, input.url);
   const mediaType = input.type === 'videos' ? 'videos' : 'images';
   const receiptId = privacyReceiptIdForSender(event.sender);
   const checked = await preflightMediaUrlForRequest(input.url, mediaType, event.sender.session, receiptId
@@ -5239,9 +5324,11 @@ async function handleReadSources(event, request) {
   if (!tab || !['search', 'ask'].includes(tab.kind)) {
     throw new Error('Source reading is only available from Sovereign Search and Ask AI tabs.');
   }
-  refuseWebWhileOffline(event.sender, '');
 
   const input = request && typeof request === 'object' ? request : {};
+  const crisis = sensitiveGate(event.sender, input.question, { ...input, crisisOnly: true });
+  if (!crisis.ok) return crisis;
+  refuseWebWhileOffline(event.sender, '');
   const requestId = String(input.requestId || '').slice(0, 80);
   if (!requestId) {
     throw new Error('Source reading request is missing an id.');
@@ -5250,6 +5337,10 @@ async function handleReadSources(event, request) {
     throw new Error('That source reading request is already running.');
   }
 
+  const grant = allowedSearchRequests.get(requestId);
+  if (!grant || grant.senderId !== event.sender.id || grant.expires <= Date.now()) throw new Error('Source reading requires an allowed search.');
+  if (!Array.isArray(input.results) || input.results.some(item => !grant.urls.has(item.url))) throw new Error('Source URL was not returned by the allowed search.');
+  allowedSearchRequests.delete(requestId);
   const controller = new AbortController();
   activeSearchRequests.set(requestId, controller);
 
@@ -5262,7 +5353,7 @@ async function handleReadSources(event, request) {
           id: requestId,
           type: tab.kind === 'ask' ? 'ask' : 'search',
           label: 'Read sources',
-          query: question
+          query: '', chatId: input.chatId
         });
     assignPrivacyReceiptToSender(event.sender, receipt.id);
     return {
@@ -5299,8 +5390,9 @@ async function handleReadSources(event, request) {
 }
 ipcMain.handle('search:read-sources', handleReadSources);
 
-ipcMain.on('search:cancel', (_event, requestId) => {
+ipcMain.on('search:cancel', (event, requestId) => {
   const id = String(requestId || '').slice(0, 80);
+  if (allowedSearchRequests.get(id)?.senderId === event.sender.id) allowedSearchRequests.delete(id);
   activeSearchRequests.get(id)?.abort();
 });
 
@@ -5555,6 +5647,7 @@ ipcMain.handle('chats:save', (event, chat) => {
 ipcMain.handle('chats:delete', (event, id) => {
   chatSenderTab(event, ['ask']);
   chatStore().remove(id);
+  privacyReceipts.deleteReceipts(receipt => receipt.chatId === id);
   return broadcastSavedChats();
 });
 
@@ -5568,6 +5661,7 @@ ipcMain.handle('chats:clear', async event => {
   if (!result.confirmed) {
     return { deleted: 0, canceled: result.status.hasData, ...savedChatSnapshot() };
   }
+  privacyReceipts.deleteReceipts(receipt => receipt.chatId || receipt.sensitiveOverride);
   return { deleted: result.status.count, cleared: true, legacyPending: result.legacyPending, ...broadcastSavedChats() };
 });
 
@@ -5603,6 +5697,7 @@ ipcMain.handle('chats:offer-delete-on-disable', async event => {
   if (!result.confirmed) {
     return { count, unreadable, kept: hasData, deleted: 0 };
   }
+  privacyReceipts.deleteReceipts(receipt => receipt.chatId || receipt.sensitiveOverride);
   return { count, unreadable, deleted: count, cleared: true, legacyPending: result.legacyPending };
 });
 

@@ -287,18 +287,32 @@ function applyNetworkState(network) {
   }
 }
 
-async function runSearch() {
+async function runSearch(options = {}) {
   if (running) {
+    return;
+  }
+  const query = questionInput.value.replace(/\s+/g, ' ').trim();
+  if (!query) {
+    questionInput.focus();
+    return;
+  }
+
+  const classification = window.SovereignSensitiveGuard.classifyQuestion(query);
+  if (classification.level === 'crisis') {
+    renderResults([]);
+    renderActivity([]);
+    document.querySelector('#sensitive-search-notice')?.remove();
+    const container = document.createElement('div'); container.id = 'sensitive-search-notice';
+    searchForm.after(container);
+    window.SovereignSensitiveUI.render(container, { question: query, result: classification });
+    setSearchStatus('Nothing was sent.');
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    selectPrivacyReceiptForActivity(requestId);
+    await window.sovereign.privacy.startActivity({ requestId, type: 'search', query: '', crisis: true, localOnly: true });
     return;
   }
   if (networkOffline) {
     setSearchStatus(SEARCH_OFFLINE_TEXT, true);
-    return;
-  }
-
-  const query = questionInput.value.replace(/\s+/g, ' ').trim();
-  if (!query) {
-    questionInput.focus();
     return;
   }
 
@@ -315,10 +329,22 @@ async function runSearch() {
 
     const response = await window.sovereign.search.query({
       requestId: currentRequestId,
+      override: options.override === true,
       query,
       endpoint: settings.endpoint
     });
 
+    document.querySelector('#sensitive-search-notice')?.remove();
+    if (response.sensitive) {
+      const container = document.createElement('div'); container.id = 'sensitive-search-notice';
+      searchForm.after(container);
+      window.SovereignSensitiveUI.render(container, {
+        question: query, result: response, disabled: networkOffline,
+        local: () => window.sovereign.openSearch({ mode: 'ask', question: query, autoRun: true }),
+        send: text => { questionInput.value = text; runSearch({ override: true }); }
+      });
+      setSearchStatus('Nothing was sent.'); return;
+    }
     renderResults(response.results);
     renderActivity(response.activity || []);
     setSearchStatus(response.results.length === 0 ? 'Search completed with no results.' : `Search returned ${response.results.length} result${response.results.length === 1 ? '' : 's'}.`);

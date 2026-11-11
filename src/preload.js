@@ -95,6 +95,13 @@ contextBridge.exposeInMainWorld('sovereign', {
     download: request => ipcRenderer.invoke('media:download', request)
   },
   privacy: {
+    getSettings: () => ipcRenderer.invoke('privacy:get-settings'),
+    updateSettings: patch => ipcRenderer.invoke('privacy:update-settings', patch),
+    onSettings: callback => {
+      const listener = (_event, settings) => callback(settings);
+      ipcRenderer.on('privacy:settings', listener);
+      return () => ipcRenderer.removeListener('privacy:settings', listener);
+    },
     getLatestReceipt: () => ipcRenderer.invoke('privacy:get-latest-receipt'),
     getReceipts: () => ipcRenderer.invoke('privacy:get-receipts'),
     startActivity: request => ipcRenderer.invoke('privacy:start-activity', request),

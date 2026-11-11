@@ -176,7 +176,7 @@ async function main() {
   await waitFor(() => askPage.executeJavaScript("!document.querySelector('#send-chat').disabled", true));
 
   await askPage.executeJavaScript(`
-    document.querySelector('#web-toggle').checked = true;
+    if (!document.querySelector('#web-toggle').checked) document.querySelector('#web-toggle').click();
     document.querySelector('#chat-input').value = 'Find a video of Mount Everest.';
     document.querySelector('#chat-form').requestSubmit();
   `, true);
@@ -278,7 +278,7 @@ async function main() {
   // D1/D2: test-only query switches exercise IPC errors and empty-result actions.
   await askPage.executeJavaScript(`
     newChat();
-    document.querySelector('#web-toggle').checked = true;
+    if (!document.querySelector('#web-toggle').checked) document.querySelector('#web-toggle').click();
     document.querySelector('#chat-input').value = 'pictures of fixture-empty';
     document.querySelector('#chat-form').requestSubmit();
   `, true);
@@ -300,7 +300,7 @@ async function main() {
   if (emptyAfter !== emptyShape.count + 1) throw new Error('Empty-results text fallback did not append exactly one answer');
   await askPage.executeJavaScript(`
     newChat();
-    document.querySelector('#web-toggle').checked = true;
+    if (!document.querySelector('#web-toggle').checked) document.querySelector('#web-toggle').click();
     document.querySelector('#chat-input').value = 'pictures of fixture-unreachable';
     document.querySelector('#chat-form').requestSubmit();
   `, true);

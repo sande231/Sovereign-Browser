@@ -221,3 +221,28 @@ for (const category of ['other', 'blocked']) {
   }
 }
 console.log('privacy-receipt tests passed');
+
+// Sensitive entries never trust caller-provided request text or URL paths.
+{
+ const store = require('../src/privacy-receipt');
+ store.resetForTests();
+ const marker = 'SECRETQ-7731';
+ const r = store.createReceipt({ id: 'sensitive-test', query: '', chatId: 'chat-a' });
+ store.addEntry(r.id, { category: 'sensitive', topic: 'medical', url: 'http://localhost/?q=' + marker, whatWasSent: marker });
+ assert.ok(!JSON.stringify(store.getReceipts()).includes(marker), 'S1');
+ assert.ok(!JSON.stringify(store.exportPayload()).includes(marker), 'S2');
+ assert.equal(store.getReceipt(r.id).entries[0].whatWasSent, 'blocked (sensitive topic: medical) – nothing sent');
+ assert.ok(store.getReceipt(r.id).summary.startsWith('Not sent: sensitive topic (medical)'));
+ store.createReceipt({ id: 'keep' });
+ store.createReceipt({ id: 'override', sensitiveOverride: true });
+ store.deleteReceipts(r => r.chatId === 'chat-a' || r.sensitiveOverride);
+ assert.deepEqual(store.getReceipts().map(r => r.id), ['keep']);
+ const background = store.getOrCreateBackgroundReceipt().id;
+ store.setOffline(true);
+ const offline = store.addOfflineBlockedEntry({ url: 'https://example.test' }).id;
+ store.deleteReceipts(r => r.id === background || r.id === offline);
+ assert.ok(store.getOrCreateBackgroundReceipt());
+ assert.ok(store.addOfflineBlockedEntry({ url: 'https://example.test' }));
+ assert.equal(store.getReceipts().length, 3);
+ store.resetForTests();
+}

@@ -212,7 +212,7 @@ async function main() {
   await waitFor(() => askPage.executeJavaScript("!document.querySelector('#send-chat').disabled", true));
   await askPage.executeJavaScript(`
     window.__holdGeneration = false;
-    document.querySelector('#web-toggle').checked = true;
+    if (!document.querySelector('#web-toggle').checked) document.querySelector('#web-toggle').click();
     document.querySelector('#chat-input').value = 'Use the web: lists vs tuples';
     document.querySelector('#chat-form').requestSubmit();
   `, true);

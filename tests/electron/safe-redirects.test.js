@@ -19,7 +19,13 @@ let secret = 0, fullDownloads = 0;
 const server = http.createServer((req, res) => {
   const port = server.address().port;
   const redirect = (code, location) => { res.writeHead(code, { location }); res.end(); };
-  if (req.url === '/secret') { secret++; res.end('secret'); }
+  if (req.url.startsWith('/search?')) {
+    const origin = `http://public.test:${port}`;
+    const images = new URL(req.url, origin).searchParams.get('categories') === 'images';
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ results: images ? ['redirect-to-loopback', 'img-chain', 'img-flip'].map(name => ({ title: 'redirect image', url: `${origin}/${name}`, img_src: `${origin}/${name}`, thumbnail_src: `${origin}/${name}` })) : [{ url: `${origin}/article`, title: 'History', content: 'HTTP redirect history' }] }));
+  }
+  else if (req.url === '/secret') { secret++; res.end('secret'); }
   else if (req.url === '/redirect-to-loopback' || (req.url === '/img-flip' && req.method === 'GET' && !req.headers.range)) {
     if (req.url === '/img-flip') fullDownloads++;
     redirect(302, `http://127.0.0.1:${port}/secret`);
@@ -39,6 +45,8 @@ async function main() {
   await waitFor(() => ask.executeJavaScript('Boolean(window.sovereign?.media)', true));
   const origin = `http://public.test:${server.address().port}`;
   const invoke = (method, input) => ask.executeJavaScript(`window.sovereign.${method}(${JSON.stringify(input)})`, true);
+  await invoke('search.updateSettings', { endpoint: `http://127.0.0.1:${server.address().port}/search` });
+  await invoke('search.media', { requestId: 'safe-images', query: 'redirect image', type: 'images' });
   await assert.rejects(invoke('media.preflight', { url: `${origin}/redirect-to-loopback` }), /private-network/);
   assert.equal(secret, 0);
   await invoke('privacy.startActivity', { requestId: 'safe-images', type: 'ask', query: 'images' });
@@ -48,6 +56,7 @@ async function main() {
   let entries = receipts.flatMap(r => r.entries);
   assert(entries.some(e => e.host.startsWith('public.test:') && e.category === 'image'));
   assert(entries.some(e => e.host.startsWith('public2.test:') && e.whatWasSent.includes('redirect from public.test')));
+  await invoke('search.query', { requestId: 'safe-sources', query: 'HTTP redirect history' });
   const sources = await invoke('search.readSources', { requestId: 'safe-sources', question: 'HTTP redirect history', results: [{ url: `${origin}/article`, title: 'History', snippet: 'fallback' }] });
   assert.equal(sources.sources[0].evidenceMode, 'page');
   receipts = await invoke('privacy.getReceipts');

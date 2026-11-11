@@ -386,3 +386,13 @@ async function loadLegacyStatus() {
 
 window.sovereign.chats.onLegacyStatus(renderLegacyStatus);
 loadLegacyStatus();
+
+function renderSensitiveSettings(settings) {
+  document.querySelector('#sensitive-strict').checked = settings.sensitiveTopics !== 'standard';
+  document.querySelector('#sensitive-standard').checked = settings.sensitiveTopics === 'standard';
+}
+window.sovereign.privacy.getSettings().then(renderSensitiveSettings);
+window.sovereign.privacy.onSettings(renderSensitiveSettings);
+for (const radio of document.querySelectorAll('input[name="sensitive-topics"]')) radio.addEventListener('change', async () => {
+  if (radio.checked) renderSensitiveSettings(await window.sovereign.privacy.updateSettings({ sensitiveTopics: radio.value }));
+});

@@ -1,3 +1,8 @@
+let privacySettings = { sensitiveTopics: 'strict' };
+let crisisConversation = false;
+let sensitiveModelPending = null;
+window.sovereign.privacy.getSettings().then(settings => { privacySettings = settings; });
+window.sovereign.privacy.onSettings(settings => { privacySettings = settings; });
 const chatThread = document.querySelector('#chat-thread');
 const chatForm = document.querySelector('#chat-form');
 const chatInput = document.querySelector('#chat-input');
@@ -258,7 +263,7 @@ function selectPrivacyReceiptForActivity(receiptId) {
   refreshPrivacyReceipts().catch(() => {});
 }
 
-async function startLocalAskReceipt(question) {
+async function startLocalAskReceipt(question, crisis = false) {
   const receiptId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   currentRequestId = receiptId;
   selectPrivacyReceiptForActivity(receiptId);
@@ -266,7 +271,8 @@ async function startLocalAskReceipt(question) {
     await window.sovereign.privacy.startActivity({
       requestId: receiptId,
       type: 'ask',
-      query: question,
+      chatId, crisis,
+      query: crisis ? '' : question,
       localOnly: true
     });
   } catch (error) {
@@ -316,7 +322,7 @@ function setRunning(nextRunning) {
   sendButton.disabled = running;
   stopButton.disabled = !running;
   chatInput.disabled = running;
-  webToggle.disabled = running || networkOffline;
+  webToggle.disabled = running || networkOffline || crisisConversation;
   attachmentInput.disabled = running;
   chatThread.querySelectorAll('.chat-inline-action').forEach(button => {
     button.disabled = running || (networkOffline && button.dataset.needsWeb === '1');
@@ -761,6 +767,15 @@ function renderMessage(message) {
   }
   renderSources(body, message.sources || []);
   renderMediaCards(body, message);
+  if (message.sensitive) window.SovereignSensitiveUI.render(body, {
+    question: message.sensitiveQuestion, result: message.sensitive,
+    disabled: running || networkOffline || crisisConversation,
+    send: text => {
+      if (running || networkOffline || crisisConversation) return;
+      setRunning(true);
+      answerQuestion(text, { webEnabled: true, override: true, forceMedia: message.sensitiveMedia, appendUser: true });
+    }
+  });
   if (['search-media', 'answer-text'].includes(message.action?.type)) {
     const action = document.createElement('button');
     action.type = 'button';
@@ -1570,6 +1585,8 @@ async function refreshSettings() {
 // Closes the open chat after it was deleted, and drops this page's other copies of it
 // (the thread, media turns, retry data and the last model input).
 function closeDeletedChat() {
+  webToggle.checked = false;
+  crisisConversation = false;
   closeDeletedChatWhenIdle = false;
   chatId = messageId();
   messages = [];
@@ -1760,7 +1777,7 @@ function renderChatHistory() {
         const requestId = messageId();
         try {
           await window.sovereign.privacy.startActivity({
-            requestId, type: 'ask', purpose: 'saved-chat-media', query: '', localOnly: false,
+            requestId, chatId: chat.id, type: 'ask', purpose: 'saved-chat-media', query: '', localOnly: false,
             thumbnailUrls: restored.flatMap(message => (message.mediaResults || []).map(item => item.thumbnailUrl))
           });
           selectPrivacyReceiptForActivity(requestId);
@@ -1769,6 +1786,8 @@ function renderChatHistory() {
         }
       }
       chatId = chat.id || messageId();
+      webToggle.checked = false;
+      crisisConversation = restored.some(message => message.content === window.SovereignSensitiveGuard.CRISIS_REPLY);
       messages = restored;
       chatHistoryExpanded = null;
       mediaTurns = restored.filter(message => message.action?.type === 'answer-text' && message.mediaResults?.length).slice(-8).map(message => ({
@@ -1973,6 +1992,7 @@ async function streamLocalAnswer(question, assistantId) {
   setStatus('Generating locally...');
   const messagesForModel = directMessages(question, attachmentSources);
   lastModelMessages = messagesForModel;
+  if (sensitiveModelPending) await sensitiveModelPending;
   await getEngineApi().summarize(messagesForModel, chunk => {
     output += chunk;
     updateAssistant(assistantId, { content: output, sources: attachmentSources });
@@ -1981,10 +2001,13 @@ async function streamLocalAnswer(question, assistantId) {
     content: output.trim() || 'I could not produce an answer.',
     sources: attachmentSources
   });
+  if (window.SovereignSensitiveGuard.classifyQuestion(question).categories.includes('self-harm') && !messages.find(message => message.id === assistantId)?.sensitive) {
+    updateAssistant(assistantId, { note: window.SovereignSensitiveGuard.CRISIS_SHORT_LINE });
+  }
   setStatus('Answer generated locally.');
 }
 
-async function streamWebAnswer(question, assistantId) {
+async function streamWebAnswer(question, assistantId, options = {}) {
   const searchUtils = getSearchUtils();
   currentRequestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   selectPrivacyReceiptForActivity(currentRequestId);
@@ -1992,10 +2015,12 @@ async function streamWebAnswer(question, assistantId) {
   const searchSettings = await window.sovereign.search.getSettings();
   const response = await window.sovereign.search.query({
     requestId: currentRequestId,
+    chatId, override: options.override, modelFlag: options.modelFlag,
     query: question,
     endpoint: searchSettings.settings.endpoint
   });
 
+  if (response.sensitive) { await showSensitiveAnswer(question, assistantId, response); return; }
   if (!response.results || response.results.length === 0) {
     updateAssistant(assistantId, {
       content: 'I could not find search results for that question.',
@@ -2008,18 +2033,21 @@ async function streamWebAnswer(question, assistantId) {
   setStatus('Reading source pages...');
   const sourceBundle = await window.sovereign.search.readSources({
     requestId: currentRequestId,
+    chatId,
     question,
     results: response.results
   });
   const evidenceResults = evidenceResultsForSources(response.results, sourceBundle.sources);
   updateAssistant(assistantId, { sources: evidenceResults });
 
+  if (!(await ensureModelReady(question, { webEnabled: false }))) return;
   const contextualQuestion = webContextQuestion(question);
   const messagesForModel = searchUtils.buildSourceAnswerMessages(contextualQuestion, sourceBundle.sources);
   lastModelMessages = messagesForModel;
 
   let output = '';
   setStatus('Generating local answer from sources...');
+  if (sensitiveModelPending) await sensitiveModelPending;
   await getEngineApi().summarize(messagesForModel, chunk => {
     output += chunk;
     updateAssistant(assistantId, { content: output, sources: evidenceResults });
@@ -2101,12 +2129,17 @@ async function validatedMediaResults(results, type) {
 async function runInlineMediaSearch(message) {
   if (running || !message.action) return;
   const { question, type } = message.action;
+  if (window.SovereignSensitiveGuard.classifyQuestion(question).level === 'crisis') {
+    setRunning(true);
+    await answerQuestion(question, { appendUser: false });
+    return;
+  }
   const forceMedia = type === 'search-media';
   if (forceMedia && networkOffline) {
     setStatus(MEDIA_OFFLINE_TEXT, true);
     return;
   }
-  if (forceMedia) {
+  if (forceMedia && !crisisConversation) {
     // This explicit click is consent to use web retrieval.
     webToggle.checked = true;
     webToggle.dispatchEvent(new Event('change', { bubbles: true }));
@@ -2116,9 +2149,9 @@ async function runInlineMediaSearch(message) {
   await answerQuestion(question, { ...lastRequest, appendUser: false });
 }
 
-async function streamMediaAnswer(question, assistantId) {
+async function streamMediaAnswer(question, assistantId, options = {}) {
   const type = window.SovereignMediaIntent.mediaTypeForQuestion(question);
-  const query = window.SovereignMediaIntent.mediaQueryForQuestion(question);
+  const query = options.override ? question : window.SovereignMediaIntent.mediaQueryForQuestion(question);
   currentRequestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   selectPrivacyReceiptForActivity(currentRequestId);
   setStatus(`Searching ${type === 'videos' ? 'videos' : 'images'}...`);
@@ -2127,6 +2160,7 @@ async function streamMediaAnswer(question, assistantId) {
   try {
     response = await window.sovereign.search.media({
       requestId: currentRequestId,
+      chatId, override: options.override, modelFlag: options.modelFlag,
       query,
       type,
       endpoint: searchSettings.settings.endpoint
@@ -2140,6 +2174,7 @@ async function streamMediaAnswer(question, assistantId) {
     }
     throw error;
   }
+  if (response.sensitive) { await showSensitiveAnswer(question, assistantId, response, true); return; }
   const results = await validatedMediaResults(response.results, type);
   mediaTurns.push({
     id: assistantId,
@@ -2217,9 +2252,41 @@ async function answerMediaDownloadReference(question, assistantId) {
   return true;
 }
 
+async function strictModelFlag(question) {
+  if (privacySettings.sensitiveTopics !== 'strict' || !engineLoaded || sensitiveModelPending) return '';
+  const categories = Object.keys(window.SovereignSensitiveGuard.LABELS);
+  let timer, output = '', timedOut = false;
+  try {
+    // A timeout releases the search; answer generation waits for this interrupted job.
+    const generation = getEngineApi().summarize([
+      { role: 'system', content: `Classify whether this question concerns a sensitive topic. Reply with exactly one of: ${categories.join(', ')}, none. No explanation.` },
+      { role: 'user', content: question }
+    ], chunk => { output += chunk; });
+    sensitiveModelPending = generation.catch(() => {}).finally(() => { sensitiveModelPending = null; });
+    await Promise.race([generation, new Promise(resolve => {
+      timer = setTimeout(() => { timedOut = true; Promise.resolve(getEngineApi().stop()).catch(() => {}); resolve(); }, 4000);
+    })]);
+    if (timedOut) return '';
+    return categories.includes(output.trim()) ? output.trim() : '';
+  } catch { return ''; }
+  finally { clearTimeout(timer); }
+}
+async function showSensitiveAnswer(question, assistantId, result, media = false) {
+  const guard = window.SovereignSensitiveGuard;
+  if (result.level === 'crisis') {
+    crisisConversation = true; webToggle.checked = false;
+    pendingQuestion = ''; pendingWebEnabled = false;
+    updateAssistant(assistantId, { content: guard.CRISIS_REPLY, note: 'Web search is off for this conversation.', sensitive: null, action: null });
+    return;
+  }
+  updateAssistant(assistantId, { sensitive: result, sensitiveQuestion: question, sensitiveMedia: media, action: null, note: '' });
+  if (await ensureModelReady(question, { webEnabled: false, forceText: true })) await streamLocalAnswer(question, assistantId);
+  else updateAssistant(assistantId, { content: "The local model isn't downloaded or ready yet. Set up the model to answer locally." });
+}
+
 async function answerQuestion(question, options = {}) {
   // Offline mode overrides the toggle: no web step can start.
-  const useWeb = Boolean(options.webEnabled) && !networkOffline;
+  const useWeb = Boolean(options.webEnabled) && !networkOffline && !crisisConversation;
   offlineInterrupted = false;
   const useMedia = options.forceMedia || (!options.forceText && window.SovereignMediaIntent.isMediaRequest(question));
   let appendedUserId = '';
@@ -2236,9 +2303,34 @@ async function answerQuestion(question, options = {}) {
     });
   }
 
-  if (!useWeb) {
-    await startLocalAskReceipt(question);
+  const guard = window.SovereignSensitiveGuard;
+  const classification = guard.classifyQuestion(question, { strictness: privacySettings.sensitiveTopics });
+  if (classification.level === 'crisis') {
+    await startLocalAskReceipt('', true);
+    const id = messageId(); messages.push({ id, role: 'assistant', content: '' });
+    await showSensitiveAnswer(question, id, classification);
+    setRunning(false); persistCurrentChat(); renderThread(); return;
   }
+  if (useWeb) {
+    try {
+      privacySettings = await window.sovereign.privacy.getSettings();
+      const checked = guard.classifyQuestion(question, { strictness: privacySettings.sensitiveTopics });
+      options.modelFlag = checked.level === 'none' && !options.override ? await strictModelFlag(question) : '';
+      if (!options.override && (checked.level === 'sensitive' || options.modelFlag)) {
+        // Ask main to enforce and record the refusal before model readiness or any fetch.
+        const result = await window.sovereign.search.query({ requestId: messageId(), query: question, chatId, modelFlag: options.modelFlag });
+        if (result.sensitive) {
+          const id = messageId(); messages.push({ id, role: 'assistant', content: '' });
+          await showSensitiveAnswer(question, id, result, useMedia);
+          setRunning(false); persistCurrentChat(); renderThread(); return;
+        }
+      }
+    } catch {
+      setStatus('The web step could not start. Nothing was searched.', true);
+      setRunning(false); renderThread(); return;
+    }
+  }
+  if (!useWeb) await startLocalAskReceipt(question);
 
   if (!useWeb) {
     const blocker = attachmentBlocker(question);
@@ -2260,7 +2352,7 @@ async function answerQuestion(question, options = {}) {
   }
 
   const handlesWithoutModel = useMedia || Boolean(downloadReferenceFromQuestion(question));
-  if (!handlesWithoutModel && !(await ensureModelReady(question, { ...options, webEnabled: useWeb }))) {
+  if (!options.override && !handlesWithoutModel && !(await ensureModelReady(question, { ...options, webEnabled: useWeb }))) {
     pendingUserMessageId = appendedUserId || pendingUserMessageId;
     renderThread();
     setRunning(false);
@@ -2293,10 +2385,10 @@ async function answerQuestion(question, options = {}) {
         });
         setStatus('Enable web search to find media.', true);
       } else {
-        await streamMediaAnswer(question, assistantId);
+        await streamMediaAnswer(question, assistantId, options);
       }
     } else {
-      if (useWeb) await streamWebAnswer(question, assistantId);
+      if (useWeb) await streamWebAnswer(question, assistantId, options);
       else await streamLocalAnswer(question, assistantId);
       if (!window.SovereignMediaIntent.isMediaRequest(question) && window.SovereignMediaIntent.mentionsMedia(question)) {
         updateAssistant(assistantId, {
@@ -2335,7 +2427,8 @@ async function submitQuestion() {
     chatInput.focus();
     return;
   }
-  if (!webToggle.checked && isDocumentQuestion(question) && attachments.some(item => item.status === 'extracting')) {
+  const crisis = window.SovereignSensitiveGuard.classifyQuestion(question).level === 'crisis';
+  if (!crisis && !webToggle.checked && isDocumentQuestion(question) && attachments.some(item => item.status === 'extracting')) {
     setStatus('Still extracting the attached file. Please wait for the attachment status to show ready.', true);
     chatInput.focus();
     return;
@@ -2373,8 +2466,9 @@ async function retryLast() {
   if (lastAssistantIndex !== -1 && lastAssistantIndex === messages.length - 1) {
     messages.splice(lastAssistantIndex, 1);
   }
+  const crisis = window.SovereignSensitiveGuard.classifyQuestion(lastRequest.question).level === 'crisis';
   const needsReprocess = attachments.filter(item => ['error', 'canceled'].includes(item.status) && item.fileRef);
-  if (needsReprocess.length > 0 && isDocumentQuestion(lastRequest.question)) {
+  if (!crisis && needsReprocess.length > 0 && isDocumentQuestion(lastRequest.question)) {
     setStatus('Retrying attachment extraction before answering...');
     for (const item of needsReprocess) {
       await reprocessAttachment(item);
@@ -2617,6 +2711,8 @@ async function handleModelSetupButton() {
 }
 
 function newChat() {
+  webToggle.checked = false;
+  crisisConversation = false;
   persistCurrentChat();
   chatHistoryExpanded = null;
   attachments.forEach(item => {
@@ -2642,7 +2738,7 @@ function newChat() {
 async function applySeedQuestion() {
   const params = new URLSearchParams(window.location.search);
   const question = String(params.get('q') || '').replace(/\s+/g, ' ').trim().slice(0, 300);
-  webToggle.checked = params.get('web') === '1' && !networkOffline;
+  webToggle.checked = false;
   const handoffId = String(params.get('handoff') || '').slice(0, 120);
   const handoffCount = await consumeAttachmentHandoff(handoffId);
   if (question) {
