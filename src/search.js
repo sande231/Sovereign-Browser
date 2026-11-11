@@ -14,7 +14,9 @@ const privacyReceiptRows = document.querySelector('#privacy-receipt-rows');
 const privacyReceiptHistory = document.querySelector('#privacy-receipt-history');
 const privacyExportJsonButton = document.querySelector('#privacy-export-json');
 
+const SEARCH_OFFLINE_TEXT = 'Web search is off in Offline mode. Ask AI still works with your files and open pages.';
 let running = false;
+let networkOffline = false;
 let currentRequestId = null;
 let privacyReceiptList = [];
 let selectedPrivacyReceiptId = '';
@@ -102,6 +104,14 @@ function renderPrivacyReceipt(receipt) {
     row.append(category, host, sent);
     privacyReceiptRows.append(row);
   }
+  if (receipt.droppedEntries > 0) {
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = 3;
+    cell.textContent = `${receipt.droppedEntries} older ${receipt.droppedEntries === 1 ? 'entry' : 'entries'} not shown`;
+    row.append(cell);
+    privacyReceiptRows.append(row);
+  }
 }
 
 function defaultPrivacyReceiptId() {
@@ -164,9 +174,9 @@ function setupPrivacyReceiptPanel() {
 
 function setRunning(nextRunning) {
   running = nextRunning;
-  searchButton.disabled = running;
+  searchButton.disabled = running || networkOffline;
   cancelButton.disabled = !running;
-  questionInput.disabled = running;
+  questionInput.disabled = running || networkOffline;
 }
 
 function openUrl(url) {
@@ -266,8 +276,23 @@ function applySeedQuestion() {
   }
 }
 
+function applyNetworkState(network) {
+  networkOffline = Boolean(network?.offline);
+  questionInput.disabled = networkOffline;
+  searchButton.disabled = networkOffline || running;
+  if (networkOffline) {
+    setSearchStatus(SEARCH_OFFLINE_TEXT, true);
+  } else if (searchStatus.textContent === SEARCH_OFFLINE_TEXT) {
+    setSearchStatus('');
+  }
+}
+
 async function runSearch() {
   if (running) {
+    return;
+  }
+  if (networkOffline) {
+    setSearchStatus(SEARCH_OFFLINE_TEXT, true);
     return;
   }
 
@@ -323,7 +348,11 @@ cancelButton.addEventListener('click', cancelSearch);
 window.sovereign.search.onActivity(renderActivity);
 setupPrivacyReceiptPanel();
 
-refreshSettings()
+window.sovereign.network.onState(applyNetworkState);
+window.sovereign.network.getState()
+  .then(applyNetworkState)
+  .catch(() => {})
+  .then(refreshSettings)
   .then(applySeedQuestion)
   .catch(error => {
     setSearchStatus(`Could not initialize search: ${error.message}`, true);

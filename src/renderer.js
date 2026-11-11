@@ -3,6 +3,11 @@ const addressForm = document.querySelector('#address-form');
 const addressInput = document.querySelector('#address');
 const statusElement = document.querySelector('#status');
 const auditModeLabel = document.querySelector('#audit-mode-label');
+const networkModeToggle = document.querySelector('#network-mode-toggle');
+const networkIntro = document.querySelector('#network-intro');
+const networkIntroOffline = document.querySelector('#network-intro-offline');
+const networkIntroOnline = document.querySelector('#network-intro-online');
+const networkIntroClose = document.querySelector('#network-intro-close');
 const newTabButton = document.querySelector('#new-tab');
 const backButton = document.querySelector('#back');
 const forwardButton = document.querySelector('#forward');
@@ -123,6 +128,9 @@ function formatBytes(bytes) {
 }
 
 function downloadStatusText(download) {
+  if (download.paused && download.offlinePaused) {
+    return 'Paused: Offline mode';
+  }
   if (download.paused) {
     return 'Paused';
   }
@@ -201,7 +209,7 @@ function renderCompactDownload(download) {
         } else {
           window.sovereign.downloads.pause(download.id);
         }
-      }, download.paused ? !download.canResume : false),
+      }, download.paused ? (!download.canResume || Boolean(download.offlinePaused)) : false),
       compactButton('Cancel', () => window.sovereign.downloads.cancel(download.id))
     );
   } else if (download.state === 'completed') {
@@ -287,6 +295,17 @@ function modelSetupStatusText(state = {}) {
 
 function renderModelSetupIndicator() {
   const state = modelSetupState || {};
+  if (state.offlineBlocked) {
+    // Model not cached and Offline mode is on: say so and offer an explicit way online.
+    aiSetupChip.hidden = false;
+    aiSetupChip.dataset.status = 'offline';
+    aiSetupText.textContent = 'AI model not downloaded';
+    aiSetupMain.title = state.text || 'Offline mode is on, so the AI model cannot be downloaded.';
+    aiSetupAction.textContent = 'Go online and download';
+    aiSetupAction.title = 'Switch to Online mode and download the AI model';
+    aiSetupAction.disabled = false;
+    return;
+  }
   const visible = ['checking', 'downloading', 'error', 'canceled'].includes(state.status);
   aiSetupChip.hidden = !visible;
   if (!visible) {
@@ -310,6 +329,56 @@ function renderModelSetupIndicator() {
   aiSetupAction.textContent = retry ? 'Retry' : 'Cancel';
   aiSetupAction.title = retry ? 'Retry AI model setup' : 'Cancel AI model setup';
   aiSetupAction.disabled = !retry && !state.canCancel;
+}
+
+const networkConfirm = document.querySelector('#network-confirm');
+let pendingNetworkAction = null;
+function clearNetworkConfirm() {
+  pendingNetworkAction = null;
+  networkConfirm.hidden = true;
+  window.sovereign.network.setConfirmVisible(false);
+}
+document.querySelector('#network-confirm-cancel').addEventListener('click', () => {
+  clearNetworkConfirm();
+  renderNetworkMode(currentState.network);
+  networkModeToggle.focus();
+});
+document.querySelector('#network-confirm-continue').addEventListener('click', () => {
+  const action = pendingNetworkAction;
+  if (action) chooseNetworkMode(action, { confirmed: true });
+});
+
+function renderNetworkMode(network) {
+  if (!network) return;
+  const offline = Boolean(network.offline);
+  networkModeToggle.textContent = offline ? 'Offline' : 'Online';
+  networkModeToggle.classList.toggle('offline', offline);
+  networkModeToggle.setAttribute('aria-pressed', offline ? 'true' : 'false');
+  networkModeToggle.title = offline
+    ? 'Offline mode: nothing leaves this computer. Click to go online.'
+    : 'Online: websites and web search can use the internet. Click to go offline.';
+  if (offline && pendingNetworkAction) clearNetworkConfirm();
+  networkIntro.hidden = Boolean(network.choiceMade) || !networkConfirm.hidden;
+}
+
+async function chooseNetworkMode(action, options) {
+  try {
+    const network = await action(options);
+    if (network.needsConfirm) {
+      pendingNetworkAction = action;
+      networkConfirm.hidden = false;
+      document.querySelector('#network-confirm-message').textContent = network.message;
+      window.sovereign.network.setConfirmVisible(true);
+      renderNetworkMode(network.state);
+      document.querySelector('#network-confirm-cancel').focus();
+      return;
+    }
+    clearNetworkConfirm();
+    currentState = { ...currentState, network };
+    renderNetworkMode(network);
+  } catch (error) {
+    setStatus(error.message);
+  }
 }
 
 function renderTabs() {
@@ -350,6 +419,7 @@ function renderControls() {
   bookmarkToggleButton.textContent = tab?.bookmarked ? '★' : '☆';
   bookmarkToggleButton.title = tab?.bookmarked ? 'Remove bookmark (Cmd+D)' : 'Bookmark this page (Cmd+D)';
   findBar.hidden = !currentState.findBarVisible;
+  renderNetworkMode(currentState.network);
   auditModeLabel.hidden = !currentState.auditMode?.active;
   auditModeLabel.title = currentState.auditMode?.active
     ? `Audit mode active: ${currentState.auditMode.proxy || 'proxy configured'}`
@@ -592,6 +662,14 @@ aiToggleButton.addEventListener('click', () => {
   window.sovereign.toggleSidebar();
 });
 
+networkModeToggle.addEventListener('click', () => {
+  const offline = Boolean(currentState.network?.offline);
+  chooseNetworkMode(options => window.sovereign.network.setMode(offline ? 'online' : 'offline', options));
+});
+networkIntroOffline.addEventListener('click', () => chooseNetworkMode(options => window.sovereign.network.dismissIntro('offline', options)));
+networkIntroOnline.addEventListener('click', () => chooseNetworkMode(options => window.sovereign.network.dismissIntro('online', options)));
+networkIntroClose.addEventListener('click', () => chooseNetworkMode(options => window.sovereign.network.dismissIntro('online', options)));
+
 aiSetupMain.addEventListener('click', () => {
   window.sovereign.openSettings();
 });
@@ -600,7 +678,10 @@ aiSetupAction.addEventListener('click', async () => {
   const state = modelSetupState || {};
   aiSetupAction.disabled = true;
   try {
-    if (state.status === 'error' || state.status === 'canceled') {
+    if (state.offlineBlocked) {
+      await window.sovereign.network.setMode('online');
+      modelSetupState = await window.sovereign.modelSetup.start();
+    } else if (state.status === 'error' || state.status === 'canceled') {
       modelSetupState = await window.sovereign.modelSetup.start();
     } else {
       modelSetupState = await window.sovereign.modelSetup.cancel();

@@ -20,14 +20,18 @@ const VALID_CATEGORIES = new Set([
   'image',
   'model-download',
   'permission',
+  'blocked',
   'other'
 ]);
 
 const PERMISSION_RECEIPT_ID = 'website-permissions';
+const BLOCKED_WHAT_WAS_SENT = 'blocked (offline mode) – nothing sent';
 
 let receipts = [];
 const listeners = new Set();
 let backgroundReceiptId = '';
+let offlineMode = false;
+let offlineReceiptId = '';
 
 function timestamp() {
   return new Date().toISOString();
@@ -102,11 +106,41 @@ function forwardingPhrase(receipt, host) {
     : `which forwarded it to ${FORWARDING_UNKNOWN}`;
 }
 
+function originOnly(value) {
+  try {
+    const parsed = new URL(String(value || ''));
+    return parsed.origin && parsed.origin !== 'null' ? parsed.origin : `${parsed.protocol}//`;
+  } catch {
+    return '';
+  }
+}
+
 function buildSummary(receipt) {
-  const entries = Array.isArray(receipt.entries) ? receipt.entries : [];
+  const allEntries = Array.isArray(receipt.entries) ? receipt.entries : [];
+  const blockedEntries = allEntries.filter(entry => entry.category === 'blocked');
+  const entries = allEntries.filter(entry => entry.category !== 'blocked');
+  if (receipt.offline) {
+    // Computed, never hard-coded: a leak must show up as a non-zero count.
+    const external = entries.filter(entry => entry.category !== 'permission').length;
+    const blockedCount = blockedEntries.reduce((total, entry) => total + (Number(entry.count) || 1), 0);
+    const head = [`Offline: ${external} external request${external === 1 ? '' : 's'}`];
+    if (blockedCount > 0) head.push(`${blockedCount} blocked (offline mode)`);
+    const rest = summaryParts({ ...receipt, entries });
+    return [...head, ...rest].join(' · ');
+  }
   if (entries.length === 0 && receipt.localOnly && receipt.type === 'ask') {
     return 'Nothing left this device: answer generated locally';
   }
+  const parts = summaryParts({ ...receipt, entries });
+  if (blockedEntries.length > 0) {
+    const blockedCount = blockedEntries.reduce((total, entry) => total + (Number(entry.count) || 1), 0);
+    parts.push(`${blockedCount} blocked (offline mode)`);
+  }
+  return parts.length > 0 ? parts.join(' · ') : 'No outbound network requests observed for this activity.';
+}
+
+function summaryParts(receipt) {
+  const entries = receipt.entries;
   const parts = [];
   const searchHosts = uniqueHosts(entries, 'search');
   const sourceCount = entries.filter(entry => entry.category === 'source-page').length;
@@ -140,7 +174,7 @@ function buildSummary(receipt) {
   if (receipt.type === 'background') {
     parts.unshift('Background app/AI network activity');
   }
-  return parts.length > 0 ? parts.join(' · ') : 'No outbound network requests observed for this activity.';
+  return parts;
 }
 
 function sanitizeReceipt(receipt) {
@@ -150,6 +184,8 @@ function sanitizeReceipt(receipt) {
     label: receipt.label,
     query: receipt.query,
     localOnly: Boolean(receipt.localOnly),
+    offline: Boolean(receipt.offline),
+    droppedEntries: receipt.droppedEntries || 0,
     startedAt: receipt.startedAt,
     updatedAt: receipt.updatedAt,
     summary: receipt.summary,
@@ -193,6 +229,8 @@ function createReceipt({ id, type = 'activity', label = '', query = '' } = {}) {
     label: safeString(label, 120),
     query: safeString(query, 300),
     localOnly: Boolean(arguments[0]?.localOnly),
+    offline: offlineMode,
+    droppedEntries: 0,
     startedAt: now,
     updatedAt: now,
     summary: '',
@@ -215,8 +253,11 @@ function addEntry(receiptId, details = {}) {
   const id = safeString(receiptId, 100);
   const receipt = getReceipt(id) || receipts[0] || createReceipt({ type: 'activity', label: 'Network activity' });
   const target = getReceipt(receipt.id) || receipt;
-  const url = cleanUrl(details.url);
   const category = VALID_CATEGORIES.has(details.category) ? details.category : 'other';
+  if (category === 'blocked') {
+    return addBlocked(target, details);
+  }
+  const url = cleanUrl(details.url);
   const entry = {
     timestamp: timestamp(),
     category,
@@ -227,6 +268,7 @@ function addEntry(receiptId, details = {}) {
   };
   target.entries.push(entry);
   if (target.entries.length > MAX_ENTRIES_PER_RECEIPT) {
+    target.droppedEntries += target.entries.length - MAX_ENTRIES_PER_RECEIPT;
     target.entries = target.entries.slice(-MAX_ENTRIES_PER_RECEIPT);
   }
   target.updatedAt = timestamp();
@@ -234,6 +276,73 @@ function addEntry(receiptId, details = {}) {
   target.summary = buildSummary(target);
   notify(target);
   return sanitizeReceipt(target);
+}
+
+// Blocked attempts keep the origin only (the path or query can hold the question) and are
+// counted per origin and resource type, so a busy page can't push real entries out.
+function addBlocked(target, details) {
+  const url = originOnly(details.url);
+  const resourceType = safeString(details.resourceType, 40);
+  const method = safeString(details.method || 'GET', 12).toUpperCase() || 'GET';
+  const existing = target.entries.find(entry => entry.category === 'blocked' && entry.url === url && entry.resourceType === resourceType);
+  if (existing) {
+    existing.count = (Number(existing.count) || 1) + 1;
+    existing.timestamp = timestamp();
+  } else {
+    target.entries.push({
+      timestamp: timestamp(),
+      category: 'blocked',
+      method,
+      host: hostFromUrl(url),
+      url,
+      resourceType,
+      count: 1,
+      whatWasSent: BLOCKED_WHAT_WAS_SENT
+    });
+    if (target.entries.length > MAX_ENTRIES_PER_RECEIPT) {
+      target.droppedEntries += target.entries.length - MAX_ENTRIES_PER_RECEIPT;
+      target.entries = target.entries.slice(-MAX_ENTRIES_PER_RECEIPT);
+    }
+  }
+  target.updatedAt = timestamp();
+  target.summary = buildSummary(target);
+  notify(target);
+  return sanitizeReceipt(target);
+}
+
+// Unattributed blocked attempts go to one rolling "Offline mode" receipt per offline period.
+function addOfflineBlockedEntry(details = {}) {
+  let receipt = offlineReceiptId ? getReceipt(offlineReceiptId) : null;
+  if (!receipt) {
+    const created = createReceipt({
+      id: `offline-mode-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      type: 'offline',
+      label: 'Offline mode',
+      query: ''
+    });
+    offlineReceiptId = created.id;
+    receipt = getReceipt(created.id);
+  }
+  return addEntry(receipt.id, { ...details, category: 'blocked' });
+}
+
+function setOffline(value) {
+  const next = Boolean(value);
+  if (next === offlineMode) return;
+  offlineMode = next;
+  offlineReceiptId = '';
+  if (!next) {
+    for (const receipt of receipts) {
+      if (!receipt.offline) continue;
+      receipt.offline = false;
+      receipt.summary = buildSummary(receipt);
+      notify(receipt);
+    }
+  }
+}
+
+function isOffline() {
+  return offlineMode;
 }
 
 function getOrCreateBackgroundReceipt() {
@@ -331,6 +440,8 @@ function exportPayload({ appVersion = '' } = {}) {
 function resetForTests() {
   receipts = [];
   backgroundReceiptId = '';
+  offlineMode = false;
+  offlineReceiptId = '';
 }
 
 function onUpdate(callback) {
@@ -343,6 +454,9 @@ module.exports = {
   addEntry,
   addBackgroundEntry,
   addPermissionEntry,
+  addOfflineBlockedEntry,
+  setOffline,
+  isOffline,
   PERMISSION_RECEIPT_ID,
   recordSearxngForwarding,
   createReceipt,

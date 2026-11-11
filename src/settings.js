@@ -18,6 +18,11 @@ const askDownloads = document.querySelector('#settings-ask-downloads');
 const chooseDownloadFolderButton = document.querySelector('#choose-download-folder');
 const resetDownloadFolderButton = document.querySelector('#reset-download-folder');
 const settingsStatus = document.querySelector('#settings-status');
+const networkOffline = document.querySelector('#settings-network-offline');
+const networkOnline = document.querySelector('#settings-network-online');
+const allowlistElement = document.querySelector('#settings-allowlist');
+const allowInput = document.querySelector('#settings-allow-input');
+const allowAddButton = document.querySelector('#settings-allow-add');
 
 function setStatus(message, isError = false) {
   settingsStatus.textContent = message || '';
@@ -102,7 +107,9 @@ saveEndpointButton.addEventListener('click', async () => {
   try {
     const settings = await window.sovereign.search.updateSettings({ endpoint: endpointInput.value });
     endpointInput.value = settings.endpoint;
-    setStatus('SearXNG endpoint saved.');
+    setStatus(settings.removedOfflineAllowlistEntry
+      ? `SearXNG endpoint saved. ${settings.removedOfflineAllowlistEntry} was removed from the Offline allowlist because SearXNG forwards searches to the internet.`
+      : 'SearXNG endpoint saved.');
   } catch (error) {
     setStatus(error.message, true);
   } finally {
@@ -263,6 +270,98 @@ resetDownloadFolderButton.addEventListener('click', async () => {
     resetDownloadFolderButton.disabled = false;
   }
 });
+
+function renderNetworkSettings(network = {}) {
+  if (network.offline) networkConfirm.hidden = true;
+  networkOffline.checked = Boolean(network.offline);
+  networkOnline.checked = !network.offline;
+  allowlistElement.replaceChildren();
+  const entries = Array.isArray(network.offlineAllowlist) ? network.offlineAllowlist : [];
+  if (entries.length === 0) {
+    const empty = document.createElement('li');
+    empty.className = 'settings-help';
+    empty.textContent = 'None. In Offline mode no local address is allowed.';
+    allowlistElement.append(empty);
+  }
+  for (const entry of entries) {
+    const item = document.createElement('li');
+    const label = document.createElement('code');
+    label.textContent = entry;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'secondary-action compact-action';
+    remove.textContent = 'Remove';
+    remove.setAttribute('aria-label', `Remove ${entry}`);
+    remove.addEventListener('click', async () => {
+      try {
+        const result = await window.sovereign.network.removeAllowed(entry);
+        renderNetworkSettings(result.state);
+        setStatus(`${entry} removed from the Offline allowlist.`);
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    });
+    item.append(label, remove);
+    allowlistElement.append(item);
+  }
+  allowAddButton.disabled = entries.length >= (network.maxAllowlist || 20);
+}
+
+const networkConfirm = document.querySelector('#network-confirm');
+async function chooseSettingsNetworkMode(mode, options) {
+  try {
+    const result = await window.sovereign.network.setMode(mode, options);
+    renderNetworkSettings(result.state || result);
+    networkConfirm.hidden = !result.needsConfirm;
+    if (result.needsConfirm) {
+      document.querySelector('#network-confirm-message').textContent = result.message;
+      document.querySelector('#network-confirm-cancel').focus();
+    } else {
+      setStatus(mode === 'offline' ? 'Offline mode is on.' : 'Online mode is on.');
+    }
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+}
+document.querySelector('#network-confirm-continue').addEventListener('click', () => chooseSettingsNetworkMode('offline', { confirmed: true }));
+document.querySelector('#network-confirm-cancel').addEventListener('click', () => {
+  networkConfirm.hidden = true;
+  networkOnline.focus();
+});
+for (const radio of [networkOffline, networkOnline]) {
+  radio.addEventListener('change', async () => {
+    if (!radio.checked) return;
+    await chooseSettingsNetworkMode(radio.value);
+  });
+}
+
+async function addAllowedAddress() {
+  allowAddButton.disabled = true;
+  try {
+    const result = await window.sovereign.network.addAllowed(allowInput.value);
+    renderNetworkSettings(result.state);
+    if (result.ok) {
+      allowInput.value = '';
+      setStatus(`${result.entry} is allowed in Offline mode.`);
+    } else {
+      setStatus(result.error, true);
+    }
+  } catch (error) {
+    setStatus(error.message, true);
+    allowAddButton.disabled = false;
+  }
+}
+
+allowAddButton.addEventListener('click', addAllowedAddress);
+allowInput.addEventListener('keydown', event => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    addAllowedAddress();
+  }
+});
+
+window.sovereign.network.onState(renderNetworkSettings);
+window.sovereign.network.getState().then(renderNetworkSettings).catch(() => {});
 
 loadSettings().catch(error => {
   setStatus(`Could not load settings: ${error.message}`, true);

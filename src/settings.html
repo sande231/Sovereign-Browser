@@ -24,6 +24,33 @@
         </select>
       </section>
 
+      <section class="settings-section" aria-label="Network">
+        <h2>Network</h2>
+        <div class="settings-radio-group" role="radiogroup" aria-label="Network mode">
+          <label class="settings-check">
+            <input id="settings-network-offline" type="radio" name="network-mode" value="offline">
+            <span>Offline: nothing leaves this computer</span>
+          </label>
+          <label class="settings-check">
+            <input id="settings-network-online" type="radio" name="network-mode" value="online">
+            <span>Online: websites and web search can use the internet</span>
+          </label>
+        </div>
+        <section class="network-intro network-confirm" id="network-confirm" aria-label="Confirm Offline mode" hidden>
+          <p class="network-intro-text" id="network-confirm-message" role="status"></p>
+          <button class="primary-action compact-action" id="network-confirm-continue" type="button">Continue</button>
+          <button class="secondary-action compact-action" id="network-confirm-cancel" type="button">Cancel</button>
+        </section>
+        <p class="settings-help">In Offline mode, Ask AI still works with your downloaded model, attached files and pages you already have open. Web search, image search, websites and model downloads are blocked.</p>
+        <label class="settings-label" for="settings-allow-input">Local addresses allowed in Offline mode</label>
+        <p class="settings-help network-allowlist-warning" id="settings-allowlist-warning">Only add a local service you trust. Some local services (for example a search engine like SearXNG, a proxy or an AI server) forward what you send to the internet, and Offline mode can't see past them.</p>
+        <ul class="network-allowlist" id="settings-allowlist" aria-label="Allowed local addresses"></ul>
+        <div class="endpoint-row">
+          <input id="settings-allow-input" class="endpoint-input" type="text" spellcheck="false" autocomplete="off" placeholder="127.0.0.1:3000">
+          <button class="secondary-action" id="settings-allow-add" type="button">Add</button>
+        </div>
+      </section>
+
       <section class="settings-section" aria-label="Startup">
         <h2>Startup</h2>
         <label class="settings-check">

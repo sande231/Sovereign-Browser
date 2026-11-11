@@ -15,3 +15,8 @@ assert.equal(testHook('SOVEREIGN_CHAT_DELETE_TEST_ANSWER', { isPackaged: true, e
 assert.equal(testHook('SOVEREIGN_TEST_LEGACY_REMOVE', { env }), '');
 
 console.log('test-hooks tests passed');
+
+for (const name of ['SOVEREIGN_AUDIT_PROXY', 'SOVEREIGN_TEST_NETWORK_MODE', 'SOVEREIGN_TEST_OFFLINE_LAYERS']) {
+  assert.equal(testHook(name, { isPackaged: true, env: { [name]: 'value' } }), '');
+  assert.equal(testHook(name, { isPackaged: false, env: { [name]: 'value' } }), 'value');
+}
