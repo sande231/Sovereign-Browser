@@ -9,6 +9,12 @@ const exportMarkdownButton = document.querySelector('#export-md');
 const exportPdfButton = document.querySelector('#export-pdf');
 const newChatButton = document.querySelector('#new-chat');
 const webToggle = document.querySelector('#web-toggle');
+const webOfflineNote = document.querySelector('#web-offline-note');
+const MODEL_OFFLINE_TEXT = "The AI model isn't on this computer yet. Offline mode is on, so it can't be downloaded. Switch to Online to download it (about 705 MB); you can turn Offline back on afterwards.";
+const MEDIA_OFFLINE_TEXT = 'Image search needs Online mode. Switch to Online in the toolbar to search the web for images.';
+const OFFLINE_STOP_TEXT = 'Offline mode turned on, so the web search was stopped. Ask again to answer from your files and open pages.';
+let networkOffline = false;
+let offlineInterrupted = false;
 const chatStatus = document.querySelector('#chat-status');
 const attachmentInput = document.querySelector('#attachment-input');
 const attachmentPanel = document.querySelector('#attachment-panel');
@@ -217,6 +223,14 @@ function renderPrivacyReceipt(receipt) {
     row.append(category, host, sent);
     privacyReceiptRows.append(row);
   }
+  if (receipt.droppedEntries > 0) {
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = 3;
+    cell.textContent = `${receipt.droppedEntries} older ${receipt.droppedEntries === 1 ? 'entry' : 'entries'} not shown`;
+    row.append(cell);
+    privacyReceiptRows.append(row);
+  }
 }
 
 function defaultPrivacyReceiptId() {
@@ -302,9 +316,11 @@ function setRunning(nextRunning) {
   sendButton.disabled = running;
   stopButton.disabled = !running;
   chatInput.disabled = running;
-  webToggle.disabled = running;
+  webToggle.disabled = running || networkOffline;
   attachmentInput.disabled = running;
-  chatThread.querySelectorAll('.chat-inline-action').forEach(button => { button.disabled = running; });
+  chatThread.querySelectorAll('.chat-inline-action').forEach(button => {
+    button.disabled = running || (networkOffline && button.dataset.needsWeb === '1');
+  });
   retryButton.disabled = running || !lastRequest;
   copyButton.disabled = running || !lastAssistantMessage();
   exportMarkdownButton.disabled = running || !lastAssistantMessage();
@@ -755,7 +771,9 @@ function renderMessage(message) {
     action.textContent = textAction
       ? (emptyMedia ? 'Answer with text instead' : 'Search text instead')
       : `${consent ? 'Search web for' : 'Show'} ${message.action.mediaType === 'videos' ? 'videos' : 'images'}`;
-    action.disabled = running;
+    action.dataset.needsWeb = textAction ? '0' : '1';
+    action.disabled = running || (networkOffline && !textAction);
+    if (networkOffline && !textAction) action.title = MEDIA_OFFLINE_TEXT;
     action.addEventListener('click', () => {
       runInlineMediaSearch(message).catch(error => setStatus(error.message, true));
     });
@@ -1807,6 +1825,12 @@ function renderModelSetupState(state = setupState) {
     downloadModelButton.disabled = current.status === 'checking' || !current.canCancel;
     return;
   }
+  if (networkOffline && !cached) {
+    modelStatus.textContent = MODEL_OFFLINE_TEXT;
+    downloadModelButton.textContent = 'Go online and download';
+    downloadModelButton.disabled = false;
+    return;
+  }
   if (current.status === 'error') {
     modelStatus.textContent = `Local model setup failed: ${current.error || current.text || 'Unknown error'}`;
     downloadModelButton.textContent = 'Retry setup';
@@ -1901,6 +1925,11 @@ async function ensureModelReady(question, options = {}) {
     chatInput.value = question;
     modelSetupCard.hidden = false;
     const status = setupState?.status || 'idle';
+    if (networkOffline) {
+      renderModelSetupState(setupState);
+      setStatus(MODEL_OFFLINE_TEXT, true);
+      return false;
+    }
     if (status === 'canceled') {
       setStatus('AI setup was canceled. The question is preserved; retry setup to answer it.', true);
     } else if (status === 'error') {
@@ -2073,6 +2102,10 @@ async function runInlineMediaSearch(message) {
   if (running || !message.action) return;
   const { question, type } = message.action;
   const forceMedia = type === 'search-media';
+  if (forceMedia && networkOffline) {
+    setStatus(MEDIA_OFFLINE_TEXT, true);
+    return;
+  }
   if (forceMedia) {
     // This explicit click is consent to use web retrieval.
     webToggle.checked = true;
@@ -2185,7 +2218,9 @@ async function answerMediaDownloadReference(question, assistantId) {
 }
 
 async function answerQuestion(question, options = {}) {
-  const useWeb = Boolean(options.webEnabled);
+  // Offline mode overrides the toggle: no web step can start.
+  const useWeb = Boolean(options.webEnabled) && !networkOffline;
+  offlineInterrupted = false;
   const useMedia = options.forceMedia || (!options.forceText && window.SovereignMediaIntent.isMediaRequest(question));
   let appendedUserId = '';
   const attachedFiles = attachmentSnapshot();
@@ -2247,7 +2282,10 @@ async function answerQuestion(question, options = {}) {
     if (await answerMediaDownloadReference(question, assistantId)) {
       // The assistant message was updated by the media download helper.
     } else if (useMedia) {
-      if (!useWeb) {
+      if (!useWeb && networkOffline) {
+        updateAssistant(assistantId, { content: MEDIA_OFFLINE_TEXT, action: null, note: '' });
+        setStatus(MEDIA_OFFLINE_TEXT, true);
+      } else if (!useWeb) {
         updateAssistant(assistantId, {
           content: 'I can retrieve real image results in this conversation when you allow web retrieval.',
           action: { type: 'search-media', question, mediaType: window.SovereignMediaIntent.mediaTypeForQuestion(question) },
@@ -2267,6 +2305,11 @@ async function answerQuestion(question, options = {}) {
       }
     }
   } catch (error) {
+    if (offlineInterrupted || /Offline mode is on/.test(error?.message || '')) {
+      updateAssistant(assistantId, { content: OFFLINE_STOP_TEXT, action: null, note: '' });
+      setStatus(OFFLINE_STOP_TEXT, true);
+      return;
+    }
     const canceled = error?.name === 'AbortError' || /canceled|cancelled|aborted|interrupt/i.test(error?.message || '');
     updateAssistant(assistantId, {
       content: canceled ? 'Stopped.' : useMedia ? error.message : `I could not complete that answer: ${error.message}`,
@@ -2558,6 +2601,13 @@ async function handleModelSetupButton() {
     renderModelSetupState(setupState);
     return;
   }
+  if (networkOffline && !modelCached && !setupState?.cached) {
+    // Explicit user action: switch to Online (visible in the toolbar), then download.
+    await window.sovereign.network.setMode('online');
+    setupState = await window.sovereign.modelSetup.start();
+    renderModelSetupState(setupState);
+    return;
+  }
   if (status === 'error' || status === 'canceled' || (!modelCached && !setupState?.cached)) {
     setupState = await window.sovereign.modelSetup.start();
     renderModelSetupState(setupState);
@@ -2592,7 +2642,7 @@ function newChat() {
 async function applySeedQuestion() {
   const params = new URLSearchParams(window.location.search);
   const question = String(params.get('q') || '').replace(/\s+/g, ' ').trim().slice(0, 300);
-  webToggle.checked = params.get('web') === '1';
+  webToggle.checked = params.get('web') === '1' && !networkOffline;
   const handoffId = String(params.get('handoff') || '').slice(0, 120);
   const handoffCount = await consumeAttachmentHandoff(handoffId);
   if (question) {
@@ -2705,11 +2755,31 @@ clearChatHistoryButton.addEventListener('click', async () => {
 window.sovereign.chats.onChanged(applySavedChats);
 window.sovereign.modelSetup.onState(handleModelSetupState);
 
+function applyNetworkState(network) {
+  const wasOffline = networkOffline;
+  networkOffline = Boolean(network?.offline);
+  if (networkOffline) {
+    if (running && !wasOffline) offlineInterrupted = true;
+    webToggle.checked = false;
+  }
+  webOfflineNote.hidden = !networkOffline;
+  webToggle.title = networkOffline ? 'Off while Offline mode is on.' : '';
+  setRunning(running);
+  if (wasOffline !== networkOffline) {
+    renderThread();
+    if (setupState) renderModelSetupState(setupState);
+  }
+}
+window.sovereign.network.onState(applyNetworkState);
+
 renderAttachments();
 renderThread();
 setupPrivacyReceiptPanel();
 setRunning(false);
-refreshSettings()
+window.sovereign.network.getState()
+  .then(applyNetworkState)
+  .catch(() => {})
+  .then(refreshSettings)
   .then(migrateLegacyChats)
   .then(loadSavedChats)
   .then(refreshModelCacheState)

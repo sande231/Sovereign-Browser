@@ -38,16 +38,46 @@ const { testHook } = require('./test-hooks');
 const dns = require('node:dns').promises;
 const { isIP } = require('node:net');
 const { safeFetch, checkHopUrl, resolvePublicAddresses } = require('./safe-fetch');
+const {
+  MAX_ALLOWLIST,
+  OFFLINE_MESSAGE,
+  SEARXNG_ALLOWLIST_ERROR,
+  createNetworkMode,
+  hostPortOf,
+  initialNetworkState,
+  normalizeAllowlist,
+  offlineConnectSrc,
+  offlineDecision,
+  parseAllowlistEntry
+} = require('./network-mode');
 const testDns = JSON.parse(testHook('SOVEREIGN_TEST_DNS', { isPackaged: app.isPackaged }) || '{}');
 const testCaFile = testHook('SOVEREIGN_TEST_CA_FILE', { isPackaged: app.isPackaged });
 const testCa = testCaFile ? fs.readFileSync(testCaFile) : undefined;
-const safeFetchResolve = app.isPackaged ? dns.lookup : async (host, options) => {
-  if (Object.hasOwn(testDns, host)) {
+// Offline mode (docs/HANDOFF.md, "Offline mode"). The real start mode comes from preferences.
+const TEST_NETWORK_MODE = testHook('SOVEREIGN_TEST_NETWORK_MODE', { isPackaged: app.isPackaged });
+const TEST_OFFLINE_LAYERS = testHook('SOVEREIGN_TEST_OFFLINE_LAYERS', { isPackaged: app.isPackaged }) || 'all';
+const networkMode = createNetworkMode({ initial: 'offline' });
+let networkSettings = { choiceMade: true, offlineAllowlist: [] };
+const OPEN_EXTERNAL_OFFLINE_MESSAGE = "Offline mode is on. Opening another app would leave Sovereign's protection.";
+const WEB_OFFLINE_MESSAGE = 'Offline mode is on, so web search is off. Ask AI still works with your files and open pages.';
+const MODEL_OFFLINE_MESSAGE = "The AI model isn't on this computer yet. Offline mode is on, so it can't be downloaded. Switch to Online to download it (about 705 MB); you can turn Offline back on afterwards.";
+const MODEL_OFFLINE_PAUSED_MESSAGE = 'Model download paused: Offline mode is on.';
+
+// Main-process DNS for safeFetch. Refuses while Offline, before any lookup is made.
+async function safeFetchResolve(host, options) {
+  networkMode.assertOnline('dns lookup');
+  if (!app.isPackaged && Object.hasOwn(testDns, host)) {
     const record = testDns[host];
     return [{ ...record, family: isIP(record.address) }];
   }
   return dns.lookup(host, options);
-};
+}
+
+// The only way main-process code calls safeFetch. Refuses while Offline.
+async function gatedSafeFetch(url, options = {}) {
+  networkMode.assertOnline('page or media fetch');
+  return safeFetch(url, { ...options, resolve: safeFetchResolve, ca: testCa });
+}
 const { datasetUserDataDir, seedDatasetPreferences } = require('./dataset-collection');
 const datasetBatchEnabled = Boolean(process.env.SOVEREIGN_DATASET_BATCH);
 let datasetWindow = null;
@@ -68,6 +98,7 @@ const UI_HEIGHT = 92;
 const UI_HEIGHT_COMPACT = 174;
 const DOWNLOADS_PANEL_HEIGHT = 174;
 const FIND_BAR_HEIGHT = 42;
+const NETWORK_INTRO_HEIGHT = 42;
 const SIDEBAR_WIDTH = 392;
 const NEW_TAB_URL = 'sovereign://newtab/';
 const SEARCH_PAGE_URL = 'sovereign://search/';
@@ -111,7 +142,16 @@ function normalizeAuditProxy(value) {
   }
 }
 
-const AUDIT_PROXY = normalizeAuditProxy(process.env.SOVEREIGN_AUDIT_PROXY);
+// Development only: ignored in packaged builds (testHook returns '' when packaged).
+const AUDIT_PROXY = normalizeAuditProxy(testHook('SOVEREIGN_AUDIT_PROXY', { isPackaged: app.isPackaged }));
+const AUDIT_PROXY_HOST_PORT = (() => {
+  try {
+    const parsed = new URL(AUDIT_PROXY?.url || '');
+    return parsed.port ? `${parsed.hostname.toLowerCase()}:${parsed.port}` : '';
+  } catch {
+    return '';
+  }
+})();
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -510,6 +550,7 @@ function getPageWidth(state, totalWidth) {
 function getChromeHeight(state, totalWidth) {
   const baseHeight = totalWidth <= 860 ? UI_HEIGHT_COMPACT : UI_HEIGHT;
   return baseHeight +
+    (!networkSettings.choiceMade || state?.networkConfirmVisible ? NETWORK_INTRO_HEIGHT : 0) +
     (state?.findBarVisible ? FIND_BAR_HEIGHT : 0) +
     (state?.downloadsPanelVisible ? DOWNLOADS_PANEL_HEIGHT : 0);
 }
@@ -570,6 +611,7 @@ function windowSnapshot(state) {
       active: Boolean(AUDIT_PROXY),
       proxy: AUDIT_PROXY?.url || ''
     },
+    network: networkStateSnapshot(),
     error: null
   };
 }
@@ -723,12 +765,20 @@ function sanitizeModelSetupPatch(patch = {}) {
       }
     : (input.progress === null ? null : modelSetupState.progress);
 
+  const cached = typeof input.cached === 'boolean' ? input.cached : modelSetupState.cached;
+  const offlineBlocked = networkMode.isOffline() && !cached && ['idle', 'canceled'].includes(status);
   return {
     status,
-    cached: typeof input.cached === 'boolean' ? input.cached : modelSetupState.cached,
+    cached,
+    offline: networkMode.isOffline(),
+    offlineBlocked,
     loaded: typeof input.loaded === 'boolean' ? input.loaded : modelSetupState.loaded,
     progress,
-    text: typeof input.text === 'string' ? input.text.slice(0, 360) : modelSetupState.text,
+    text: offlineBlocked && status === 'idle'
+      ? MODEL_OFFLINE_MESSAGE
+      : typeof input.text === 'string'
+        ? input.text.slice(0, 360)
+        : modelSetupState.text === MODEL_OFFLINE_MESSAGE ? 'Local model files are not downloaded yet.' : modelSetupState.text,
     error: typeof input.error === 'string' ? input.error.slice(0, 1200) : (status === 'error' ? modelSetupState.error : ''),
     canCancel: typeof input.canCancel === 'boolean' ? input.canCancel : status === 'downloading',
     canRetry: typeof input.canRetry === 'boolean' ? input.canRetry : ['idle', 'error', 'canceled'].includes(status),
@@ -871,7 +921,8 @@ function shouldAutoStartModelSetup() {
 
 function ensureModelSetupService(options = {}) {
   const forceStart = Boolean(options.forceStart);
-  const autoStart = forceStart || (options.autoStart !== false && shouldAutoStartModelSetup());
+  // While Offline only the local cache check runs; nothing is downloaded.
+  const autoStart = !networkMode.isOffline() && (forceStart || (options.autoStart !== false && shouldAutoStartModelSetup()));
   const alreadyRunning = ['checking', 'downloading'].includes(modelSetupState.status);
   if (alreadyRunning && !forceStart) {
     return modelSetupSnapshot();
@@ -934,10 +985,13 @@ function privacyReceiptIdForSender(sender) {
 }
 
 function makeReceiptFetch(receiptId, category, whatWasSent, fetchImpl = (url, options) => net.fetch(url, options)) {
-  return (url, options = {}) => privacyReceipts.fetchWithReceipt(fetchImpl, receiptId, url, options, {
-    category,
-    whatWasSent
-  });
+  return (url, options = {}) => {
+    networkMode.assertOnline(category);
+    return privacyReceipts.fetchWithReceipt(fetchImpl, receiptId, url, options, {
+      category,
+      whatWasSent
+    });
+  };
 }
 
 function receiptCategoryForTrustedRequest(url) {
@@ -1284,7 +1338,10 @@ function loadPreferences() {
         : DEFAULT_AI_MODEL_ID
     };
     savedSession = sanitizeSavedSession(sessionPrefs);
-  } catch {
+    applyLoadedNetworkState(initialNetworkState({ prefsFileExisted: true, parsed }), parsed?.network?.offlineAllowlist);
+  } catch (error) {
+    // No file: a new install starts Offline. An unreadable file also starts Offline (fail closed).
+    applyLoadedNetworkState(initialNetworkState({ prefsFileExisted: error?.code !== 'ENOENT', parsed: null }), []);
     downloadSettings = {
       askWhereToSave: false,
       defaultDirectory: ''
@@ -1321,6 +1378,11 @@ function savePreferences() {
     bookmarks,
     startup: startupSettingsSnapshot(),
     ai: aiSettingsSnapshot(),
+    network: {
+      mode: networkMode.mode,
+      choiceMade: Boolean(networkSettings.choiceMade),
+      offlineAllowlist: [...networkSettings.offlineAllowlist]
+    },
     session: savedSession
   };
   fs.writeFileSync(file, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
@@ -1967,6 +2029,20 @@ function setupDownloadHandlingForSession(targetSession = session.defaultSession)
   downloadHandledSessions.add(targetSession);
 
   targetSession.on('will-download', (_event, item, webContents) => {
+    if (networkMode.isOffline() && !networkDecision(item.getURL()).allow) {
+      const blockedId = nextDownloadId;
+      nextDownloadId += 1;
+      downloads.set(blockedId, downloadRecordFromItem(blockedId, item, {
+        state: 'cancelled',
+        status: 'Blocked: Offline mode',
+        error: 'Blocked: Offline mode',
+        savePath: '',
+        filename: sanitizeFilename(item.getFilename())
+      }));
+      item.cancel();
+      broadcastDownloadsState();
+      return;
+    }
     const chain = item.getURLChain();
     for (const [id, guard] of guardedDownloadRequests) {
       if (guard.webContentsId === webContents?.id && chain.includes(guard.lastUrl)) guardedDownloadRequests.delete(id);
@@ -2042,13 +2118,15 @@ function setupDownloadHandlingForSession(targetSession = session.defaultSession)
       updateDownload(id, {
         ...downloadRecordFromItem(id, item),
         state,
-        status: item.isPaused() ? 'paused' : state,
+        status: item.isPaused() ? (offlinePausedDownloads.has(id) ? 'Paused: Offline mode' : 'paused') : state,
+        offlinePaused: item.isPaused() && offlinePausedDownloads.has(id),
         error: state === 'interrupted' ? 'Download was interrupted.' : ''
       });
     });
 
     item.on('done', (_downloadEvent, state) => {
       activeDownloadItems.delete(id);
+      offlinePausedDownloads.delete(id);
       updateDownload(id, {
         ...downloadRecordFromItem(id, item),
         state,
@@ -2105,6 +2183,7 @@ function cancelPreflightBody(response) {
 }
 
 async function fetchForDownloadPreflight(targetSession, url, options) {
+  if (!networkDecision(url).allow) networkMode.assertOnline('download check');
   const downloadSession = targetSession && typeof targetSession.fetch === 'function'
     ? targetSession
     : session.defaultSession;
@@ -2169,8 +2248,8 @@ async function preflightDownloadUrl(url, targetSession = session.defaultSession)
 }
 
 async function preflightMediaUrl(url, mediaType = 'images', _targetSession, receiptDetails = null) {
-  const fetchMedia = (method, headers) => safeFetch(url, {
-    method, headers, resolve: safeFetchResolve, ca: testCa,
+  const fetchMedia = (method, headers) => gatedSafeFetch(url, {
+    method, headers,
     onHop: hop => {
       const base = receiptDetails?.whatWasSent || 'media validation request – no query, prompt, or AI output sent';
       const entry = {
@@ -2869,7 +2948,11 @@ function attachTabEvents(tab) {
     if (isMainFrame && errorCode !== -3) {
       tab.title = 'Load Failed';
       tab.url = validatedURL || tab.url;
-      sendTabError(tab, errorDescription || 'The page could not be loaded.');
+      const offlineMessage = errorCode === -20 && networkMode.isOffline()
+        ? offlineLoadMessage(validatedURL || tab.url)
+        : '';
+      if (offlineMessage) tab.title = 'Offline';
+      sendTabError(tab, offlineMessage || errorDescription || 'The page could not be loaded.');
       sendTabState(tab);
     }
   });
@@ -4026,11 +4109,28 @@ function recordAiNetwork(details) {
   logAi('network request from AI runtime', entry);
 }
 
-function setupAiNetworkMonitor() {
-  session.defaultSession.webRequest.onCompleted(details => guardedDownloadRequests.delete(details.id));
-  session.defaultSession.webRequest.onErrorOccurred(details => guardedDownloadRequests.delete(details.id));
-  session.defaultSession.webRequest.onBeforeRedirect(details => recordPrivacyRedirect(details));
-  session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+// One listener set per session (Electron allows a single onBeforeRequest listener per session).
+// Layer 1 of Offline mode: every request is checked here before anything else.
+function setupNetworkMonitorForSession(ses) {
+  ses.webRequest.onHeadersReceived((details, callback) => {
+    if (!networkMode.isOffline() || !offlineLayerOn('webrequest') || !/^https?:/i.test(details.url)) {
+      callback({});
+      return;
+    }
+    const responseHeaders = { ...details.responseHeaders };
+    const key = Object.keys(responseHeaders).find(name => name.toLowerCase() === 'content-security-policy') || 'Content-Security-Policy';
+    responseHeaders[key] = [...(responseHeaders[key] || []), offlineConnectSrc(details.url, networkSettings.offlineAllowlist)];
+    callback({ responseHeaders });
+  });
+  ses.webRequest.onCompleted(details => guardedDownloadRequests.delete(details.id));
+  ses.webRequest.onErrorOccurred(details => guardedDownloadRequests.delete(details.id));
+  ses.webRequest.onBeforeRedirect(details => recordPrivacyRedirect(details));
+  ses.webRequest.onBeforeRequest((details, callback) => {
+    if (networkMode.isOffline() && offlineLayerOn('webrequest') && !networkDecision(details.url).allow) {
+      recordOfflineBlocked(details);
+      callback({ cancel: true });
+      return;
+    }
     if (aiWebContentsIds.has(details.webContentsId)) {
       recordAiNetwork(details);
       broadcastAiState();
@@ -4065,6 +4165,306 @@ function setupAiNetworkMonitor() {
     callback({});
   });
 }
+
+// ---------------------------------------------------------------------------------------------
+// Offline mode. Layers (PLAN §3.2): 1 webRequest cancel, 2 proxy black-hole, 3 DNS, 4 WebRTC,
+// 5 main-process code gate (assertOnline), 6 Offline connect-src CSP. Spellchecker downloads stop too.
+const OFFLINE_PROXY_RULES = '127.0.0.1:9';
+const networkSessions = new Set();
+const pendingNetworkSessions = [];
+const networkSessionQueues = new WeakMap();
+const offlineProxySessions = new WeakSet();
+const spellcheckerStateBeforeOffline = new WeakMap();
+const offlinePausedDownloads = new Set();
+let hostResolverChanged = false;
+
+function offlineLayerOn(name) {
+  return TEST_OFFLINE_LAYERS === 'all' || TEST_OFFLINE_LAYERS.split(',').includes(name);
+}
+
+function blockedLocalHostPorts() {
+  const list = [];
+  const searx = hostPortOf(searchSettings.endpoint);
+  if (searx) list.push({ entry: searx, error: SEARXNG_ALLOWLIST_ERROR });
+  if (AUDIT_PROXY_HOST_PORT) list.push({ entry: AUDIT_PROXY_HOST_PORT, error: "The audit proxy can't be allowed in Offline mode." });
+  return list;
+}
+
+function networkDecision(url) {
+  return offlineDecision(url, {
+    allowlist: networkSettings.offlineAllowlist,
+    blockedOrigins: blockedLocalHostPorts().map(item => item.entry)
+  });
+}
+
+function offlineLoadMessage(url) {
+  const { reason } = networkDecision(url);
+  if (reason === 'local-not-allowed') {
+    return "This local address isn't on your Offline allowlist. You can add it in Settings.";
+  }
+  if (reason === 'blocked-local-service') {
+    return "Offline mode is on. This local service forwards to the internet, so it can't load.";
+  }
+  return "Offline mode is on, so this site can't load. Switch to Online to open it.";
+}
+
+function networkStateSnapshot() {
+  return {
+    mode: networkMode.mode,
+    offline: networkMode.isOffline(),
+    choiceMade: Boolean(networkSettings.choiceMade),
+    offlineAllowlist: [...networkSettings.offlineAllowlist],
+    maxAllowlist: MAX_ALLOWLIST,
+    auditProxy: Boolean(AUDIT_PROXY)
+  };
+}
+
+function applyLoadedNetworkState(initial, allowlist) {
+  const testMode = ['offline', 'online'].includes(TEST_NETWORK_MODE) ? TEST_NETWORK_MODE : '';
+  networkSettings = {
+    choiceMade: Boolean(initial.choiceMade) || Boolean(testMode),
+    offlineAllowlist: normalizeAllowlist(allowlist, { blockedHostPorts: blockedLocalHostPorts() })
+  };
+  networkMode.set(testMode || initial.mode);
+}
+
+// Blocked attempts keep the origin only (privacy-receipt.js strips path and query).
+function recordOfflineBlocked(details) {
+  const entry = {
+    category: 'blocked',
+    method: details.method || 'GET',
+    url: details.url,
+    resourceType: details.resourceType || ''
+  };
+  try {
+    const target = classifyPrivacyRequest(details, contextForPrivacyRequest(details));
+    if (target.action === 'receipt' && target.receiptId && privacyReceipts.getReceipt(target.receiptId)) {
+      privacyReceipts.addEntry(target.receiptId, entry);
+      return;
+    }
+  } catch {
+    // Attribution is best effort; the attempt is still recorded below.
+  }
+  privacyReceipts.addOfflineBlockedEntry(entry);
+}
+
+// Search, media and source reading refuse before any request while Offline.
+function refuseWebWhileOffline(sender, url) {
+  if (!networkMode.isOffline()) return;
+  if (url) recordOfflineBlocked({ url, method: 'GET', resourceType: 'app', webContentsId: sender?.id });
+  throw Object.assign(new Error(WEB_OFFLINE_MESSAGE), { code: 'OFFLINE_MODE' });
+}
+
+function applySpellcheckerMode(ses, offline) {
+  if (!ses || typeof ses.setSpellCheckerEnabled !== 'function') return;
+  try {
+    if (offline) {
+      if (!spellcheckerStateBeforeOffline.has(ses)) {
+        spellcheckerStateBeforeOffline.set(ses, ses.isSpellCheckerEnabled());
+      }
+      ses.setSpellCheckerEnabled(false);
+    } else if (spellcheckerStateBeforeOffline.has(ses)) {
+      ses.setSpellCheckerEnabled(spellcheckerStateBeforeOffline.get(ses));
+      spellcheckerStateBeforeOffline.delete(ses);
+    }
+  } catch (error) {
+    logAi('spellchecker mode change failed', { error: error?.message || String(error) });
+  }
+}
+
+// Layer 3: Chromium's own DNS goes to an unreachable local DoH server while Offline.
+function applyHostResolverMode() {
+  if (typeof app.configureHostResolver !== 'function') return;
+  try {
+    if (networkMode.isOffline() && offlineLayerOn('proxy')) {
+      app.configureHostResolver({ secureDnsMode: 'secure', secureDnsServers: ['https://127.0.0.1:9/dns-query'] });
+      hostResolverChanged = true;
+    } else if (hostResolverChanged) {
+      app.configureHostResolver({ secureDnsMode: 'automatic', secureDnsServers: [] });
+      hostResolverChanged = false;
+    }
+  } catch (error) {
+    logAi('host resolver mode change failed', { error: error?.message || String(error) });
+  }
+}
+
+// Layer 4: no non-proxied UDP (STUN/ICE) while Offline.
+function applyWebRtcPolicy(contents) {
+  try {
+    if (contents && !contents.isDestroyed() && typeof contents.setWebRTCIPHandlingPolicy === 'function') {
+      contents.setWebRTCIPHandlingPolicy(networkMode.isOffline() ? 'disable_non_proxied_udp' : 'default');
+    }
+  } catch {
+    // Some internal contents do not support WebRTC policy changes.
+  }
+}
+
+// Layer 2 plus spellchecker for one session. Serialised per session so rapid toggles stay ordered.
+function applyNetworkModeToSession(ses) {
+  const previous = networkSessionQueues.get(ses) || Promise.resolve();
+  const next = previous.catch(() => {}).then(async () => {
+    const offline = networkMode.isOffline();
+    applySpellcheckerMode(ses, offline);
+    if (offline && !AUDIT_PROXY && offlineLayerOn('proxy')) {
+      // Port 9 has nothing listening; loopback is bypassed implicitly by Chromium.
+      await ses.setProxy({ mode: 'fixed_servers', proxyRules: OFFLINE_PROXY_RULES, proxyBypassRules: '' });
+      offlineProxySessions.add(ses);
+    } else if (offlineProxySessions.has(ses)) {
+      offlineProxySessions.delete(ses);
+      await ses.setProxy(AUDIT_PROXY
+        ? { mode: 'fixed_servers', proxyRules: AUDIT_PROXY.proxyRules, proxyBypassRules: AUDIT_PROXY_BYPASS_RULES }
+        : { mode: 'system' });
+    }
+    if (typeof ses.closeAllConnections === 'function') {
+      await ses.closeAllConnections();
+    }
+  }).catch(error => {
+    logAi('network mode apply failed', { error: error?.message || String(error) });
+  });
+  networkSessionQueues.set(ses, next);
+  return next;
+}
+
+function trackNetworkSession(ses) {
+  if (!ses || networkSessions.has(ses)) {
+    return networkSessionQueues.get(ses) || Promise.resolve();
+  }
+  networkSessions.add(ses);
+  setupNetworkMonitorForSession(ses);
+  return applyNetworkModeToSession(ses);
+}
+
+// closeAllConnections() does not close open WebSockets (verified with a probe, Electron 38), and
+// neither does network emulation. Unloading the page does, so web tabs are reloaded: a blocked
+// page then shows the offline message, an allowlisted local page loads again without its sockets.
+function webTabsForOfflineReload() {
+  const tabs = [];
+  for (const state of windows.values()) {
+    for (const tab of state.tabs.values()) {
+      const contents = tab.view?.webContents;
+      if (!contents || contents.isDestroyed()) continue;
+      let url = '';
+      try { url = contents.getURL(); } catch { url = ''; }
+      if (/^https?:/i.test(url)) tabs.push(contents);
+    }
+  }
+  return tabs;
+}
+
+function reloadWebTabsForOffline() {
+  for (const contents of webTabsForOfflineReload()) contents.reload();
+}
+
+function pauseDownloadsForOffline() {
+  for (const [id, item] of activeDownloadItems) {
+    try {
+      if (item.getState() === 'progressing' && !item.isPaused() && !networkDecision(item.getURL()).allow) {
+        offlinePausedDownloads.add(id);
+        item.pause();
+        updateDownload(id, { ...downloadRecordFromItem(id, item), status: 'Paused: Offline mode', offlinePaused: true });
+      }
+    } catch {
+      // A finished item can race with the switch; nothing to pause.
+    }
+  }
+}
+
+function broadcastNetworkState() {
+  const snapshot = networkStateSnapshot();
+  for (const contents of webContents.getAllWebContents()) {
+    if (contents.isDestroyed()) continue;
+    let url = '';
+    try { url = contents.getURL(); } catch { url = ''; }
+    if (url.startsWith('sovereign://') || url.startsWith('file://')) {
+      contents.send('network:state', snapshot);
+    }
+  }
+  for (const state of windows.values()) {
+    layoutViews(state);
+    sendState(state);
+  }
+}
+
+function offlineReloadTabCount() {
+  return webTabsForOfflineReload().length;
+}
+
+async function setNetworkMode(next, { choice = true, requireConfirm = false, confirmed = false } = {}) {
+  if (next === 'offline' && !networkMode.isOffline() && requireConfirm && !confirmed) {
+    const tabCount = offlineReloadTabCount();
+    if (tabCount > 0) return {
+      ok: false, needsConfirm: true, tabCount,
+      message: `Switching to Offline will reload ${tabCount} open website tab${tabCount === 1 ? '' : 's'}. Unsaved text in forms may be lost.`,
+      state: networkStateSnapshot()
+    };
+  }
+  if (choice) networkSettings.choiceMade = true;
+  const changed = networkMode.set(next);
+  if (changed) {
+    // Layer 1 and the code gate block from this line on; the rest tidies up.
+    const offline = networkMode.isOffline();
+    privacyReceipts.setOffline(offline);
+    applyHostResolverMode();
+    for (const contents of webContents.getAllWebContents()) applyWebRtcPolicy(contents);
+    await Promise.all([...networkSessions].map(applyNetworkModeToSession));
+    if (offline) {
+      for (const controller of activeSearchRequests.values()) controller.abort();
+      reloadWebTabsForOffline();
+      // A check that later starts downloading is caught in the worker-state handler.
+      if (modelSetupState.status === 'downloading') cancelModelSetup(MODEL_OFFLINE_PAUSED_MESSAGE);
+      pauseDownloadsForOffline();
+    } else {
+      for (const id of offlinePausedDownloads) {
+        if (downloads.has(id)) updateDownload(id, { offlinePaused: false, status: 'paused' });
+      }
+      offlinePausedDownloads.clear();
+    }
+    updateModelSetupState({});
+  }
+  savePreferences();
+  broadcastNetworkState();
+  return networkStateSnapshot();
+}
+
+ipcMain.on('network:confirm-visible', (event, visible) => {
+  const state = findWindowStateBySender(event.sender);
+  if (!state || state.uiView.webContents !== event.sender) return;
+  state.networkConfirmVisible = visible === true;
+  layoutViews(state);
+});
+
+ipcMain.handle('network:get-state', () => networkStateSnapshot());
+
+ipcMain.handle('network:set-mode', (_event, mode, options) => setNetworkMode(mode === 'online' ? 'online' : 'offline', { requireConfirm: true, confirmed: options?.confirmed === true }));
+
+// "Stay online" and closing the strip both mean Online (asked once, PLAN §2).
+ipcMain.handle('network:dismiss-intro', (_event, choice, options) => setNetworkMode(choice === 'offline' ? 'offline' : 'online', { requireConfirm: true, confirmed: options?.confirmed === true }));
+
+ipcMain.handle('network:add-allowed', (_event, text) => {
+  const parsed = parseAllowlistEntry(text, { blockedHostPorts: blockedLocalHostPorts() });
+  if (!parsed.ok) return { ok: false, error: parsed.error, state: networkStateSnapshot() };
+  if (networkSettings.offlineAllowlist.includes(parsed.entry)) {
+    return { ok: false, error: 'That address is already on the list.', state: networkStateSnapshot() };
+  }
+  if (networkSettings.offlineAllowlist.length >= MAX_ALLOWLIST) {
+    return { ok: false, error: `You can allow at most ${MAX_ALLOWLIST} local addresses.`, state: networkStateSnapshot() };
+  }
+  networkSettings.offlineAllowlist = [...networkSettings.offlineAllowlist, parsed.entry];
+  savePreferences();
+  broadcastNetworkState();
+  return { ok: true, entry: parsed.entry, state: networkStateSnapshot() };
+});
+
+ipcMain.handle('network:remove-allowed', async (_event, entry) => {
+  const value = String(entry || '');
+  networkSettings.offlineAllowlist = networkSettings.offlineAllowlist.filter(item => item !== value);
+  savePreferences();
+  if (networkMode.isOffline()) {
+    await Promise.all([...networkSessions].map(applyNetworkModeToSession));
+  }
+  broadcastNetworkState();
+  return { ok: true, state: networkStateSnapshot() };
+});
 
 // Test-only: answer website permission prompts without a native dialog ('allow' or 'deny').
 const PERMISSION_TEST_ANSWER = ['allow', 'deny'].includes(process.env.SOVEREIGN_PERMISSION_TEST_ANSWER)
@@ -4160,7 +4560,13 @@ app.on('web-contents-created', (_event, contents) => {
   });
 });
 
-app.on('session-created', setupPermissionHandling);
+app.on('session-created', ses => {
+  setupPermissionHandling(ses);
+  // Spellchecker first, synchronously, so no dictionary download starts while Offline.
+  if (networkMode.isOffline()) applySpellcheckerMode(ses, true);
+  if (app.isReady()) trackNetworkSession(ses);
+  else pendingNetworkSessions.push(ses);
+});
 
 async function runDatasetCollection() {
   const { collectDataset, expandPath } = require('./dataset-collection');
@@ -4204,9 +4610,12 @@ app.whenReady().then(async () => {
   setupPermissionHandling(session.defaultSession);
   loadPreferences();
   await setupAuditProxyForSession(session.defaultSession);
+  privacyReceipts.setOffline(networkMode.isOffline());
+  applyHostResolverMode();
+  await trackNetworkSession(session.defaultSession);
+  await Promise.all(pendingNetworkSessions.splice(0).map(trackNetworkSession));
   setupInternalProtocol();
   setupApplicationMenu();
-  setupAiNetworkMonitor();
   setupDownloadHandling();
   ensureFindQueueTimer();
   if (datasetBatchEnabled) {
@@ -4229,6 +4638,8 @@ app.whenReady().then(async () => {
 app.on('web-contents-created', (_event, contents) => {
   setupAuditProxyForSession(contents.session);
   setupDownloadHandlingForSession(contents.session);
+  trackNetworkSession(contents.session);
+  applyWebRtcPolicy(contents);
   contents.on('will-attach-webview', event => {
     event.preventDefault();
   });
@@ -4553,6 +4964,10 @@ ipcMain.on('model-setup:worker-state', (event, patch) => {
     return;
   }
   const snapshot = updateModelSetupState(patch);
+  if (snapshot.status === 'downloading' && networkMode.isOffline()) {
+    cancelModelSetup(MODEL_OFFLINE_PAUSED_MESSAGE);
+    return;
+  }
   if (snapshot.status === 'ready') {
     aiSettings.setupCanceled = false;
     savePreferences();
@@ -4571,7 +4986,17 @@ ipcMain.handle('search:update-settings', (_event, patch) => {
       ...searchSettings,
       endpoint: normalizeSearxngEndpoint(input.endpoint)
     };
+    // SearXNG forwards to the internet, so it can never stay on the Offline allowlist.
+    const searxHostPort = hostPortOf(searchSettings.endpoint);
+    const removedOfflineAllowlistEntry = networkSettings.offlineAllowlist.includes(searxHostPort) ? searxHostPort : '';
+    if (removedOfflineAllowlistEntry) {
+      networkSettings.offlineAllowlist = networkSettings.offlineAllowlist.filter(entry => entry !== searxHostPort);
+    }
     savePreferences();
+    if (removedOfflineAllowlistEntry) {
+      broadcastNetworkState();
+      return { ...searchSettingsSnapshot(), removedOfflineAllowlistEntry };
+    }
   }
 
   return searchSettingsSnapshot();
@@ -4607,6 +5032,7 @@ async function handleSearchQuery(event, request) {
   }
 
   const endpoint = normalizeSearxngEndpoint(input.endpoint || searchSettings.endpoint);
+  refuseWebWhileOffline(event.sender, endpoint);
   searchSettings.endpoint = endpoint;
   const controller = new AbortController();
   activeSearchRequests.set(requestId, controller);
@@ -4660,6 +5086,7 @@ ipcMain.handle('search:media', async (event, request) => {
   if (!tab || !['search', 'ask'].includes(tab.kind)) {
     throw new Error('Media search is only available from Sovereign Search and Ask AI tabs.');
   }
+  refuseWebWhileOffline(event.sender, searchSettings.endpoint);
 
   const input = request && typeof request === 'object' ? request : {};
   const requestId = String(input.requestId || '').slice(0, 80);
@@ -4743,6 +5170,7 @@ ipcMain.handle('media:preflight', async (event, request) => {
     throw new Error('Media validation is only available from Sovereign internal pages.');
   }
   const input = request && typeof request === 'object' ? request : {};
+  refuseWebWhileOffline(event.sender, input.url);
   const mediaType = input.type === 'videos' ? 'videos' : 'images';
   const receiptId = privacyReceiptIdForSender(event.sender);
   return preflightMediaUrlForRequest(input.url, mediaType, event.sender.session, receiptId
@@ -4760,6 +5188,7 @@ ipcMain.handle('media:download', async (event, request) => {
     throw new Error('Media downloads are only available from Sovereign internal pages.');
   }
   const input = request && typeof request === 'object' ? request : {};
+  refuseWebWhileOffline(event.sender, input.url);
   const mediaType = input.type === 'videos' ? 'videos' : 'images';
   const receiptId = privacyReceiptIdForSender(event.sender);
   const checked = await preflightMediaUrlForRequest(input.url, mediaType, event.sender.session, receiptId
@@ -4810,6 +5239,7 @@ async function handleReadSources(event, request) {
   if (!tab || !['search', 'ask'].includes(tab.kind)) {
     throw new Error('Source reading is only available from Sovereign Search and Ask AI tabs.');
   }
+  refuseWebWhileOffline(event.sender, '');
 
   const input = request && typeof request === 'object' ? request : {};
   const requestId = String(input.requestId || '').slice(0, 80);
@@ -4841,8 +5271,8 @@ async function handleReadSources(event, request) {
         results: input.results,
         signal: controller.signal,
         onActivity: entry => pushSearchActivity(entry),
-        fetchImpl: (url, options) => safeFetch(url, {
-          ...options, resolve: safeFetchResolve, ca: testCa,
+        fetchImpl: (url, options) => gatedSafeFetch(url, {
+          ...options,
           onHop: hop => privacyReceipts.addEntry(receipt.id, {
             category: 'source-page', method: 'GET', url: hop.url,
             whatWasSent: `page fetch – no query or AI output sent${hop.index ? ` (redirect from ${hop.fromHost})` : ''}`
@@ -5248,6 +5678,10 @@ ipcMain.handle('downloads:get-state', () => downloadsSnapshot());
 
 ipcMain.handle('downloads:download-url', async (event, inputUrl) => {
   const url = validateDownloadUrlInput(inputUrl);
+  if (networkMode.isOffline() && !networkDecision(url).allow) {
+    recordOfflineBlocked({ url, method: 'GET', resourceType: 'download', webContentsId: event.sender.id });
+    throw new Error(`${OFFLINE_MESSAGE} Switch to Online to download from this address.`);
+  }
   setupDownloadHandlingForSession(event.sender.session);
   await preflightDownloadUrl(url, event.sender.session);
   event.sender.downloadURL(url);
@@ -5266,7 +5700,11 @@ ipcMain.on('downloads:pause', (_event, downloadId) => {
 
 ipcMain.on('downloads:resume', (_event, downloadId) => {
   const item = downloadItemForAction(downloadId);
+  if (item && networkMode.isOffline() && !networkDecision(item.getURL()).allow) {
+    return;
+  }
   if (item?.isPaused() || item?.canResume()) {
+    offlinePausedDownloads.delete(Number(downloadId));
     item.resume();
   }
 });
@@ -5308,9 +5746,21 @@ ipcMain.handle('downloads:open-file', async (_event, downloadId) => {
   return true;
 });
 
-ipcMain.on('browser:open-external', (_event, url) => {
+function openExternalOnline(url) {
+  networkMode.assertOnline('open in another app');
+  return shell.openExternal(url);
+}
+
+ipcMain.handle('browser:open-external', async (event, url) => {
   const checked = normalizeAddress(url);
-  if (checked.ok) {
-    shell.openExternal(checked.url);
+  if (!checked.ok) {
+    return { ok: false, error: checked.error };
   }
+  if (networkMode.isOffline()) {
+    const owner = findWindowStateBySender(event.sender) || focusedWindowState();
+    sendError(owner, OPEN_EXTERNAL_OFFLINE_MESSAGE);
+    return { ok: false, offline: true, error: OPEN_EXTERNAL_OFFLINE_MESSAGE };
+  }
+  await openExternalOnline(checked.url);
+  return { ok: true };
 });

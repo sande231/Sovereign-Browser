@@ -18,6 +18,20 @@ contextBridge.exposeInMainWorld('sovereign', {
     return () => ipcRenderer.removeListener('browser:focus-address', listener);
   },
   newTab: url => ipcRenderer.send('browser:new-tab', url),
+  openExternal: url => ipcRenderer.invoke('browser:open-external', url),
+  network: {
+    getState: () => ipcRenderer.invoke('network:get-state'),
+    setMode: (mode, options) => ipcRenderer.invoke('network:set-mode', mode, options),
+    setConfirmVisible: visible => ipcRenderer.send('network:confirm-visible', visible),
+    dismissIntro: (choice, options) => ipcRenderer.invoke('network:dismiss-intro', choice, options),
+    addAllowed: entry => ipcRenderer.invoke('network:add-allowed', entry),
+    removeAllowed: entry => ipcRenderer.invoke('network:remove-allowed', entry),
+    onState: callback => {
+      const listener = (_event, state) => callback(state);
+      ipcRenderer.on('network:state', listener);
+      return () => ipcRenderer.removeListener('network:state', listener);
+    }
+  },
   openSearch: payload => ipcRenderer.send('browser:open-search', payload),
   openDownloads: () => ipcRenderer.send('browser:open-downloads'),
   toggleDownloadsPanel: () => ipcRenderer.send('browser:toggle-downloads-panel'),

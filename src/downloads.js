@@ -24,6 +24,9 @@ function formatBytes(bytes) {
 }
 
 function statusText(download) {
+  if (download.paused && download.offlinePaused) {
+    return 'Paused: Offline mode';
+  }
   if (download.paused) {
     return 'Paused';
   }
@@ -98,7 +101,7 @@ function renderDownload(download) {
         } else {
           window.sovereign.downloads.pause(download.id);
         }
-      }, download.paused ? !download.canResume : false),
+      }, download.paused ? (!download.canResume || Boolean(download.offlinePaused)) : false),
       button('Cancel', () => window.sovereign.downloads.cancel(download.id))
     );
   } else {

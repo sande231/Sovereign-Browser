@@ -188,4 +188,36 @@ assert.doesNotThrow(() => receipts.recordSearxngForwarding(webSearch.id, { url: 
 const localStill = receipts.createReceipt({ id: 'fwd-local', type: 'ask', label: 'Ask AI', query: 'q', localOnly: true });
 assert.equal(receiptById(localStill.id).summary, 'Nothing left this device: answer generated locally');
 
+receipts.resetForTests();
+receipts.setOffline(true);
+const offline = receipts.createReceipt({ id: 'offline-test', type: 'ask' });
+assert.match(offline.summary, /^Offline: 0 external requests/);
+for (let i = 0; i < 3; i++) receipts.addEntry(offline.id, { category: 'blocked', url: 'https://example.com/search?q=SECRET123', resourceType: 'xhr', whatWasSent: 'SECRET123' });
+let blocked = receiptById(offline.id);
+assert.match(blocked.summary, /· 3 blocked \(offline mode\)/);
+assert.equal(blocked.entries.length, 1);
+assert.equal(blocked.entries[0].count, 3);
+assert.equal(blocked.entries[0].url, 'https://example.com');
+assert(!JSON.stringify(receipts.getReceipts()).includes('SECRET123'));
+assert(!JSON.stringify(receipts.exportPayload()).includes('SECRET123'));
+receipts.addEntry(offline.id, { category: 'other', url: 'https://example.org/' });
+assert.match(receiptById(offline.id).summary, /^Offline: 1 external request ·/);
+receipts.setOffline(false);
+assert.equal(receiptById(offline.id).offline, false);
+
+// Both trim paths count omitted rows, not aggregated attempts.
+for (const category of ['other', 'blocked']) {
+  const capped = receipts.createReceipt({ id: `capped-${category}` });
+  assert.equal(capped.droppedEntries, 0);
+  for (let i = 0; i < 125; i++) {
+    receipts.addEntry(capped.id, { category, url: `https://host-${i}.example/`, resourceType: 'xhr' });
+  }
+  assert.equal(receiptById(capped.id).entries.length, 120);
+  assert.equal(receiptById(capped.id).droppedEntries, 5);
+  assert.equal(receipts.exportPayload().receipts.find(r => r.id === capped.id).droppedEntries, 5);
+  if (category === 'blocked') {
+    receipts.addEntry(capped.id, { category, url: 'https://host-124.example/', resourceType: 'xhr' });
+    assert.equal(receiptById(capped.id).droppedEntries, 5);
+  }
+}
 console.log('privacy-receipt tests passed');

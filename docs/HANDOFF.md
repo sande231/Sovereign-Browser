@@ -2724,3 +2724,390 @@ Both tasks are **DONE**. Codex built both. Claude wrote the PLAN and REVIEW and 
 **Answered (Sandeep, 2026-11-09):** Q1 keep Chromium downloads with the hop-by-hop check. Q2 accepted for now. Q3 no rename. The download DNS-rebinding gap, the ignored system proxy (a future Tor/VPN feature must route these requests too) and failures on TLS-inspecting networks are recorded under **Known limits** in the "Safe redirect handling" task. No code was changed.
 
 **Manual tests:** see the chat summary for this batch, and each task's PLAN §7.
+
+## Task: Offline mode (Phase 1, Task 1a)
+Status: ready for manual testing (not committed). Branch: `phase-1/offline-mode`. **Feature built by Claude (Codex unavailable at the time); recovery-round tests built by Codex (2026-11-10).**
+
+**Plan review decisions (Sandeep, 2026-11-09), applied below:**
+1. Offline localhost access is an explicit allowlist, **empty by default**, editable in Settings with a forwarding warning (§2, §3.1, §3.6). `sovereign://` and local `file:///` are always allowed.
+2. "Open in default browser" is refused while Offline with the exact message "Offline mode is on. Opening another app would leave Sovereign's protection." (§3.2 layer 5).
+3. `SOVEREIGN_AUDIT_PROXY` works only when `!app.isPackaged`, with a test (§3.9).
+4. Spellchecker dictionary downloads are disabled while Offline, with a test (§3.8).
+5. Every automatic background request is listed with how Offline blocks it (§3.8).
+
+**Recovery check (Claude, 2026-11-10, after the Mac shut down mid-task):**
+- Nothing was lost. `git status` shows 33 modified files plus 4 untracked (`src/network-mode.js`, `tests/network-mode.test.js`, `tests/network-exits.test.js`, `tests/electron/offline-mode.test.js`). CHANGES and REVIEW below were already written before the shutdown.
+- Built and matching the PLAN: `network-mode.js`, layers 1–5 in `main.js`, receipts (`blocked`, origin only, count, `Offline: N`), preferences and banner, toolbar and Settings UI, allowlist IPC, downloads pause, model check-only, `open-external` refusal, audit proxy via `testHook`, spellchecker, the Electron test (7 phases) and one regression line in each existing Electron test. `npm run check` exits 0.
+- Missing against PLAN §5: `tests/network-mode.test.js` is 25 dense lines. It does not check the `reason` for blocked external URLs. It also does not check the §2 error messages for a missing port, a scheme, the audit proxy, duplicates or the 20-entry cap. The safe-fetch gate is tested only with fakes, not a real socket with 0 connections. In `privacy-receipt.test.js` the new asserts run after the "passed" log line.
+- Codex had usage again on 2026-11-10, so the remaining test work went to Codex (see CHANGES, "Recovery round").
+
+### PLAN (Claude)
+
+#### 1. What exists today (verified in code)
+- **One session.** Every tab (`createWebView`, `main.js` ~2903), internal page (`createTrustedInternalView`, ~2920), the sidebar, and the hidden model-setup window (`createModelSetupWindow`, ~800) use `session.defaultSession`. No `partition` is set anywhere. `app.on('session-created', setupPermissionHandling)` (~4196) already runs for any future session.
+- **One `onBeforeRequest` listener** on the default session, in `setupAiNetworkMonitor` (~4029). It does AI-runtime logging, the download redirect guard and `recordPrivacyWebRequest`. Electron allows only one `onBeforeRequest` listener per session, so the offline check must go **inside this listener**, not in a second one.
+- **Requests that never touch the session.** These bypass `webRequest` and the session proxy completely:
+  - `safeFetch` (`src/safe-fetch.js`) uses Node `http`/`https`, and `safeFetchResolve` calls `dns.lookup` (OS resolver). Used by source reading and media preflight.
+  - `shell.openExternal` (`browser:open-external`, ~5311) hands a URL to the system browser.
+- **Requests through Electron's network stack from main:** `net.fetch` in `makeReceiptFetch` (~936, SearXNG search and media search) and `downloadSession.fetch` (~2111, download preflight). These go through the session, but we gate them in code anyway (§3.4) so the rule does not depend on `webRequest` seeing them.
+- **Proxy.** `setupAuditProxyForSession` (~1096) calls `setProxy` only when `SOVEREIGN_AUDIT_PROXY` is set. Otherwise Chromium uses the system proxy settings. `AUDIT_PROXY` (~114) is read straight from `process.env`, **even in a packaged build** (fixed in §3.9).
+- **No auto-updater and no crash reporter** are set up (`autoUpdater` / `crashReporter` do not appear in `src/`). The Electron spellchecker is on by default (no `spellcheck` setting anywhere).
+- **The only localhost service the app uses is SearXNG** (`DEFAULT_SEARXNG_ENDPOINT = http://127.0.0.1:8080/search`, `search-backend.js`). The user can also point it at a private-network address. SearXNG forwards every query to public search engines, so **it counts as external** while Offline.
+- **The AI model** runs in the renderer (WebLLM, `src/ai/ai-engine-entry.js`, IndexedDB cache). `hasModelInCache` is a local check. First-run auto-download (`shouldAutoStartModelSetup`, ~868) fetches model files through the default session.
+- **Preferences** live in `userData/preferences.json` (`loadPreferences` ~1247, `savePreferences` ~1309). There is no network setting yet.
+- **Receipts** (`src/privacy-receipt.js`): entries carry the full cleaned URL. `buildSummary` builds the one-line summary. `VALID_CATEGORIES` limits the categories.
+
+#### 2. Behaviour (what Sandeep will see)
+- **Toolbar switch.** A new button in the nav row of `src/index.html`, just left of the AI button: `#network-mode-toggle`, with `aria-pressed`. The label is always written out, never just an icon: **"Offline"** (filled, high-contrast style) or **"Online"**. Tooltip: "Offline mode: nothing leaves this computer. Click to go online." / "Online: websites and web search can use the internet. Click to go offline." One click switches; no confirm dialog either way.
+- The same setting appears in **Settings** (`settings.html`) as a radio pair with one line of explanation, so it can be found without the toolbar.
+- **New installs** (no `preferences.json` yet): start **Offline**. Nothing is asked.
+- **Existing installs** (`preferences.json` exists, no `network` key): stay **Online**. On the first launch after the update, show a one-time banner under the toolbar (in-app, not a native dialog, so tests can drive it):
+  > **New: Offline mode.** When it's on, Sovereign sends nothing to the internet. Ask AI still works with your downloaded model, attached files and pages you already have open. Websites, web search and image search pause until you switch back. [Turn on Offline mode] [Stay online]
+  - Either button saves `network.choiceMade = true`. Closing the banner (×) counts as "Stay online" and also saves it, so it is asked **once**.
+- **Websites while Offline.** Navigating to an external site shows the existing tab error UI (`sendTabError`) with "Offline mode is on, so this site can't load. Switch to Online to open it." Map `did-fail-load` error `-20` (`ERR_BLOCKED_BY_CLIENT`) to this message when the mode is offline. **Local addresses are blocked too unless they are on the Offline allowlist**; the message for a blocked local address says "This local address isn't on your Offline allowlist. You can add it in Settings."
+- **Offline allowlist (Settings).** Under the Offline/Online radio pair: a list of allowed local addresses, **empty by default**, with an input and [Add] / [Remove] buttons. Above it, always visible, the warning:
+  > Only add a local service you trust. Some local services (for example a search engine like SearXNG, a proxy or an AI server) forward what you send to the internet, and Offline mode can't see past them.
+  - An entry is `host:port`. `host` must be a loopback host: `localhost`, `*.localhost`, `127.x.x.x` or `[::1]`. The port is required (keeps each entry narrow). Example: `127.0.0.1:3000`.
+  - Rejected with a clear message: non-loopback hosts (`192.168.1.5:80` → "Only addresses on this computer can be allowed."), a missing port, the SearXNG endpoint's host:port ("SearXNG forwards searches to the internet, so it can't be allowed in Offline mode."), the audit proxy's host:port, duplicates, and more than 20 entries.
+  - The entry allows `http`, `https`, `ws` and `wss` to exactly that host and port (default port 80/443 when the URL has none). `localhost:3000` and `127.0.0.1:3000` are separate entries; no DNS is involved.
+  - Changes apply immediately, also while Offline.
+- **Ask AI while Offline:**
+  - Works: the local model, attachments (PDF/text), "use this page" / page text from tabs that are already open (`ai:extract-active-page-text` reads the already-rendered DOM; no new request).
+  - **"Search the web"** (`#web-toggle` in `ask.html`) is unchecked and disabled, with the note "Off while Offline mode is on." next to it. The "Search web for images" / "Show images" buttons are hidden or disabled with the same note. A media question gets the existing "turn on Search the web" style reply, reworded to "Image search needs Online mode."
+  - **Sovereign Search** page (`search.html`) and the toolbar search button: the search box is disabled with "Web search is off in Offline mode. Ask AI still works with your files and open pages."
+- **Model download while Offline.** `ensureModelSetupService` runs the local `check` only, never `check-and-download`. If the model is not cached, the setup chip and Ask page say: "The AI model isn't on this computer yet. Offline mode is on, so it can't be downloaded. Switch to Online to download it (about 705 MB); you can turn Offline back on afterwards." with a **[Go online and download]** button. That button switches the mode to Online (visible in the toolbar) and then starts the download. It is never done silently.
+
+#### 3. Design
+##### 3.1 New module `src/network-mode.js` (plain Node, no Electron imports, unit-testable)
+- `isLoopbackHost(hostname)`: true only for `localhost`, `*.localhost`, IPv4 literal in `127.0.0.0/8`, and `::1` (with or without `[]`). Parse IPs to bytes (reuse the parsing in `safe-fetch.js`; export it there if needed, don't duplicate). Not loopback: `0.0.0.0`, `::ffff:127.0.0.1` (mapped; block, keep the rule simple), private LAN ranges, any hostname that merely resolves to 127.x (no DNS is done here).
+- `parseAllowlistEntry(text, { blockedHostPorts })` returns `{ ok: true, entry: 'host:port' }` (host lower-cased, IPv6 kept in `[]`) or `{ ok: false, error }` with the messages in §2. `normalizeAllowlist(list, opts)` drops invalid entries and duplicates and caps at 20 (used when loading preferences).
+- `offlineDecision(url, { allowlist, blockedOrigins })` returns `{ allow: boolean, reason }`:
+  - Allow schemes `sovereign:`, `data:`, `blob:`, `devtools:`, `about:`, `chrome:` (Chromium internal error pages).
+  - Allow `file:` **only with an empty host** (`file:///…`). `file://server/share` is a network share: block.
+  - Allow `http:`, `https:`, `ws:`, `wss:` only when `isLoopbackHost`, **and** the URL's `host:port` (default port filled in) is in `allowlist`, **and** it is not in `blockedOrigins`. With the default empty allowlist, every http/ws request is blocked. `reason` is `'external'`, `'local-not-allowed'` or `'blocked-local-service'` so the UI can pick the right message.
+  - Everything else is blocked (fail closed), including unparseable URLs and `ftp:`.
+- `blockedOrigins` is built in `main.js` from: the configured SearXNG endpoint's origin (any address, loopback included), and the audit-proxy origin when set.
+- `initialNetworkState({ prefsFileExisted, parsed })` returns `{ mode, choiceMade }`:
+  - No file: `{ mode: 'offline', choiceMade: true }`.
+  - File exists and has a valid `network` object: use it.
+  - File exists without `network`: `{ mode: 'online', choiceMade: false }` (show the banner).
+  - File exists but is not valid JSON: `{ mode: 'offline', choiceMade: false }` (fail closed; the banner still offers the choice).
+- `createNetworkMode({ initial, onChange })` holds the state: `isOffline()`, `set(mode)` (no-op if unchanged; calls `onChange(mode, previous)`), and `assertOnline(purpose)`, which throws `Error('Offline mode is on.')` with `code = 'OFFLINE_MODE'` and `purpose` attached.
+
+##### 3.2 Enforcement layers in `main.js` (every layer applies to every session)
+Keep a `Set` of sessions: `session.defaultSession` plus every session from `app.on('session-created')`. A new helper `applyNetworkModeToSession(ses)` runs on startup, on each new session, and on every mode change. Layers:
+1. **`webRequest.onBeforeRequest` (main enforcement).** At the **top** of the existing listener, before anything else: if offline and `offlineDecision(details.url).allow` is false, record the blocked attempt (§3.5) and `callback({ cancel: true })`. This covers navigations, subresources, XHR/fetch, WebSocket handshakes (`ws:`/`wss:` show up as `resourceType: 'webSocket'`), service-worker fetches (`webContentsId` may be missing; the check does not need it), download requests (§3.3), and model-file fetches.
+   - Generalise `setupAiNetworkMonitor()` into `setupNetworkMonitorForSession(ses)` so a session created later gets the same single listener. The default session behaves exactly as today when online.
+2. **Proxy black-hole (catches what `webRequest` never sees: `<link rel=preconnect>`, speculative preconnects, DNS prefetch, WebRTC TCP fallback).** When offline: `ses.setProxy({ mode: 'fixed_servers', proxyRules: 'http=127.0.0.1:9;https=127.0.0.1:9;socks=127.0.0.1:9', proxyBypassRules: '<local>;localhost;127.0.0.1;[::1]' })`. Port 9 is the discard port with nothing listening, so a proxied connection fails at loopback. Chromium does not fall back to DIRECT for `fixed_servers`, and does not resolve DNS locally for proxied hosts. Then `await ses.closeAllConnections()`.
+   - **With `SOVEREIGN_AUDIT_PROXY` set**, keep the audit proxy instead of the black-hole. Otherwise mitmproxy sees 0 requests for a trivial reason (we replaced it) and the manual audit proves nothing. The audit then tests layers 1, 3 and 4.
+   - Going Online: restore the audit proxy if set, else `setProxy({ mode: 'system' })`, then `closeAllConnections()`.
+3. **DNS (defence in depth).** When offline: `app.configureHostResolver({ secureDnsMode: 'secure', secureDnsServers: ['https://127.0.0.1:9/dns-query'] })`, so any Chromium lookup that slips past the proxy fails at loopback. Going online: `app.configureHostResolver({ secureDnsMode: 'off' })` (today's default). **Codex: check in a probe that `localhost` still resolves (Chromium special-cases it) and that this call is allowed after `ready` in Electron 38. If either fails, drop this layer and say so in CHANGES. Layers 1 and 2 are still required.**
+4. **WebRTC.** On every `web-contents-created` (and for existing contents on change): offline → `contents.setWebRTCIPHandlingPolicy('disable_non_proxied_udp')`; online → `'default'`. Combined with the black-hole proxy, no STUN/UDP leaves the machine.
+5. **Main-process code gate.** `networkMode.assertOnline(purpose)` at every main-process exit point:
+   - `safeFetch` callers: put it inside `safeFetchResolve` **and** inside the `fetchImpl` wrapper used by `handleReadSources` and `preflightMediaUrl`, so it runs before `dns.lookup`.
+   - `makeReceiptFetch` (SearXNG search, media search).
+   - `fetchForDownloadPreflight` / `preflightDownloadUrl` (`downloads:download-url`): allow when the typed URL passes `offlineDecision` (only an allowlisted local address), else reject with the offline message.
+   - `media:preflight`, `media:download`.
+   - `ensureModelSetupService` when the command would download (§2).
+   - `browser:open-external`: when offline, do not call `shell.openExternal`. Show exactly **"Offline mode is on. Opening another app would leave Sovereign's protection."** in the status line of the window that asked (change it from `ipcMain.on` to `ipcMain.handle` returning `{ ok: false, offline: true, error }`, and update the preload/renderer caller). The other app is outside our control, so we refuse rather than leak.
+   - IPC handlers that start web work (`search:query`, `search:media`, `search:read-sources`) check first and return `{ ok: false, offline: true, error }`, so the renderer can show the message instead of a generic failure.
+
+##### 3.3 Downloads
+- Starting a download while offline: the request is cancelled in layer 1. Also add a check at the top of the `will-download` handler (`setupDownloadHandlingForSession`, ~1969): if offline and the item's URL fails `offlineDecision`, call `item.cancel()` and add a Downloads row with state "Blocked: Offline mode". (Belt and braces: `will-download` fires after the response starts, so layer 1 is what stops the request; this handles anything that got past it.)
+- **Switching to Offline mid-download:** for each item in `activeDownloadItems` whose URL fails `offlineDecision`, call `item.pause()` and label it "Paused: Offline mode". `closeAllConnections()` drops the socket. While offline, the Resume button is disabled with the same tooltip. Going online does **not** auto-resume; the user clicks Resume.
+
+##### 3.4 Switching modes (`network:set-mode`)
+Order matters: block first, then tidy up.
+1. `networkMode.set('offline')`, so layer 1 and the code gate block from this moment on.
+2. `applyNetworkModeToSession` for every session: proxy, DNS, then `closeAllConnections()`. This also closes open WebSockets and long-polls on tabs already open on websites.
+3. Abort every controller in `activeSearchRequests`. Cancel model setup if it is `downloading`: `cancelModelSetup('Model download paused: Offline mode is on.')`. WebLLM keeps finished shards in IndexedDB, so the download continues from there later. Note: `cancelModelSetup` sets `setupCanceled = true`; when the user goes online and clicks the button, `forceStart` clears it (existing behaviour).
+4. Pause downloads (§3.3). Update WebRTC policy.
+5. Broadcast `network:mode-changed` to the toolbar UI and every internal view (Ask, sidebar, search, newtab, settings, downloads). Save preferences.
+
+Switching to Online runs the same steps in reverse: set mode, restore proxy/DNS/WebRTC, broadcast, save. Nothing is reloaded or resumed automatically.
+
+**Mid-answer:** local generation needs no network and continues. If the answer was still in the web step (search or source reading), that step is aborted. If no sources had arrived yet, the answer stops with "Offline mode turned on, so the web search was stopped. Ask again to answer from your files and open pages." If sources were already read, the local model finishes using them, and the message notes "Web search stopped when Offline mode turned on; answered from the N sources already read." Don't answer silently from the model alone when the user asked for a web-grounded answer.
+
+**Tabs already open on websites:** the page stays on screen (it is already in memory). Further requests from it (scripts, XHR, images, WebSockets) are blocked and recorded. Reload shows the offline error page. Don't close or reload tabs automatically.
+
+##### 3.5 Privacy Receipt
+- New category `blocked` in `VALID_CATEGORIES`. Blocked entries **store the origin only** (`scheme://host:port`), never the path or query, because a blocked URL can contain the question (`?q=…`, a search URL typed into the address bar, a SearXNG URL). `whatWasSent: 'blocked (offline mode) – nothing sent'`.
+- **Aggregate** blocked attempts per receipt by origin and resource type: one entry with a `count` field (`blocked (offline mode) ×37`) instead of 37 entries, so a busy page cannot push real entries out of `MAX_ENTRIES_PER_RECEIPT`.
+- Attribution: use the existing `contextForPrivacyRequest` / `classifyPrivacyRequest` path. Attributed to an activity → that receipt. Otherwise → one rolling **"Offline mode"** receipt (fixed id like `PERMISSION_RECEIPT_ID`, created the first time a blocked attempt appears after switching to Offline). Do **not** use the background receipt for these; keep it for real background traffic.
+- Receipts gain `offline: boolean`, set from the mode when the receipt is created and set to `false` if the mode goes online while it is still open.
+- `buildSummary`: when `receipt.offline`, start with **`Offline: N external requests`**, where N counts entries that are not `blocked` and not `permission`. N should always be 0. **Compute it, don't hard-code it**: if a bug lets one request out, the receipt must say "Offline: 1 external request" rather than lie. Then `· M blocked (offline mode)` when M > 0, then "AI generated locally" for Ask receipts as today.
+- `exportPayload` includes the new fields. Nothing new is written to disk except the `network` preference.
+
+##### 3.6 Preferences (`main.js`)
+- `loadPreferences`: record whether the file existed and parsed, then call `initialNetworkState`. `savePreferences` writes `network: { mode, choiceMade, offlineAllowlist: [] }`. IPC: `network:get-state` returns `{ mode, choiceMade, offlineAllowlist }`; `network:add-allowed` / `network:remove-allowed` validate with `parseAllowlistEntry` and save. If the SearXNG endpoint is changed to a host:port that is on the allowlist, remove that entry and tell the user in Settings. Load must happen before any window or network activity; it already does (`loadPreferences()` runs before `setupAuditProxyForSession`). Apply the mode to the default session **before** the first window is created and before the model-setup service can start.
+- Test hook (via `testHook`, ignored when packaged): `SOVEREIGN_TEST_NETWORK_MODE=offline|online` overrides the start mode; `SOVEREIGN_TEST_OFFLINE_LAYERS=webrequest|proxy|all` (default `all`) turns individual layers off so each can be tested alone (§5).
+
+##### 3.7 Renderer and preload
+- `preload.js`: `window.sovereign.network = { getMode(), setMode(mode), onModeChange(cb), dismissIntro(choice) }`.
+- `renderer.js` + `index.html`: the toggle, the one-time banner, the offline tab-error message.
+- `ask.js` + `ask.html`: disable the web toggle and image buttons with the note; handle `{ offline: true }` replies; model-not-cached message with [Go online and download]; mid-answer messages (§3.4).
+- `search.js`, `sidebar.js`, `model-setup.js`, `downloads.js`, `settings.js` / `settings.html`: the offline state and messages listed above. Keep each change small.
+- `styles.css`: toggle states; must be readable in light and dark themes.
+
+##### 3.8 Automatic background requests (everything found; how each is blocked while Offline)
+Codex: grep again while building (`fetch(`, `loadURL(`, `downloadURL(`, `request(`, `lookup(`, `http`, `autoUpdater`, `crashReporter`, `spellcheck`, `favicon`) and add any new row to CHANGES.
+
+| # | Source | Requests today | Offline handling | Test |
+|---|---|---|---|---|
+| 1 | **Spellchecker dictionaries** (Electron, Windows/Linux: Hunspell `.bdic` files from Google's CDN; macOS uses the system spellchecker and downloads nothing) | Automatic, on startup and when languages change | **Disabled:** `ses.setSpellCheckerEnabled(false)` for every session while Offline; on Online restore the previous value (store it per session). Layers 1/2 as backup. | Electron: Offline → `isSpellCheckerEnabled()` is false for every session; Online → true again. On Windows/Linux also `setSpellCheckerDictionaryDownloadURL('http://external.test:P/dict/')` + `setSpellCheckerLanguages(['fr'])` → 0 connections. On macOS that half is skipped and the test prints why. |
+| 2 | **Auto-update** | None (`autoUpdater` not used) | Nothing to block. Guard: `network-exits` test fails if `autoUpdater` or `update-electron-app` appears in `src/` without an `assertOnline` call next to it. | Unit (guard) |
+| 3 | **Crash reporter** | None (`crashReporter.start` never called; Electron uploads nothing unless started) | Nothing to block. Same guard for `crashReporter`. | Unit (guard) |
+| 4 | **Favicons** | None by the app (no `page-favicon-updated` handler; Electron has no favicon service). A page's own `<link rel=icon>` is a normal page subresource. | Layer 1 (it's a session request). | Covered by the subresource cases |
+| 5 | **Model auto-download** (`huggingface.co`) and **WebLLM runtime library** (`raw.githubusercontent.com`) | Automatic on first run (`shouldAutoStartModelSetup`) | `ensureModelSetupService` only runs `check` while Offline (§2); layer 1 blocks the fetches anyway. | Electron case 6 |
+| 6 | **Session restore** ("Continue where you left off") reopens saved website tabs on launch | Automatic on launch | Tabs are restored but each shows the offline error page; saved tabs are **not** dropped. | Electron: start Offline with a saved session containing `http://external.test:P/` → 0 connections, tab still listed |
+| 7 | **Chromium speculative requests:** `<link rel=preconnect/dns-prefetch/prefetch/prerender>`, `<a ping>`, `navigator.sendBeacon`, CSP/Reporting-API reports | Automatic, triggered by pages | Prefetch, ping, beacon and reports are session requests → layer 1. Preconnect and DNS prefetch never reach `webRequest` → layer 2 (proxy black-hole) and layer 3 (DNS). | Electron cases 2 and the per-layer runs; add `<a ping>` and `sendBeacon` to case 2 |
+| 8 | **WebRTC** (STUN/TURN, ICE candidates) | Triggered by pages | Layer 4 (`disable_non_proxied_udp`) + layer 2. | Electron: `RTCPeerConnection` with `stun:external.test:U` → 0 UDP datagrams on a UDP counter |
+| 9 | **QUIC / WebTransport** (UDP) | Triggered by pages | With a fixed proxy Chromium does not use QUIC; `new WebTransport()` fails. | Electron: `new WebTransport('https://external.test:U/')` → 0 UDP datagrams |
+| 10 | **Service workers** (background sync, push, periodic fetches) | Can run with no visible tab | Layer 1 (no `webContentsId` needed) + layer 2. Push needs a push service Electron doesn't ship. | Electron case 3 |
+| 11 | **Search, source reading, media preflight/download, download preflight** (main process) | User-triggered | Layer 5 code gate + IPC refusal. | Electron case 5, unit gate test |
+| 12 | **`shell.openExternal`** | User-triggered | Refused (decision 2). | Electron case 7 |
+| 13 | **New tab shortcuts** (Wikipedia, Python, MDN) | Links only; nothing is fetched until clicked | Clicking is a navigation → layer 1. | Covered by case 1 |
+| 14 | **Hidden legacy-chat probe window** | Loads `sovereign://ask/…` only | Always allowed (internal scheme). | — |
+| 15 | **Dataset batch mode** (`SOVEREIGN_DATASET_BATCH`, dev tool) | Search + source reading | Goes through the gated IPC handlers; refuses while Offline. | — |
+| 16 | **Certificate revocation checks (OCSP/CRL/AIA)** | macOS does these in the system `trustd` process, only during a TLS connection | No TLS connection is made while Offline, so none is triggered. Outside the app otherwise (Known limits). | — |
+| 17 | **Chromium telemetry, component updater, Safe Browsing, variations, network-time** | Not built into Electron | Nothing to block. | — |
+
+##### 3.9 Audit proxy only in development builds
+- Replace line ~114 with `const AUDIT_PROXY = normalizeAuditProxy(testHook('SOVEREIGN_AUDIT_PROXY', { isPackaged: app.isPackaged }));`. `testHook` already returns nothing when packaged.
+- Tests: `tests/test-hooks.test.js` already shows `testHook` ignores env when `isPackaged` is true; add a case with `SOVEREIGN_AUDIT_PROXY` explicitly. In `tests/network-exits.test.js`, assert `src/main.js` reads `SOVEREIGN_AUDIT_PROXY` **only** through `testHook(` (no `process.env.SOVEREIGN_AUDIT_PROXY` anywhere). Same check for the new `SOVEREIGN_TEST_*` hooks of this task.
+
+#### 4. Edge cases (summary; behaviour is in §2–3)
+| Case | Behaviour |
+|---|---|
+| Switch to Offline mid-download | Download paused, labelled "Paused: Offline mode", socket closed, Resume disabled until Online. |
+| Switch to Offline during model download | Setup cancelled with "Model download paused: Offline mode is on."; finished shards stay cached. |
+| Switch to Offline mid-answer | Web step aborted; local generation continues; message says what happened (§3.4). |
+| Tabs already open on websites | Stay visible; all further requests blocked and counted; open WebSockets closed; reload shows offline page. |
+| SearXNG on localhost | Blocked while Offline even though it is loopback, because it forwards to the internet. Its origin is in `blockedOrigins`. If the user changes the endpoint while Offline, rebuild `blockedOrigins` immediately. |
+| Other localhost services the user runs (dev server, a local proxy) | Blocked unless the user adds `host:port` to the Offline allowlist; Settings warns that a local service may forward to the internet. |
+| Allowlisted service later becomes the SearXNG endpoint | Entry removed and the user told (§3.6). |
+| `file://server/share`, LAN addresses (`192.168.x`, `10.x`), `0.0.0.0`, `::ffff:127.0.0.1` | Blocked. |
+| Hostname that resolves to 127.x (`foo.nip.io`) | Blocked (we decide on the literal host, no DNS). |
+| Service workers already registered on a site | Their fetches go through layer 1 and the proxy; blocked. |
+| `shell.openExternal` / "open in default browser" | Refused: "Offline mode is on. Opening another app would leave Sovereign's protection." |
+| Spellchecker dictionary download (Windows/Linux) | Spellchecker disabled while Offline (§3.8 row 1); restored on Online. |
+| Launch with saved website tabs while Offline | Tabs restored showing the offline page; nothing loads; saved session kept. |
+| Model not cached on a new install | Clear message plus [Go online and download]; nothing downloads by itself. |
+| Corrupt `preferences.json` | Start Offline; banner offers the choice. |
+| Audit proxy set and Offline | Audit proxy kept so mitmproxy can actually see a leak (§3.2 layer 2). |
+| Rapid toggling | `set()` is idempotent; `applyNetworkModeToSession` serialised per session (chain promises like `auditProxySessions`). |
+| App quit while Offline | Mode is saved; next launch starts Offline. |
+
+#### 5. Tests (write first)
+**Unit (`npm run check`):**
+- `tests/network-mode.test.js` (new; add `node --check src/network-mode.js && node tests/network-mode.test.js` to `check`):
+  - `offlineDecision` with the **default empty allowlist**: allowed only `sovereign://ask/`, `file:///tmp/a.pdf`, `data:`, `blob:`; blocked `http://127.0.0.1:3000/`, `ws://localhost:5173/`, `http://[::1]:8000/` (reason `local-not-allowed`).
+  - With allowlist `['127.0.0.1:3000', 'localhost:5173', '[::1]:8000', 'foo.localhost:80']`: allowed `http://127.0.0.1:3000/x`, `ws://localhost:5173/`, `http://[::1]:8000/`, `http://foo.localhost/`; still blocked `http://127.0.0.1:3001/`, `http://localhost:3000/` (different host), `https://127.0.0.1/` (port 443 not listed).
+  - Always blocked: `https://example.com/`, `wss://example.com/`, `http://192.168.1.10/`, `http://10.0.0.1/`, `http://0.0.0.0/`, `http://[::ffff:127.0.0.1]/`, `file://server/share/x`, `ftp://127.0.0.1/`, `not a url`, and `http://127.0.0.1:8080/search?q=x` when `127.0.0.1:8080` is in `blockedOrigins` even if it is also in the allowlist.
+  - `parseAllowlistEntry`: accepts `127.0.0.1:3000`, `LOCALHOST:5173` (→ `localhost:5173`), `[::1]:8000`; rejects `192.168.1.5:80`, `example.com:80`, `127.0.0.1` (no port), `127.0.0.1:0`, `127.0.0.1:70000`, `http://127.0.0.1:3000` (scheme), the SearXNG host:port, with the §2 messages. `normalizeAllowlist` drops bad entries and caps at 20.
+  - `initialNetworkState`: no file → offline/choiceMade; file without `network` → online/not chosen; valid `network` respected; invalid JSON → offline/not chosen.
+  - `assertOnline` throws `OFFLINE_MODE` only when offline; `set` calls `onChange` once per real change.
+- `tests/privacy-receipt.test.js` (extend): an offline receipt with no entries → summary starts `Offline: 0 external requests`; with blocked entries → `· 3 blocked (offline mode)`; blocked entries keep origin only (feed `https://example.com/search?q=SECRET123` and assert `SECRET123` appears nowhere in `getReceipts()` or `exportPayload()`); aggregation keeps one entry with `count`; one non-blocked entry → `Offline: 1 external request`.
+- `tests/safe-fetch-integration.test.js` or a small new test: with the gate in the resolver/fetch wrapper, an offline call rejects with `OFFLINE_MODE` and the local test server sees **0 connections** and the resolver is called **0 times**.
+- **Bypass guard** `tests/network-exits.test.js` (new): read `src/main.js` and fail if `net.fetch(`, `.fetch(`, `http.request`, `https.request`, `dns.lookup`, `shell.openExternal` or `downloadURL(` appear outside a short allow-list of wrapper functions that call `assertOnline` (or, for `downloadURL`, rely on layer 1). This keeps future code from adding an ungated exit.
+
+**Electron: `tests/electron/offline-mode.test.js` (new; add `test:electron:offline-mode` and a `node --check` line in `check:tests`):**
+- Setup: start raw TCP counting servers on 127.0.0.1 (one plain HTTP, one HTTPS using a certificate generated at test time like `safe-fetch-integration.test.js`, one WebSocket). Count **TCP connections**, not HTTP requests, so even a failed TLS handshake counts as a leak. Launch with `--host-resolver-rules="MAP external.test 127.0.0.1"` so `external.test` is treated as external by our rules but would land on the counting servers if it leaked. Use `SOVEREIGN_TEST_DNS` for the Node side (`external.test` → `93.184.216.34`, connect `127.0.0.1`). Start with `SOVEREIGN_TEST_NETWORK_MODE=offline`.
+- Blocked (each asserts **0 connections** and a `blocked` receipt entry):
+  1. Tab navigation to `http://external.test:P/` and `https://external.test:Q/`; the tab shows the offline message.
+  2. From a loopback page (`http://127.0.0.1:R/`, allowed): `fetch('http://external.test:P/x?q=SECRET123')`, `<img>`, `new WebSocket('ws://external.test:W/')` (expect `onerror`/`onclose`), `<link rel=preconnect href="http://external.test:P">` and `<link rel=dns-prefetch>` (wait 2 s).
+  3. A service worker registered from the loopback page fetches `http://external.test:P/sw`.
+  4. `webContents.downloadURL('http://external.test:P/file.bin')` and the `downloads:download-url` IPC → no connection; Downloads shows "Blocked: Offline mode".
+  5. IPC `search:query`, `search:read-sources`, `media:preflight`, `media:download` → `{ offline: true }`, 0 connections, and the fake SearXNG on loopback sees 0 requests.
+  6. Model setup start → message "isn't on this computer yet", no request to the model host (point it at `external.test` via the existing model URL test hook if there is one; otherwise assert no `model-download` receipt entry and 0 connections).
+  7. `browser:open-external` does not call `shell.openExternal` (stub it in the test) and returns the exact decision-2 message.
+  8. Spellchecker (§3.8 row 1), session restore (row 6), `<a ping>` / `sendBeacon` (row 7), WebRTC STUN and WebTransport to a UDP counter (rows 8–9): 0 connections / 0 datagrams.
+  9. With the **default empty allowlist**, the loopback test page itself is blocked (`local-not-allowed`, 0 connections).
+- Allowed: `sovereign://ask/` loads; a `file:///` test page loads; after adding `127.0.0.1:R` through the real `network:add-allowed` IPC the loopback page loads; `ai:extract-active-page-text` returns that page's text. Adding the fake SearXNG's host:port through the same IPC is refused.
+- **Each layer alone:** rerun the HTTP, WebSocket and download cases with `SOVEREIGN_TEST_OFFLINE_LAYERS=webrequest` and again with `=proxy` (preconnect only needs to pass with `proxy`). This proves the black-hole isn't the only thing stopping requests, and the reverse.
+- **Mode switches:** start Online; open a WebSocket to `external.test` and start a slow download (server drips bytes). Switch to Offline: the WebSocket closes, the download shows "Paused: Offline mode", and the counting server sees no **new** connection afterwards. Switch back to Online: a new `fetch` to `external.test` **does** connect (proves the test is not vacuous).
+- **Receipt:** after the blocked cases, the latest Offline receipt summary starts `Offline: 0 external requests`, entries say `blocked (offline mode)`, and `JSON.stringify(privacy:get-receipts)` plus the export payload do not contain `SECRET123`.
+- **Prefs:** a run with no `preferences.json` starts Offline and shows no banner; a run with an old `preferences.json` (no `network`) starts Online and shows the banner once; clicking "Stay online" and relaunching shows no banner.
+- **Regression:** `ui-smoke`, `browser-features`, `downloads`, `media-chat`, `safe-redirects`, `permissions`, `ask-layout` must still pass. They run Online: set `SOVEREIGN_TEST_NETWORK_MODE=online` in their launch env, because a fresh test profile would otherwise start Offline.
+
+#### 6. Privacy impact
+- **Positive:** a single switch that stops every request this app can make, enforced in the network stack (layers 1–4) and in main-process code (layer 5), not just hidden in the UI.
+- **No new network requests.** Nothing in this task adds traffic; the banner, toggle and messages are local.
+- **New stored data:** `preferences.json` gains `network: { mode, choiceMade, offlineAllowlist }`. Only `host:port` strings the user typed; no content.
+- **Closes a dev-only leak path:** a packaged build can no longer be pointed at a proxy through `SOVEREIGN_AUDIT_PROXY`.
+- **Spellchecker** stops while Offline (on Windows/Linux it would otherwise fetch dictionaries).
+- **Receipts store less, not more:** blocked entries keep only the origin and a count, never the path, query or question text.
+- **No cloud fallback** is involved; Ask AI still runs only on WebLLM.
+
+#### 7. Known limits (for CHANGES and REVIEW to state plainly)
+- Other apps and the OS (for example macOS background services) are outside this app. Offline mode covers Sovereign's own traffic only. Turning Wi-Fi off is still the only machine-wide switch.
+- Pages already on screen keep whatever they had loaded before the switch; we don't wipe them.
+- Layer 3 (DNS) may be dropped if the probe in §3.2 fails; layers 1 and 2 cover it.
+- A local service the user adds to the Offline allowlist may forward to the internet. Settings warns about this; we can't see past it.
+- The spellchecker download test only runs on Windows/Linux; on macOS there is no download to test.
+
+#### 8. Do not change
+- The safe-redirect logic in `safe-fetch.js` (only add the gate around its callers / resolver).
+- Online behaviour: with the mode Online, every existing test and receipt must behave exactly as today.
+- WebLLM model code and the model cache.
+- Permissions handling, chat storage and deletion.
+
+#### 9. Manual tests (Sandeep)
+1. **Fresh profile:** move `~/Library/Application Support/Sovereign/preferences.json` aside (or use a new `--user-data-dir`). Launch: the toolbar says **Offline**, no banner. Ask AI with no model cached shows the "isn't on this computer yet" message. Click [Go online and download]: the toolbar flips to Online and the download starts.
+2. **Existing profile:** put the old `preferences.json` back. Launch: toolbar says **Online** and the banner shows. Click "Stay online", relaunch: no banner.
+3. **Allowlist:** with Offline on, run `python3 -m http.server 3000` and open `http://127.0.0.1:3000/`: it shows the "isn't on your Offline allowlist" message. In Settings add `127.0.0.1:3000` (read the warning): reload, it loads. Try adding `192.168.1.5:80`, `127.0.0.1` and `127.0.0.1:8080` (SearXNG): each is refused with its message. Remove the entry: reload is blocked again.
+4. **Wi-Fi off, Offline on:** with the model cached, turn Wi-Fi off. Check: Ask AI answers a plain question; attach a PDF and ask about it; open a `file:///` page or an already-open tab and use it as the source; the sidebar summary works. "Search the web" and image buttons are disabled with the note. Sovereign Search shows the offline message.
+5. **Wi-Fi on, Offline on, mitmproxy:** run mitmproxy in local-capture mode so Node-side requests are caught too, not only the browser proxy: `mitmproxy --mode local:Electron` (macOS; mitmproxy 11+). Also run `sudo tcpdump -n -i any 'port 53 or udp'` in another terminal. Launch Sovereign and turn Offline on. Visit 3–4 websites from the address bar, try Search, an image question, a download link, a page with a video call (WebRTC), and Ask AI with an attachment. Expect: **mitmproxy records 0 flows** from Sovereign; tcpdump shows no DNS or UDP from Sovereign; the Privacy Receipt says **"Offline: 0 external requests"** and lists the attempts as **"blocked (offline mode)"**, with origins only and no question text. Then also try with `SOVEREIGN_AUDIT_PROXY` set to mitmproxy's regular port (`npm start`, not packaged): still 0 flows. Also click a link that would open in the default browser: the decision-2 message appears and no browser opens.
+6. **Switching mid-way:** Online, start a large download and an Ask AI answer with Search the web on. Switch to Offline during each: the download shows "Paused: Offline mode"; the answer shows the "web search was stopped" message. Switch back to Online and click Resume: the download continues.
+7. **Open tabs:** Online, open a site with live updates (a chat or news ticker). Switch to Offline: the page stays, stops updating, and blocked entries appear in the receipt. Reload: offline message.
+8. **Local SearXNG:** with SearXNG running on `127.0.0.1:8080` and Offline on, search does nothing and the SearXNG container log shows no new request.
+
+#### Round 2 PLAN (Claude, 2026-11-10): Sandeep's decisions on the open questions
+1. **Confirm before reloading website tabs.** Keep the reload on switch to Offline. Before switching, if N > 0 tabs show an `http(s)` page that `networkDecision` would block (a tab that would be reloaded), ask: **"Switching to Offline will reload N open website tabs. Unsaved text in forms may be lost."** with **[Continue] / [Cancel]**. Use "tab" for N = 1.
+   - Enforce it in main, so every entry point (toolbar toggle, the Settings radio, the banner's "Turn on Offline mode") gets it. `network:set-mode` / `network:dismiss-intro` with `'offline'` and no `{ confirmed: true }` return `{ ok: false, needsConfirm: true, tabCount: N, message, state }` **without changing anything** when N > 0. Callers show the question in-app (not a native dialog, so tests can drive it), then call again with `{ confirmed: true }` on Continue. Cancel leaves the mode Online, and the Settings radio goes back to Online. With N = 0 the switch happens at once, as today.
+   - Switching to Online, the startup mode and test hooks are unchanged. Any internal `setNetworkMode('offline')` call in main that does not come from these IPCs must be listed in CHANGES.
+   - Test (Electron, offline-mode): Online with one website tab, `network:set-mode('offline')` returns `needsConfirm` with `tabCount: 1`, the mode stays Online and the tab is not reloaded. With `{ confirmed: true }` it switches. With no website tabs it switches at once.
+2. **Disable QUIC for the whole app.** `app.commandLine.appendSwitch('disable-quic')` at startup before `ready`, next to the other startup switches. This closes the WebTransport/QUIC loopback gap and every QUIC path in both modes. Cost: sites that support HTTP/3 fall back to HTTP/2 over TCP when Online, which is slightly slower on lossy networks. Tests: `network-exits` asserts the switch is in `main.js` at top level (outside any function). The Electron offline-mode test asserts `app.commandLine.hasSwitch('disable-quic')` in the app process (or equivalent). It also adds a WebTransport case to a **loopback port that is not on the allowlist**, while Offline, aimed at the UDP counter: 0 datagrams.
+3. **Known limit:** a running service worker may keep a connection it already had open.
+4. **Keep:** going Offline mid-answer stops the answer (deviation 3 is accepted).
+5. **Known limit:** removing an allowlist entry doesn't close an already-open WebSocket to that local address (local only).
+6. **Known limit, made visible.** When a receipt drops entries over `MAX_ENTRIES_PER_RECEIPT` (both trims in `privacy-receipt.js`), count them in a new `droppedEntries` field. Keep it in `sanitizeReceipt` and `exportPayload`. Where the receipt rows are rendered (`ask.js`, `search.js`), show a last row **"N older entries not shown"** (N ≥ 1, "entry" for 1). Unit test in `privacy-receipt.test.js`: add 125 distinct entries to one receipt, then `droppedEntries === 5` and the export has it. The summary text does not change.
+
+#### Round 2b PLAN (Claude, 2026-11-10): replaces item 2 (Sandeep's decision after the probe in REVIEW)
+1. **Remove `disable-quic`** from `main.js`, along with its checks in `network-exits.test.js` and `offline-mode.test.js`. HTTP/3 stays on when Online, as before this task.
+2. **Offline CSP (layer 6).** Add a `webRequest.onHeadersReceived` listener in `setupNetworkMonitorForSession` (no session has one today, and Electron allows one per session). While Offline (and when `offlineLayerOn('webrequest')`), add an **extra** `Content-Security-Policy` header to every `http:`/`https:` response, without touching the site's own CSP headers. Browsers enforce every CSP header, so this can only tighten. The header is `connect-src` followed by the page's own origin in its `http(s)` and `ws(s)` forms, then each allowlisted `host:port` in `http://`, `https://`, `ws://` and `wss://` forms. Online, the listener passes headers through unchanged. Put the header builder in `src/network-mode.js` as `offlineConnectSrc(pageUrl, allowlist)` and unit-test it (bracketed IPv6, default ports, empty allowlist → only the page's own origin).
+   - Why it is enough: while Offline, the only `http(s)` documents that can load are allowlisted loopback pages, and switching to Offline reloads http(s) tabs, so every live web page has the header. `connect-src` covers fetch/XHR/WebSocket/EventSource/beacon **and WebTransport**, which `webRequest` never sees.
+3. **Make the confirm count match the reload.** `offlineReloadTabCount` counts only blocked tabs, but `reloadWebTabsForOffline` reloads every `http(s)` tab, allowlisted ones included. Count exactly the tabs that will be reloaded (share one helper).
+4. **Tests.** Codex's case `WebTransport to unallowlisted loopback UDP port` must now pass (0 datagrams). Add an **Online control** in the mode-switch phase: the same WebTransport makes at least 1 datagram, so the case isn't vacuous. The allowlisted page's own probes (same-origin fetch, local page text) must still pass. Unit tests for `offlineConnectSrc`.
+5. **Known limit:** a `file:///` page can still open WebTransport to a loopback port (no response headers to attach a CSP to). Local only.
+
+### CHANGES (Codex)
+#### Round 2b (Codex, 2026-11-10)
+- **Files changed:** `src/main.js`, `src/network-mode.js`, `tests/network-mode.test.js`, `tests/network-exits.test.js`, `tests/electron/offline-mode.test.js`; only this task's CHANGES section in `docs/HANDOFF.md`.
+- **Items 1–2:** Removed the startup `disable-quic` switch/comment and its VM/runtime assertions. HTTP/3 remains available Online. Added/exported `offlineConnectSrc(pageUrl, allowlist)` and installed the session response listener: Offline + webrequest layer + HTTP(S) responses get an additional `connect-src` policy containing the response origin and its WebSocket form, plus all four schemes for each allowlisted host:port. Existing CSP values and other headers survive, regardless of header-name case. Other responses use `callback({})`. No new application network requests.
+- **Item 3:** `webTabsForOfflineReload` selects live HTTP(S) tabs across windows for both confirmation counting and reloading, including allowlisted local tabs.
+- **Tests first:** Builder tables cover empty allowlists, HTTP/HTTPS default ports, explicit ports and bracketed IPv6. New VM tests execute the real listener for existing CSP casing, missing CSP, preserved unrelated headers, Online/layer-disabled/non-HTTP pass-through, and the shared count/reload selection. The new builder and listener tests failed before implementation and pass now. Electron confirmation now includes an allowlisted tab; same-origin fetch and local-page text probes remain checked. Loopback WebTransport must send zero datagrams with the full stack and webrequest-only layer; proxy-only intentionally omits this loopback assertion because it disables CSP and bypasses loopback. The mode-switch phase reloads the page Online to discard its document CSP, suppresses automatic probes, and requires at least one datagram from WebTransport to the same UDP counter before running STUN. The final Online fetch control also reloads to discard CSP.
+- **Validation:** Ran `npm run check` after test and implementation changes and after this handoff update. It reaches `safe-fetch-integration.test.js` then fails on the sandbox's `listen EPERM` for 127.0.0.1. Direct `node tests/network-mode.test.js`, `node tests/network-exits.test.js`, `node tests/privacy-receipt.test.js`, `node --check` on all five changed JavaScript files, and `npm run build:ai` pass. Electron and separate socket tests were not run; Claude must validate runtime UDP behavior outside the sandbox. No commit, push or git-config changes.
+- **Manual / outside-sandbox checks:** Run `npm run check` and `npm run test:electron:offline-mode`. Online with an allowlisted local website open, request Offline: confirmation must include that tab; Cancel preserves it and Continue reloads it. Offline same-origin fetch/text should work, while WebTransport to an unallowlisted loopback UDP counter sends zero datagrams. Reload Online and verify the same WebTransport sends at least one. **Known limit:** `file:///` pages have no response header for this CSP and can still open loopback WebTransport.
+
+#### Round 2 (Codex, 2026-11-10)
+- **Files changed:** `src/main.js`, `src/preload.js`, `src/index.html`, `src/renderer.js`, `src/settings.html`, `src/settings.js`, `src/styles.css`, `src/privacy-receipt.js`, `src/ask.js`, `src/search.js`; `tests/privacy-receipt.test.js`, `tests/network-exits.test.js`, `tests/electron/offline-mode.test.js`; this CHANGES section only.
+- **Item 1:** Both mode-changing IPCs require confirmation before an Online → Offline transition when blocked HTTP(S) website tabs are open, counted across windows using `networkDecision`. The exact question uses singular/plural tab wording; the response includes `ok: false`, `needsConfirm`, `tabCount`, `message`, and unchanged state, before preferences/mode/reloads change. Preload forwards optional `{ confirmed: true }`. Toolbar/banner use an in-app Continue/Cancel strip in the intro area, accounted for in chrome height; Settings shows the question inline and restores the Online radio while awaiting confirmation. Cancel leaves Online; Continue repeats the original action with confirmation. Theme variables provide light/dark colors. Zero blocked website tabs switch immediately. Existing reload behavior (including allowlisted HTTP(S) tabs) is retained. Online, startup and test-hook behavior are unchanged. **Internal `setNetworkMode('offline')` bypass calls: none**; the only callers are the two guarded IPC handlers.
+- **Item 2:** Top-level `app.commandLine.appendSwitch('disable-quic')` runs immediately after importing Electron, before ready. QUIC/WebTransport is disabled in both modes, including loopback. **Online cost:** HTTP/3-capable sites fall back to HTTP/2 over TCP, slightly slower on lossy networks. No new network requests were added.
+- **Item 6:** Both receipt trim paths accumulate omitted rows in `droppedEntries` (aggregated blocked attempts do not inflate it). Sanitized receipts and exports preserve the count. Ask and Search append “N older entries not shown” (singular “entry” for 1); summary logic is unchanged. Items 3–5 need no code and were left unchanged.
+- **Tests first:** New receipt tests initially failed for the missing field; new startup QUIC test initially failed for the missing switch. Receipt tests cover 125 distinct ordinary and blocked rows → 120 retained / 5 dropped, export preservation, and aggregation without another drop. `network-exits` executes the startup prefix in a VM to require the QUIC switch at top level. Electron adds a confirmation phase for immediate switching with no website tabs, both IPCs returning confirmation for one website tab without changing mode/reloading, toolbar Cancel, and confirmed switching/reload. It asserts the running app's QUIC switch and probes WebTransport to an unallowlisted loopback UDP port with zero datagrams; the old proxy-only WebTransport comment was corrected. Existing mid-download switch explicitly confirms.
+- **Validation:** `npm run check` was run after test, implementation and follow-up changes. After implementation it passes the earlier checks then fails at `tests/safe-fetch-integration.test.js` with sandbox `listen EPERM` on 127.0.0.1. Direct `node tests/privacy-receipt.test.js`, `node tests/network-mode.test.js`, `node tests/network-exits.test.js`, `node --check` for every changed JavaScript file (including the Electron test), and `npm run build:ai` pass. HTML/CSS/Markdown are not inputs to `node --check`. Electron tests were **not run**, as requested; runtime/UI/UDP validation remains for Claude outside the sandbox. No commit, push or git-config changes.
+- **Manual test:** Online with an ordinary website containing unsaved form text, try Offline from the toolbar, first-run banner, and Settings. Verify the exact count/question, Cancel preserves the page/text and Online radio, Continue switches/reloads, and no website tabs switch immediately. Check the strip at compact widths in light/dark themes. With more than 120 receipt rows, check the final omission row in Ask/Search and `droppedEntries` in exported JSON. Claude should run `npm run check` and the Electron offline-mode suite outside the sandbox.
+
+#### Recovery round (Codex, 2026-11-10)
+- `tests/network-mode.test.js`: rewrote the dense checks as readable `[input, expected]` tables covering internal/local URLs, default-empty and explicit allowlists, every blocked reason, blocked-service precedence, loopback/LAN/mapped-address classification, exact allowlist validation errors (including a custom audit-proxy error), normalization/deduplication and the 20-entry cap, all four preference-start states, and mode transitions with exact callback arguments, return values and offline error purpose.
+- `tests/offline-gate-integration.test.js` (new): extracts the real `safeFetchResolve` and `gatedSafeFetch` bodies into a VM with real `safeFetch`, a counting development DNS mapping and a raw TCP server on 127.0.0.1. Asserts both Offline gates reject with `OFFLINE_MODE`, zero resolver calls and zero connections; an Online fetch must return HTTP 200 / `ok`, resolve once and make exactly one TCP connection. All traffic is loopback-only; no OS DNS or external service is used. The server and sockets are cleaned up on failure too.
+- `package.json`: adds the new socket test immediately after `network-exits` in `check`.
+- `tests/privacy-receipt.test.js`: moved only the success log after the offline assertions; all assertions unchanged.
+- `docs/HANDOFF.md`: added this recovery subsection only. No `src/` bug found or source fix made; no commits.
+- Validation: `npm run check` exits **1**, because the existing `tests/safe-fetch-integration.test.js` cannot bind 127.0.0.1 in this sandbox (`listen EPERM`). The new socket test independently encounters the same restriction, so its runtime assertions remain unverified here; no test was skipped or weakened to hide the failure. `network-mode`, `network-exits`, and `privacy-receipt` pass when run directly; the new test passes `node --check`. Electron tests were not executed.
+- To finish validation outside the sandbox: run `npm run check` (the new test must print its success line after verifying the Online control). Claude runs the Electron suite. Manual feature checks remain PLAN §9, especially Offline allowlist add/remove and switching Online.
+
+**Built by Claude (Codex unavailable).** Codex hit its usage limit after writing the first unit tests (`tests/network-mode.test.js`, `tests/network-exits.test.js`, the `privacy-receipt` and `test-hooks` additions). Sandeep asked Claude to finish the build (2026-11-10). Codex's tests were kept as the spec; one fix to the `network-exits` helper (it dropped the `async` keyword when extracting a function body).
+
+**Files**
+- New: `src/network-mode.js` (rules: loopback check, allowlist parsing, `offlineDecision`, start state, `createNetworkMode`), `tests/electron/offline-mode.test.js`.
+- New (Codex): `tests/network-mode.test.js`, `tests/network-exits.test.js` (+1 entry `chrome-error:` added by Claude).
+- Changed: `src/main.js`, `src/privacy-receipt.js`, `src/preload.js`, `src/renderer.js`, `src/index.html`, `src/ask.js`, `src/ask.html`, `src/search.js`, `src/settings.js`, `src/settings.html`, `src/downloads.js`, `src/styles.css`, `package.json`, `tests/privacy-receipt.test.js`, `tests/test-hooks.test.js`, and one line in each existing `tests/electron/*.test.js` (`SOVEREIGN_TEST_NETWORK_MODE ||= 'online'`).
+
+**How the PLAN was met**
+- **Switch (§2):** toolbar button `#network-mode-toggle` ("Offline"/"Online", `aria-pressed`), Network section in Settings (radio pair + allowlist). New installs start Offline; existing installs stay Online and see a one-time strip (42px, added to the chrome height like the find bar); unreadable preferences start Offline. `SOVEREIGN_TEST_NETWORK_MODE` also counts as "choice made" so regression tests don't show the strip.
+- **Allowlist (decision 1):** empty by default, `host:port` on loopback only, max 20, SearXNG and audit-proxy host:port refused, warning text as in §2. Changing the SearXNG endpoint to an allowlisted host:port removes the entry and Settings says so.
+- **Layer 1:** first check in the single `onBeforeRequest` listener, now installed per session (`setupNetworkMonitorForSession`, via `trackNetworkSession` for the default session, `session-created` and `web-contents-created`).
+- **Layer 2:** proxy `127.0.0.1:9`, empty bypass list (Chromium bypasses loopback implicitly). Audit proxy kept when set. Restored to the audit proxy or `system` when Online.
+- **Layer 3 (DNS):** `app.configureHostResolver({ secureDnsMode: 'secure', secureDnsServers: ['https://127.0.0.1:9/dns-query'] })`; restore `automatic` (Electron's default). **Probe result:** the call works after `ready`; `localhost` still loads; `example.com` fails with `ERR_NAME_NOT_RESOLVED`; after restore it resolves. Layer kept.
+- **Layer 4:** `disable_non_proxied_udp` on every web contents. Probe: 4 STUN datagrams with `default`, 0 with the policy (with or without a proxy).
+- **Layer 5:** `assertOnline` in `safeFetchResolve`, `gatedSafeFetch` (the only caller of `safeFetch`), `makeReceiptFetch`, `fetchForDownloadPreflight`, `openExternalOnline`; search/media/source IPC refuse first and record the blocked origin.
+- **Decision 2:** `browser:open-external` is now `ipcMain.handle`; Offline returns `{ ok: false, offline: true, error: "Offline mode is on. Opening another app would leave Sovereign's protection." }` and shows it in the window's status line (exposed as `window.sovereign.openExternal`; nothing called this IPC before).
+- **Decision 3:** `AUDIT_PROXY` read through `testHook`, so it is ignored when packaged; `network-exits` asserts no `process.env.SOVEREIGN_AUDIT_PROXY` and the `testHook(...)` form; `test-hooks` test covers it.
+- **Decision 4:** spellchecker disabled per session while Offline (synchronously in `session-created`, before preferences load, then restored if Online); previous value restored when Online.
+- **Receipts (§3.5):** category `blocked`, origin only, `whatWasSent: 'blocked (offline mode) – nothing sent'`, aggregated per origin + resource type with `count`; unattributed attempts go to a rolling "Offline mode" receipt; `offline` flag; summary `Offline: N external requests` computed from entries.
+- **Model (§2):** Offline runs only the cache check; a check that turns into a download is cancelled ("Model download paused: Offline mode is on."); toolbar chip and Ask card show the not-downloaded message with **Go online and download** (switches mode visibly, then starts).
+- **Downloads (§3.3):** `will-download` check kept as a backstop; switching to Offline pauses non-allowed downloads as "Paused: Offline mode", Resume disabled (UI and IPC) until Online.
+
+**§3.8 background requests (outcome)**
+| # | Source | Result |
+|---|---|---|
+| 1 | Spellchecker | Disabled while Offline, restored Online (Electron test). Download half of the test is skipped on macOS (no download there). |
+| 2–3 | Auto-update, crash reporter | Not present; `network-exits` guard fails if added without `assertOnline`. |
+| 4 | Favicons | None by the app; page icons are subresources (layer 1). |
+| 5 | Model auto-download | Cache check only (Electron test, fresh profile). |
+| 6 | Session restore | Tab kept, 0 connections (Electron test). |
+| 7 | Preconnect, dns-prefetch, ping, beacon | 0 connections in all-layer and proxy-only runs. |
+| 8 | WebRTC STUN | 0 datagrams Offline vs 4 Online (Electron test). |
+| 9 | QUIC / WebTransport | **Not seen by `webRequest` at all** (probe). Stopped by layer 2 for non-loopback hosts (0 datagrams with all layers). See REVIEW. |
+| 10 | Service workers | Install fetch blocked (all three runs). |
+| 11–12 | Main-process exits, open in another app | Refused (Electron test). |
+| 13–17 | New-tab links, probe window, dataset mode, OCSP, Chromium telemetry | As planned; nothing new found in the grep. |
+
+**Deviations from the PLAN**
+1. **Web tabs are reloaded when switching to Offline.** Probe (Electron 38): `closeAllConnections()`, `enableNetworkEmulation({ offline: true })` and DevTools offline emulation all leave an open WebSocket open (page still `readyState 1`). `reloadWebTabsForOffline()` reloads every tab showing an `http(s)` page; a blocked page then shows the offline message, an allowlisted local page loads again. Unsaved form text on those pages is lost.
+2. Search/media/source IPC **throw** an `OFFLINE_MODE` error with a readable message instead of returning `{ ok: false, offline: true }`; the pages show it. The UI disables these controls first, so this is the backstop.
+3. Mid-answer: the web step is stopped and the answer ends with "Offline mode turned on, so the web search was stopped. Ask again to answer from your files and open pages." It does not continue from sources already read.
+4. Downloads blocked by layer 1 never reach `will-download`, so they don't get a "Blocked: Offline mode" row; a link click shows the offline message in the status line, and the Downloads URL box shows the offline error.
+5. `setOffline(false)` clears the `offline` flag on all receipts, not only open ones; blocked entries keep their label and count.
+
+**Tests**
+- `npm run check`: **exit 0** (includes `network-mode`, `network-exits`, extended `privacy-receipt` and `test-hooks`).
+- `npm run test:electron:offline-mode`: **ok** in all 7 phases: `main` (all layers), `webrequest` only, `proxy` only, `fresh`, `old`, `old-again`, `corrupt`. Counters count raw TCP connections and UDP datagrams. Main summary: `Offline: 0 external requests · 3 blocked (offline mode) · AI generated locally`.
+- Regression (Electron, Online): `ui-smoke`, `browser-features`, `downloads`, `media-chat`, `safe-redirects`, `permissions`, `ask-layout`, `attachments`, `home-attachments`, `pdf-attachments`, `chat-deletion`, `single-instance`, `stage1-usability`: all exit 0. Not run: `model-chat`, `generation-shutdown`, `auto-setup-shutdown`, `media-chat-live` (need the real model or the internet).
+
+### REVIEW (Claude)
+#### Round 2b review (2026-11-10): DONE, ready for manual testing
+- **Sandeep's decision after the probe:** use the Offline CSP and remove `disable-quic`. Both are done. The `onHeadersReceived` listener adds `connect-src` (`offlineConnectSrc`, unit-tested) only while Offline. Online it passes headers through unchanged and never replaces the site's own CSP. The confirm count and the reload now share `webTabsForOfflineReload`, so N is exactly the number of tabs that reload.
+- **Fixed by Claude (test only):** Codex's Online WebTransport control ran just before the switch to Offline. A probe showed that Chromium keeps retransmitting an unanswered QUIC handshake for about 4 s after `close()`, so a leftover datagram failed the "no STUN after Offline" check (9 vs 8). I moved the control to the end of the test, after the final switch back to Online. No `src/` change.
+- **Results (outside the sandbox):** `npm run check` exits 0. `test:electron:offline-mode` passes all 8 phases (main, webrequest, proxy, confirm, fresh, old, old-again, corrupt). Offline WebTransport to a loopback port that is not on the allowlist sends 0 datagrams; the Online control sends 1. The 13 Electron regression tests (run Online, same list as the recovery round) all exit 0.
+- **No MUST FIX.**
+
+#### Known limits (final, Sandeep's decisions 2026-11-10; in addition to PLAN §7)
+1. **Service workers:** a running service worker may keep a connection it already had open. Its new requests are blocked.
+2. **Mid-answer:** going Offline stops the answer; it does not continue from sources already read (accepted).
+3. **Allowlist removal:** removing an entry doesn't close an already-open WebSocket to that local address (local only).
+4. **Receipts:** past `MAX_ENTRIES_PER_RECEIPT`, older entries are dropped, and the receipt shows "N older entries not shown".
+5. **WebTransport/QUIC connections to local (127.0.0.1) ports not on the allowlist are not blocked in Offline mode; they stay on this computer, but a local service could forward them.** (Sandeep, 2026-11-10.) Scope today: the Offline CSP (Round 2b) blocks this for every `http(s)` page, and the Electron test checks it (0 datagrams). What's left is `file:///` pages (no response headers to carry the CSP) and handshakes started while Online (item 6). **No switch disables WebTransport in Electron 38.8.6.** Claude's probe used an http page and a `file:///` page with a UDP counter, checking `typeof WebTransport` and counting datagrams. All of these left WebTransport working (`function`, 4–5 datagrams): no switch, `--disable-blink-features=WebTransport` and `--disable-features=WebTransport` on the command line, `appendSwitch` with `disable-blink-features=WebTransport` and with `disable-features=WebTransport,WebTransportDedicatedConnection`, `webPreferences.disableBlinkFeatures: 'WebTransport'`, and `--disable-quic`. So no switch was added.
+6. **In-flight QUIC handshake:** a QUIC/WebTransport connection attempt started while Online can keep retransmitting its handshake packet for a few seconds after switching to Offline (seen with loopback, about 4 s). No new content is sent.
+7. **Pages loaded while Offline** keep the Offline CSP after switching back to Online, until they are reloaded. It only restricts them.
+8. **Tab reload on switch to Offline** costs unsaved form text; the user is asked first (Continue / Cancel).
+9. The spellchecker download test runs only on Windows/Linux.
+
+#### Round 2 review (2026-11-10): items 1 and 6 DONE; item 2 BLOCKED on a decision (resolved by Round 2b)
+- **Item 1 (confirm before reload): OK.** Enforced in main (`setNetworkMode` with `requireConfirm` for both IPCs), so the toolbar, banner and Settings all get it. Cancel leaves the mode Online and changes nothing. The confirm strip is counted in the chrome height. The Electron test covers `needsConfirm`/`tabCount: 1` → no switch, then `{ confirmed: true }` → switch.
+- **Item 6 (`droppedEntries`): OK.** Both trims count dropped entries. The field is kept in sanitize/export, and a last row reads "N older entries not shown" in Ask and Search. The unit test checks 125 entries → 5.
+- **Item 2 (QUIC): the PLAN's fix does not work.** `npm run check` exits 0, but `test:electron:offline-mode` **fails** on Codex's new case: `WebTransport to unallowlisted loopback UDP port sends nothing`, 3 datagrams instead of 0. I checked it with a separate probe (Electron 38, loopback page, UDP counter): WebTransport to a loopback UDP port sends **4 datagrams** with `disable-quic`, with `disable-quic` + the black-hole proxy + `disable_non_proxied_udp`, with `disable-features=WebTransport`, and with `disable-blink-features=WebTransport`. The only thing that stopped it was an injected `Content-Security-Policy: connect-src 'self'` response header: **0 datagrams**. The `disable-quic` switch is still in `main.js` (it does turn off HTTP/3), but it doesn't close the gap it was added for. Waiting for Sandeep: an Offline-only CSP `connect-src` (self + allowlisted origins) on http(s) documents, or accept the loopback-only gap as a known limit, and whether to keep `disable-quic`.
+
+#### Recovery round review (2026-11-10): DONE, ready for manual testing
+Build–review round 1 of 2 was enough, so no second round was needed. Codex made no `src/` changes in this round.
+- **Tests now match PLAN §5.** `network-mode.test.js` checks every table row with its exact `reason` and error message. `offline-gate-integration.test.js` runs the real gate code against a real TCP server: Offline gives 0 resolver calls and 0 connections, and an Online control gives exactly 1 of each, so the test is not vacuous. One small point: the test uses its own audit-proxy message as a fixture, while `main.js` uses "The audit proxy can't be allowed in Offline mode.". The test only checks that a custom message is passed through, so this is fine.
+- **Run outside Codex's sandbox:** `npm run check` exits 0. `test:electron:offline-mode` passes all 7 phases, with summary `Offline: 0 external requests · 3 blocked (offline mode) · AI generated locally`; STUN sends 4 datagrams Online and 0 Offline. The 13 Electron regression tests (ui-smoke, browser-features, downloads, media-chat, safe-redirects, permissions, ask-layout, attachments, home-attachments, pdf-attachments, chat-deletion, single-instance, stage1-usability) all exit 0.
+- **Re-read the full diff against the PLAN.** I found no MUST FIX. Two minor points, added to the open questions:
+  5. Removing an allowlist entry while Offline drops pooled connections but not a WebSocket that a tab already has open to that local address. The tab is not reloaded, unlike the switch to Offline. This is loopback only. Should we fix it now (reload tabs on that origin) or note it as a known limit?
+  6. `addBlocked` still trims the oldest entries once a receipt has more than `MAX_ENTRIES_PER_RECEIPT` distinct blocked origins/types. A page that calls many different hosts could push older entries out of an Ask receipt. Grouping by origin makes this unlikely, but it can still happen.
+
+#### Earlier self-review (before the shutdown)
+Reviewed 2026-11-10 against the PLAN and the review decisions. Because Claude also built this round (Codex unavailable), this is a self-review; Sandeep's manual test is the independent check.
+
+**Verdict:** meets the PLAN with the deviations listed in CHANGES. Ready for manual testing.
+
+**Found and fixed during review**
+- The tests were weaker than they looked: the `webrequest`-only run never loaded the local page (not allowlisted), so its subresource checks proved nothing; and the WebRTC check had no Online baseline. Fixed: every phase allowlists the page and asserts the probes ran; STUN is measured Online (4 datagrams) and Offline (0).
+- Strengthening the test exposed that **WebTransport bypasses `webRequest`** (§3.8 table, row 9 in CHANGES). Layer 1 alone is not enough for QUIC; layer 2 covers non-loopback hosts.
+- Switching to Offline mid model download only cancelled when auto-download was on. Fixed.
+- The offline model text stayed after going Online. Fixed.
+- "Stay online" kept Offline after a corrupt-preferences start. Fixed.
+- `chrome-error://` error pages were being logged as blocked attempts. Now allowed (local).
+
+**Open questions for Sandeep**
+1. **Reloading web tabs on switch to Offline** (deviation 1): needed to close open WebSockets; costs unsaved form text on web pages. Accept, or prefer closing those tabs, or leave pages alone and list WebSockets as a known limit?
+2. **WebTransport/QUIC to a loopback port that is not on the allowlist** is not blocked (it never reaches `webRequest`, and the proxy bypasses loopback). It stays on this computer, but it does bypass the allowlist. Accept as a known limit?
+3. **Running service workers** can't be stopped in Electron 38; their new requests are blocked, but a connection they already held open survives until the worker stops. Accept as a known limit?
+4. Mid-answer (deviation 3): keep the simple stop, or build "continue from sources already read"?
+
+**Known limits (in addition to PLAN §7)**
+- Items 2 and 3 above, until answered.
+- The spellchecker download test runs only on Windows/Linux.
+- The DNS check in the manual test (tcpdump) has not been run yet.
