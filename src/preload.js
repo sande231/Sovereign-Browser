@@ -128,6 +128,7 @@ contextBridge.exposeInMainWorld('sovereign', {
       return () => ipcRenderer.removeListener('chats:legacy-status', listener);
     },
     save: chat => ipcRenderer.invoke('chats:save', chat),
+    pendingConsent: id => ipcRenderer.invoke('chats:pending-consent', id),
     delete: id => ipcRenderer.invoke('chats:delete', id),
     clear: () => ipcRenderer.invoke('chats:clear'),
     importLegacy: chats => ipcRenderer.invoke('chats:import-legacy', chats),

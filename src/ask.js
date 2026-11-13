@@ -1,5 +1,8 @@
 let privacySettings = { sensitiveTopics: 'strict' };
 let crisisConversation = false;
+let saveConsent;
+let consentHadSavedCopy = false;
+const consentDeletedIds = new Set();
 let sensitiveModelPending = null;
 window.sovereign.privacy.getSettings().then(settings => { privacySettings = settings; });
 window.sovereign.privacy.onSettings(settings => { privacySettings = settings; });
@@ -770,6 +773,16 @@ function renderMessage(message) {
   if (message.sensitive) window.SovereignSensitiveUI.render(body, {
     question: message.sensitiveQuestion, result: message.sensitive,
     disabled: running || networkOffline || crisisConversation,
+    onCrisis: result => {
+      crisisConversation = true; webToggle.checked = false; webToggle.disabled = true;
+      pendingQuestion = ''; pendingWebEnabled = false;
+      requireSaveConsent(result);
+      const reply = window.SovereignSensitiveGuard.crisisReply(result);
+      if (!messages.some(item => item.content === reply)) messages.push({ id: messageId(), role: 'assistant', content: reply, note: 'Web search is off for this conversation.' });
+      // Do not rebuild the editor while the user is typing.
+      renderSaveConsent();
+      setStatus('Web search is off for this conversation.');
+    },
     send: text => {
       if (running || networkOffline || crisisConversation) return;
       setRunning(true);
@@ -822,6 +835,7 @@ function renderThread(options = {}) {
   } else {
     messages.forEach(message => chatThread.append(renderMessage(message)));
   }
+  renderSaveConsent();
   if (autoScroll) {
     chatThread.scrollTop = chatThread.scrollHeight;
   }
@@ -1587,6 +1601,7 @@ async function refreshSettings() {
 function closeDeletedChat() {
   webToggle.checked = false;
   crisisConversation = false;
+  saveConsent = undefined; consentHadSavedCopy = false;
   closeDeletedChatWhenIdle = false;
   chatId = messageId();
   messages = [];
@@ -1616,7 +1631,7 @@ function applySavedChats(snapshot) {
   // The open chat was deleted (here, in another tab, or from Settings): close it so it is
   // not saved again. While an answer is generating it is never re-saved, and it is closed as
   // soon as generation ends (see setRunning).
-  if (deletedChatIds.has(chatId)) {
+  if (deletedChatIds.has(chatId) && !consentDeletedIds.has(chatId)) {
     if (running) {
       closeDeletedChatWhenIdle = true;
     } else {
@@ -1698,20 +1713,65 @@ function savedMessage(message) {
   return clean;
 }
 
+function requireSaveConsent(result) {
+  if (!saveChatsOnDevice || saveConsent === true || saveConsent === false || saveConsent === 'pending') return;
+  if (result.level !== 'crisis' && !result.categories.includes('abuse') && !result.categories.includes('harm-to-others')) return;
+  saveConsent = 'pending';
+  consentHadSavedCopy = savedChatList.some(chat => chat.id === chatId);
+  // Register only the id. Main cleans up on tab destruction or application quit too.
+  window.sovereign.chats.pendingConsent(chatId).catch(() => {
+    setStatus('Could not register the save choice. This chat will not be saved.', true);
+  });
+}
+
+async function declineChatSave() {
+  const id = chatId;
+  saveConsent = false;
+  consentDeletedIds.add(id);
+  renderSaveConsent();
+  try {
+    applySavedChats(await window.sovereign.chats.delete(id));
+    if (chatId === id) setStatus("This chat won't be saved.");
+  } catch {
+    if (chatId === id) setStatus('Could not remove the earlier saved chat. Try deleting it from the chat list.', true);
+  }
+}
+
+function renderSaveConsent() {
+  chatThread.querySelector('.save-consent')?.remove();
+  if (!saveChatsOnDevice || saveConsent !== 'pending' || running) return;
+  const bar = document.createElement('section'); bar.className = 'save-consent sensitive-notice';
+  const text = document.createElement('p');
+  text.textContent = "Save this chat? Anyone using this computer could see it." + (consentHadSavedCopy ? " Don't save will also remove the earlier part of this chat from this device." : '');
+  const save = document.createElement('button'); save.type = 'button'; save.className = 'primary-action save-consent-save'; save.textContent = 'Save';
+  save.addEventListener('click', async () => { saveConsent = true; renderSaveConsent(); await persistCurrentChat(); });
+  const decline = document.createElement('button'); decline.type = 'button'; decline.className = 'secondary-action save-consent-decline'; decline.textContent = "Don't save";
+  decline.addEventListener('click', declineChatSave);
+  bar.append(text, save, decline); chatThread.append(bar);
+}
+
 async function persistCurrentChat() {
-  if (!saveChatsOnDevice || messages.length === 0 || deletedChatIds.has(chatId)) {
+  // Also cover changed settings and turns restored from older versions.
+  for (const message of messages) {
+    if (message.role === 'user') requireSaveConsent(window.SovereignSensitiveGuard.classifyQuestion(message.content));
+  }
+  if (!saveChatsOnDevice || saveConsent === 'pending' || saveConsent === false || messages.length === 0 || deletedChatIds.has(chatId)) {
     return;
   }
   const now = new Date().toISOString();
   const title = messages.find(message => message.role === 'user')?.content || 'New chat';
   const entry = {
     id: chatId,
+    saveConsent,
     title: String(title).slice(0, 120),
     updatedAt: now,
     messages: messages.slice(-40).map(savedMessage)
   };
   try {
-    applySavedChats(await window.sovereign.chats.save(entry));
+    const snapshot = await window.sovereign.chats.save(entry);
+    if (snapshot?.needsConsent && chatId === entry.id) {
+      saveConsent = undefined; requireSaveConsent({level:'crisis',categories:[]}); renderSaveConsent();
+    } else if (!snapshot?.needsConsent) applySavedChats(snapshot);
   } catch (error) {
     setStatus(`Could not save this chat: ${error.message}`, true);
   }
@@ -1785,9 +1845,13 @@ function renderChatHistory() {
           receiptError = true;
         }
       }
+      if (saveConsent === 'pending') await declineChatSave();
       chatId = chat.id || messageId();
+      saveConsent = chat.saveConsent === true ? true : undefined;
+      consentHadSavedCopy = false;
       webToggle.checked = false;
-      crisisConversation = restored.some(message => message.content === window.SovereignSensitiveGuard.CRISIS_REPLY);
+      crisisConversation = restored.some(message => [window.SovereignSensitiveGuard.CRISIS_REPLY, window.SovereignSensitiveGuard.HARM_REPLY].includes(message.content));
+      webToggle.disabled = networkOffline || crisisConversation;
       messages = restored;
       chatHistoryExpanded = null;
       mediaTurns = restored.filter(message => message.action?.type === 'answer-text' && message.mediaResults?.length).slice(-8).map(message => ({
@@ -2254,7 +2318,7 @@ async function answerMediaDownloadReference(question, assistantId) {
 
 async function strictModelFlag(question) {
   if (privacySettings.sensitiveTopics !== 'strict' || !engineLoaded || sensitiveModelPending) return '';
-  const categories = Object.keys(window.SovereignSensitiveGuard.LABELS);
+  const categories = Object.keys(window.SovereignSensitiveGuard.LABELS).filter(category => !['self-harm', 'harm-to-others', 'abuse'].includes(category));
   let timer, output = '', timedOut = false;
   try {
     // A timeout releases the search; answer generation waits for this interrupted job.
@@ -2273,10 +2337,11 @@ async function strictModelFlag(question) {
 }
 async function showSensitiveAnswer(question, assistantId, result, media = false) {
   const guard = window.SovereignSensitiveGuard;
+  requireSaveConsent(result);
   if (result.level === 'crisis') {
     crisisConversation = true; webToggle.checked = false;
     pendingQuestion = ''; pendingWebEnabled = false;
-    updateAssistant(assistantId, { content: guard.CRISIS_REPLY, note: 'Web search is off for this conversation.', sensitive: null, action: null });
+    updateAssistant(assistantId, { content: guard.crisisReply(result), note: 'Web search is off for this conversation.', sensitive: null, action: null });
     return;
   }
   updateAssistant(assistantId, { sensitive: result, sensitiveQuestion: question, sensitiveMedia: media, action: null, note: '' });
@@ -2305,8 +2370,15 @@ async function answerQuestion(question, options = {}) {
 
   const guard = window.SovereignSensitiveGuard;
   const classification = guard.classifyQuestion(question, { strictness: privacySettings.sensitiveTopics });
+  requireSaveConsent(classification);
   if (classification.level === 'crisis') {
+    const id = messageId(); messages.push({ id, role: 'assistant', content: '' });
+    await showSensitiveAnswer(question, id, classification);
     await startLocalAskReceipt('', true);
+    setRunning(false); persistCurrentChat(); renderThread(); return;
+  }
+  if (!useWeb && classification.categories.includes('abuse')) {
+    await startLocalAskReceipt('');
     const id = messageId(); messages.push({ id, role: 'assistant', content: '' });
     await showSensitiveAnswer(question, id, classification);
     setRunning(false); persistCurrentChat(); renderThread(); return;
@@ -2711,9 +2783,11 @@ async function handleModelSetupButton() {
 }
 
 function newChat() {
+  if (saveConsent !== 'pending') persistCurrentChat();
+  if (saveConsent === 'pending') declineChatSave();
+  saveConsent = undefined; consentHadSavedCopy = false;
   webToggle.checked = false;
   crisisConversation = false;
-  persistCurrentChat();
   chatHistoryExpanded = null;
   attachments.forEach(item => {
     if (item.status === 'extracting' && typeof item.cancel === 'function') {

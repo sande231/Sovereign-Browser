@@ -117,7 +117,7 @@ function originOnly(value) {
 }
 
 function buildSummary(receipt) {
-  if (receipt.crisis) return 'Nothing left this device: crisis support shown';
+  if (receipt.crisis) return 'Nothing left this device: support information shown';
   const sensitive = receipt.entries.filter(entry => entry.category === 'sensitive');
   if (sensitive.length) return `Not sent: sensitive topic (${[...new Set(sensitive.map(entry => entry.topic))].join(', ')})` + (receipt.type === 'ask' ? ' · AI generated locally' : '');
   const allEntries = Array.isArray(receipt.entries) ? receipt.entries : [];

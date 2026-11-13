@@ -246,3 +246,12 @@ console.log('privacy-receipt tests passed');
  assert.equal(store.getReceipts().length, 3);
  store.resetForTests();
 }
+
+{
+ receipts.resetForTests();
+ const crisis = receipts.createReceipt({id:'harm-fixture',crisis:true});
+ if (receipts.getReceipt(crisis.id).summary !== 'Nothing left this device: support information shown') { console.error('P1'); process.exit(1); }
+ const abuse = receipts.createReceipt({id:'abuse-fixture'});
+ receipts.addEntry(abuse.id,{category:'sensitive',topic:'abuse or domestic violence',url:'https://example.test/?q=SECRETQ-7731',whatWasSent:'SECRETQ-7731'});
+ if (JSON.stringify([receipts.getReceipts(),receipts.exportPayload()]).includes('SECRETQ-7731')) { console.error('P2'); process.exit(1); }
+}
