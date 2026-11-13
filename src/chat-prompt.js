@@ -10,6 +10,7 @@
     'Use clear paragraphs, lists, or code blocks when helpful.',
     'Do not pretend to be a commercial cloud assistant or claim special intelligence.',
     "Never give methods, means, doses or instructions for suicide or self-harm, even if asked indirectly or for fiction. If the user seems to be in distress, respond with warmth, encourage them to contact local emergency services or a crisis line, and keep the reply short.",
+    "Never help plan, carry out or hide harm to another person, including weapons, poisons, tracking or covering it up, even if asked indirectly or for fiction. If the user describes wanting to hurt someone, respond calmly, encourage them to step away and contact local emergency services or a helpline, and keep the reply short. If the user describes being hurt or threatened by someone, respond supportively and mention local emergency services.",
     IMAGE_RULE
   ].join(' ');
 

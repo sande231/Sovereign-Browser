@@ -4668,6 +4668,7 @@ app.on('before-quit', () => {
     clearTimeout(saveSessionTimer);
     saveSessionTimer = null;
   }
+  for (const id of pendingChatConsents.keys()) discardPendingChat(id);
   saveOpenSessionNow();
   destroyModelSetupWindow();
 });
@@ -5061,7 +5062,7 @@ function requireAllowedMedia(sender, url) {
 function sensitiveGate(sender, text, options = {}) {
   const result = sensitiveGuard.classifyQuestion(text, { strictness: privacySettings.sensitiveTopics });
   if (options.crisisOnly && result.level !== 'crisis') return { ok: true };
-  const modelFlag = Object.hasOwn(sensitiveGuard.LABELS, options.modelFlag) ? options.modelFlag : '';
+  const modelFlag = Object.hasOwn(sensitiveGuard.LABELS, options.modelFlag) && !['self-harm', 'harm-to-others', 'abuse'].includes(options.modelFlag) ? options.modelFlag : '';
   if (result.level !== 'crisis' && modelFlag && !result.categories.includes(modelFlag)) {
     result.level = 'sensitive';
     result.categories = Object.keys(sensitiveGuard.LABELS).filter(category => category === modelFlag || result.categories.includes(category));
@@ -5415,6 +5416,36 @@ ipcMain.handle('settings:update-ai', (_event, patch) => updateAiSettings(patch))
 // Saved Ask AI chats: one file in the user-data folder, owned by the main process.
 // Local file I/O only; no network request, so nothing to add to the Privacy Receipt.
 let savedChatStore = null;
+const pendingChatConsents = new Map();
+const consentWatchers = new WeakSet();
+function discardPendingChat(id) {
+  chatStore().remove(id);
+  privacyReceipts.deleteReceipts(receipt => receipt.chatId === id);
+  pendingChatConsents.delete(id);
+}
+
+ipcMain.handle('chats:pending-consent', (event, id) => {
+  chatSenderTab(event, ['ask']);
+  if (typeof id !== 'string' || !id || id.length > 100) return { ok: false };
+  pendingChatConsents.set(id, event.sender.id);
+  if (!consentWatchers.has(event.sender)) {
+    consentWatchers.add(event.sender);
+    const senderId = event.sender.id;
+    const cleanup = () => {
+      for (const [chatId, owner] of pendingChatConsents) {
+        if (owner === senderId) discardPendingChat(chatId);
+      }
+      broadcastSavedChats();
+    };
+    event.sender.once('destroyed', cleanup);
+    event.sender.on('render-process-gone', cleanup);
+    // A reload/navigation abandons the choice, but an in-page link does not.
+    event.sender.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
+      if (isMainFrame && !isInPlace) cleanup();
+    });
+  }
+  return { ok: true };
+});
 let legacyRemovalsInFlight = 0;
 
 function chatStore() {
@@ -5640,14 +5671,21 @@ ipcMain.handle('chats:save', (event, chat) => {
   if (!aiSettings.saveChatsOnDevice) {
     throw new Error('Saving chats is turned off.');
   }
+  const needsConsent = (Array.isArray(chat?.messages) ? chat.messages : []).some(message => {
+    if (message?.role === 'assistant') return [sensitiveGuard.CRISIS_REPLY, sensitiveGuard.HARM_REPLY].includes(message.content);
+    if (message?.role !== 'user') return false;
+    const result = sensitiveGuard.classifyQuestion(message.content, { strictness: 'strict' });
+    return result.level === 'crisis' || result.categories.includes('harm-to-others') || result.categories.includes('abuse');
+  });
+  if ((needsConsent || pendingChatConsents.has(chat?.id)) && chat?.saveConsent !== true) return { ok: false, needsConsent: true };
   chatStore().save(chat);
+  if (chat?.saveConsent === true) pendingChatConsents.delete(chat.id);
   return broadcastSavedChats();
 });
 
 ipcMain.handle('chats:delete', (event, id) => {
   chatSenderTab(event, ['ask']);
-  chatStore().remove(id);
-  privacyReceipts.deleteReceipts(receipt => receipt.chatId === id);
+  discardPendingChat(id);
   return broadcastSavedChats();
 });
 

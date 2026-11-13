@@ -3574,7 +3574,7 @@ Ran outside the sandbox: `npm run check` **exit 0** (including both socket suite
 
 
 ## Task: Sensitive-topic guard: more categories (Phase 1, Task 1c)
-Status: **planning** (PLAN only, no code yet). Branch: build after Sandeep commits Task 1b (`phase-1/sensitive-guard`, or a new branch from it).
+Status: **ready for manual testing** (not committed). Branch: `phase-1/more-categories` (contains Task 1b, merged in PR #8).
 
 **Plan review decisions (Sandeep, 2026-11-10), applied below:**
 1. Both texts approved with changes. `HARM_REPLY`'s last line is now "You can keep writing here if it helps, and please reach out to one of the people above too." `ABUSE_RESOURCES` gains "UK: National Domestic Abuse Helpline, 0808 2000 247". **Every** helpline number goes on the re-verify-before-release list (§4, §6).
@@ -3668,6 +3668,14 @@ The last line is a safety suggestion (an abuser may share the device), kept by d
 - **Restored chats:** a saved chat has `saveConsent: true`, so it is not asked again.
 - **Main-process check (the page can't bypass it):** `chats:save` runs `classifyQuestion` (Strict, so it doesn't depend on the setting) on the chat's user messages. If any is crisis, harm to others or abuse, it also checks the assistant messages for `CRISIS_REPLY`/`HARM_REPLY`. Without `saveConsent === true` it refuses with `{ ok: false, needsConsent: true }` and writes nothing. `chat-store.js` `sanitizeChat` keeps the `saveConsent` boolean.
 - Nothing is sent anywhere; this only controls local storage.
+
+**4.5 Gap from Task 1b: crisis words in the [Search anyway…] editor (Sandeep, 2026-11-12)**
+- Today `src/sensitive-ui.js` only disables [Send this search] when the edited text is crisis level. **New:** as soon as the edited text classifies as crisis level (self-harm, or harm to others once §3 is built), the panel shows the approved text in place of the preview: `CRISIS_REPLY` for self-harm, `HARM_REPLY` for harm to others (self-harm wins if both match). [Send this search] stays disabled. If the text is edited back to non-crisis, the preview returns.
+- **Ask AI:** the conversation then counts as a crisis conversation (`crisisConversation = true`, web toggle unchecked and disabled, note "Web search is off for this conversation."), and the save-consent bar (§4.4) is triggered. **Search page:** the text is shown in the panel; nothing else changes. Nothing is sent and no receipt holds the text (as for any crisis turn).
+- Tests: Electron case 19. Ask and the Search page each open [Search anyway…] on a sensitive question and type a crisis phrase, then a harm-to-others phrase. Check: the approved text appears, Send is disabled, 0 requests; in Ask, the web toggle is off afterwards and the consent bar shows when saving is on. Unit/static: `sensitive-ui.js` uses the crisis-level result to pick the reply.
+
+**4.6 Crisis-level checks first (from Task 1b Round 4)**
+- Self-harm crisis **and** harm to others run before the Offline check, the web toggle, the attachment-extraction check, model readiness and every other gate, on every surface: Search page, address bar, New Tab box, Ask AI, image search, the [Search anyway…] editor, and main (`handleSearchQuery`, media search, `handleReadSources` through `crisisOnly`). Extend Electron case 18 and the static order checks G14–G20 with a harm-to-others prompt (row 81). Each surface and mode must show `HARM_REPLY` and send nothing.
 
 #### 5. Example prompts and expected behaviour (rows 81–146; added to the Task 1b table and the unit test)
 "Crisis (harm)" means `HARM_REPLY`: no search, no override. "Sensitive (x)" means: no web request, local answer plus the notice and [Search anyway…]; for abuse, `ABUSE_RESOURCES` too. "None" means: searched as today. Rows 1–80 are unchanged.
@@ -3791,9 +3799,10 @@ The last line is a safety suggestion (an abuser may share the device), kept by d
 2. **Harm-to-others detection is not a threat assessment.** It shows a calm reply and refuses help; it doesn't contact anyone. Fiction or venting ("I could kill my brother for eating my fries") gets `HARM_REPLY`, which errs on the side of caution, like the accepted self-harm idioms.
 3. **Beliefs are personal-only in both modes,** so a personal belief question phrased without "I/my" ("is it wrong to leave Islam") is not flagged.
 4. Strict flags general questions in the new categories (rows 93, 99, 106, 116, 123, 130), as it does for health and money. Standard also flags general orientation/gender and immigration questions (rows 123, 130; decision 4).
-7. The save-consent check uses the pattern rules. A sensitive chat the rules miss is auto-saved as before. "Don't save" removes the app's copy, but not an exported file or a backup of the user data folder.
 5. Chat history is stored locally if chat saving is on. Someone with access to the computer can read it; the abuse text points to deletion.
 6. **All** helpline numbers must be re-verified before each release, and the new texts need professional review before public release.
+7. The save-consent check uses the pattern rules. A sensitive chat the rules miss is auto-saved as before. "Don't save" removes the app's copy, but not an exported file or a backup of the user data folder.
+8. **Accepted false positives (Sandeep, 2026-11-12):** "hit me baby one more time lyrics" and "the ball hit me in the face" → abuse; "Trans Am car" and "trans-Atlantic flight" → sexual orientation or gender identity; "Warrant band songs" → crime (Strict); "ICE hockey scores" → immigration. They over-block, nothing is sent, and [Search anyway…] is one click away.
 
 #### 10. Do not change
 - The crisis-first ordering from Task 1b Round 4 (crisis-level checks before the Offline check and every other gate). Harm to others is crisis level, so it inherits that ordering. Add a harm-to-others prompt to Task 1b's Electron case 18.
@@ -3817,7 +3826,116 @@ The last line is a safety suggestion (an abuser may share the device), kept by d
    - Repeat and close the tab without choosing → the chat is not in the list.
 
 ### CHANGES (Codex)
-_Not started._
+
+#### Round 2 (Codex, 2026-11-12)
+
+**Review items 1–9**
+1. Harm actions now recognize `shoot up` with place targets (schools, workplaces, places of worship, shops, venues and other listed public places), using the existing intent/planning gates.
+2. Shared harm actions include `beat the crap/hell out of` a human target; intent also recognizes `gonna`, including first-person forms.
+3. Human targets include `a person`; planning recognizes singular/plural `way(s) to` and `best way(s) to`, including poisoning someone/a person.
+4. Abuse recognizes past-tense `hit me` alongside `hits me`.
+5. Abuse recognizes `afraid of my <relation>` for the same relations as `scared of my <relation>`.
+6. Abuse recognizes `choked/strangled/slapped/kicked/pushed me`.
+7. Added a phrase-local `Trans-Siberian` exception, retaining standalone trans and deliberate orientation/gender positives.
+8. Added a phrase-local `warrant officer(s)` exception, retaining separate warrant mentions.
+9. Agency ICE detection removes ordinary ice cream/storm and black ice phrases case-insensitively, while retaining case-sensitive agency ICE elsewhere in the question.
+
+**Files and tests first**
+- Added §5 rows **147–155** to `tests/sensitive-guard.test.js` with the review's exact Strict/Standard expectations; default mode also checks Strict expectations. Failure output remains row ids only. Before implementation, `npm run check` failed with **147**.
+- Production changes are confined to `src/sensitive-guard.js`. Rows 1–146 and approved texts are unchanged. This entry is the only handoff edit; PLAN and REVIEW are untouched.
+- No commits, pushes, git configuration changes, new network requests or cloud AI calls.
+
+**Validation**
+- After the guard change, all **155** rows plus existing review regressions pass. All **16** socket-free top-level unit test files passed directly with `node`: address-input, audit-compare, chat-prompt, chat-store, dataset-collection, media-intent, network-exits, network-mode, permission-policy, privacy-attribution, privacy-receipt, safe-fetch, search-backend-engines, sensitive-gate, sensitive-guard and test-hooks.
+- A temporary local Node probe checked **136** family/negative/mixed-topic/priority cases in Strict, Standard and default modes: place targets, intent/planning forms, both beating idioms, human poisoning targets, all six past-tense abuse verbs, all listed fear relations, review-named negatives, deliberate orientation positives, separate sensitive phrases after exceptions, and self-harm priority. All passed. The review does not enumerate all 14 harm negatives; probes covered its named examples and additional harmless harm-word phrases.
+- `npm run check` after implementation and after this documentation update passes reached checks/build, then stops at `safe-fetch-integration.test.js` with the sandbox's `listen EPERM` on 127.0.0.1. Full aggregate success requires an environment permitting sockets. Neither socket integration test was run separately.
+- `npm run check:tests`, syntax checks for every test JavaScript file, and `node --check src/network-mode.js` passed. No Electron execution.
+- `git diff --check` reports the pre-existing blank line at EOF in REVIEW; left untouched per section ownership. Round 2 edits introduce no whitespace errors.
+
+**Manual checks**
+In Strict and Standard, try rows 147–149 in Ask/Search: fixed harm reply and no web request. Try rows 150–152: local sensitive path with abuse resources. Rows 153–155 should remain ordinary questions. Repeat with the alternate harm/abuse forms above, and confirm a separate agency ICE, warrant or orientation mention still triggers after an exempt phrase. Check the Privacy Receipt for no sensitive prompt leakage.
+
+#### Round 1 (Codex, 2026-11-12)
+
+Implemented Task 1c. No commits, pushes, git configuration changes, cloud AI calls, or new network requests.
+
+**Files and PLAN coverage**
+- **§3 / §5 — `src/sensitive-guard.js`:** added all eight categories in the specified order, Strict/Standard framing exceptions, phrase-local negative guards, case-sensitive agency `ICE`, and personal-only beliefs. Moved arrested/immigration status out of legal; retained contextual-name row 31 and the sexual-health pill/test terms. Self-harm crisis wins over harm to others. Added vowel-aware notice articles. **Rows 81–146 all pass; no unmet §5 rows and no weakened expectations. Rows 1–80 are unchanged and pass.**
+- **§4.1–4.3 — `src/sensitive-guard.js`, `src/chat-prompt.js`:** approved `HARM_REPLY`, `ABUSE_RESOURCES`, ordered resource lists and exact model safety rule. The `// Last verified:` comments remain pending human verification. `crisisReply()` selects the correct fixed text. Local-model category flags exclude self-harm, harm-to-others and abuse in both renderer and main.
+- **§4.4 — `src/ask.js`, `src/main.js`, `src/preload.js`, `src/chat-store.js`:** pending/true/false consent state, both exact bar wordings, Save and Don't save, and suppression of subsequent auto-saves after declining. The bar follows the reply; fixed crisis content does not wait for consent. Declining uses `chats:delete` and removes the earlier copy and its receipts while keeping the current conversation in memory. New chat or switching saved chats declines an unanswered choice. Main tracks pending chat ids and deletes abandoned copies on tab destruction, renderer loss, reload/navigation, and normal application quit. `chats:save` independently classifies user messages in Strict and recognizes either fixed assistant reply; without explicit boolean true it returns `needsConsent` without writing. Sanitization retains only boolean `saveConsent`. Restored consent is retained, and either fixed crisis reply keeps web off.
+- **§4.2 / §4.5 / §4.6 — `src/ask.js`, `src/sensitive-ui.js`:** abuse resources appear under the local answer, including unavailable-model, web-off and Offline paths. The shared Search/Ask refusal UI displays harm support and abuse resources. The editor replaces its preview with the appropriate approved crisis reply, disables Send, and restores the preview if edited back. Ask additionally turns web off, clears pending web work, records the fixed support reply in the in-memory conversation for subsequent save/restore, and asks for save consent. No editor text enters a receipt. Existing crisis-first checks remain before Offline, attachment extraction, model readiness, media and source-read gates.
+- **§6 — `src/privacy-receipt.js`, `src/settings.html`, `README.md`:** crisis receipt summary is exactly “Nothing left this device: support information shown”; Strict settings text matches the PLAN. Before releasing lists 988, 116 123, 13 11 14, 1-800-799-7233, 0808 2000 247 and findahelpline.com, their regions/services, and professional review of all four approved texts.
+- **Main grep audit:** searched `src/main.js` for `crisis`, `CRISIS_REPLY` and `self-harm`. Search, media and source-read gates continue to branch on `level === 'crisis'`, not on self-harm. The only category-specific self-harm use is the excluded model-flag list; the storage reply check explicitly recognizes both fixed replies.
+
+**Tests written first (§7)**
+Before implementation, extended `tests/sensitive-guard.test.js`, `tests/sensitive-gate.test.js`, `tests/chat-store.test.js`, `tests/privacy-receipt.test.js`, and `tests/electron/sensitive-guard.test.js`. The first `npm run check` failed at row id **81**, as expected. New failures expose case/row ids only, never prompt text; new identifiers are fixtures.
+- Unit rows 81–146 run in Strict, Standard and default modes alongside unchanged rows 1–80; exact approved texts/rule, resource order, no confidentiality promises/links, pending verification comments and articles are checked.
+- Gate tests cover harm override refusal, identifier removal for abuse override, receipt/export redaction, Strict main-process save refusal and explicit consent, disallowed model flags, and the G14–G20 crisis-first checks extended to harm. Further regressions exercise the production editor in a local DOM fixture (both crisis replies, self-harm priority, preview recovery, no sends), pending-consent cleanup on destruction/navigation, exact consent wording and trigger ordering.
+- Chat-store tests retain true/false and drop non-booleans. Receipt tests cover the new crisis summary and abuse marker redaction.
+- Electron cases 12–17 cover harm in web/local/Offline modes, abuse and its override, category positives/negatives, restored harm chats, redacted receipts/export, both consent wordings and choices, direct save rejection, saving off, unanswered new-chat and tab-close cleanup. Case 19 covers both approved replies in Ask/Search editors and preview recovery. Case 18 now repeats both crisis kinds across online/offline Search, address bar, New Tab, Ask, attachment/retry/media paths and direct main gates. Electron failures report case ids only.
+
+**Deviations and limits**
+- `src/search.js` needed no edit: its existing crisis-first branch already renders through `src/sensitive-ui.js`; changing that shared renderer implements both new Search texts without duplicating logic.
+- Added a local-only `chats:pending-consent` preload/main IPC and main lifecycle cleanup beyond the §6 file list. Renderer-only consent cannot reliably remove an earlier saved copy when the page is destroyed or the app quits. Pending ids are memory-only; no prompt is passed through this IPC. Forced OS termination/power loss cannot run normal quit cleanup; the pre-trigger copy can remain in that situation, but the pending sensitive turn is never saved.
+- Added executable DOM/lifecycle unit regressions beyond the requested static checks because Electron cannot be run here. They supplement, not replace, Claude's Electron run.
+- No helpline verification date was invented and no professional review is claimed.
+
+**What ran**
+- `npm run check` after each change batch. After implementation, all reached checks pass until `tests/safe-fetch-integration.test.js` fails with the sandbox's known `listen EPERM` on 127.0.0.1. Consequently the aggregate command cannot pass in this sandbox. The AI asset build and preceding syntax/unit checks succeeded.
+- Ran each of these **16** test files directly with `node`; all passed: `tests/address-input.test.js`, `tests/audit-compare.test.js`, `tests/chat-prompt.test.js`, `tests/chat-store.test.js`, `tests/dataset-collection.test.js`, `tests/media-intent.test.js`, `tests/network-exits.test.js`, `tests/network-mode.test.js`, `tests/permission-policy.test.js`, `tests/privacy-attribution.test.js`, `tests/privacy-receipt.test.js`, `tests/safe-fetch.test.js`, `tests/search-backend-engines.test.js`, `tests/sensitive-gate.test.js`, `tests/sensitive-guard.test.js`, `tests/test-hooks.test.js`.
+- Did not separately rerun `tests/safe-fetch-integration.test.js` or run `tests/offline-gate-integration.test.js`: both bind localhost sockets. The former was attempted by `npm run check` and failed as above.
+- `npm run check:tests` passed (**syntax only**, including the new Electron cases); `node --check src/network-mode.js` and `git diff --check` passed. Verified rows 1–80 against HEAD without modifying them.
+- **No Electron tests executed.** Claude must run `npm run test:electron:sensitive-guard` and the socket integration tests outside the sandbox.
+
+**Manual checks**
+Follow PLAN §12, especially: row 81 with web on/off and Offline; row 90 resources and identifier-removed override; ordinary saved turn followed by abuse then Don't save (earlier copy and receipts disappear); Save followed by another trigger and restoration; abandon a pending choice by closing the tab/new chat. In Ask and Search, open Search anyway on a medical question and edit to each crisis kind: approved reply, disabled Send, zero requests; Ask additionally disables web and shows consent. Check all eight category positives/negatives and Standard's orientation/immigration exceptions.
 
 ### REVIEW (Claude)
-_Not started._
+#### Round 2 review (2026-11-12): DONE, ready for manual testing
+Build–review round 2 of 2. All nine Round 1 items are fixed (rows 147–155). Codex changed only `src/sensitive-guard.js` and its test.
+
+**Probed again with fresh wording, beyond the table:**
+- **Harm to others, all crisis level:** "shoot up the mall/my office", "beat the hell out of my brother", "poison someone slowly", plus the 14 Round 1 positives.
+- **Abuse, all flagged:** "my dad hit me again", "slapped/pushed/kicked/strangled me", "scared of my boyfriend", "afraid of my mom".
+- **Still not flagged:** "shoot up meaning drug slang", "beat the heat", "poison control number", "afraid of the dark/spiders", "my car got hit", and the earlier negatives.
+- **No harm-to-others or abuse misses found**, so no extra round was needed.
+
+**Results (outside the sandbox):** `npm run check` **exit 0** ("155 rows plus review regressions"). `test:electron:sensitive-guard` **exit 0** (cases 1–19 plus its regression tests). Also exit 0: browser-features, downloads, permissions, attachments, home-attachments, pdf-attachments, chat-deletion, single-instance. Not run (they need the real model): model-chat, generation-shutdown, auto-setup-shutdown, media-chat-live.
+
+**False positives still there: accepted as known limits (Sandeep, 2026-11-12).** They over-block (nothing leaks), and [Search anyway…] is one click away. No extra round. The six:
+- "hit me baby one more time lyrics" and "the ball hit me in the face" → abuse;
+- "Trans Am car" and "trans-Atlantic flight" → orientation-gender;
+- "Warrant band songs" → crime (Strict);
+- "ICE hockey scores" → immigration.
+
+**Known limits added:** the false positives above, plus the 1c §9 limits. The forced-quit case from Codex's CHANGES: if power is lost while the save question is open, the copy saved before the sensitive turn can stay on disk, but the sensitive turn itself is never saved.
+
+#### Round 1 review (2026-11-12): CHANGES REQUESTED
+Ran outside the sandbox: `npm run check` **exit 0**. `test:electron:sensitive-guard` **exit 0** (cases 1–19 plus its regression tests). Structure is as planned:
+- the approved texts are exact;
+- crisis-level checks come first, and harm to others uses the crisis path;
+- the `chats:save` consent check is in main, reclassifies user messages in Strict, and recognises both fixed replies;
+- the Search anyway editor shows the fixed reply for crisis and harm text;
+- rows 1–80 are unchanged.
+
+The extra `chats:pending-consent` IPC (which deletes an earlier copy if the tab or app closes before the user answers) is a sound addition.
+
+I probed `classifyQuestion` beyond the §5 table. Ids in brackets are new rows to add.
+
+**MUST FIX: harm-to-others misses.** Each gives `none`, so with web on it **would be sent to SearXNG**:
+1. "I'm going to shoot up my school" [147, Crisis (harm)]
+2. "gonna beat the crap out of him" [148, Crisis (harm)]
+3. "best way to poison a person" [149, Crisis (harm)]
+
+**MUST FIX: abuse misses** (each `none`, so sent with web on):
+4. "my wife hit me last night" (past tense "hit") [150, Sensitive (abuse) both modes]
+5. "i'm afraid of my husband" (§3 lists "scared of my <relation>"; "afraid of" should match too) [151]
+6. "my boyfriend choked me" (choked/strangled/pushed/slapped/kicked + me) [152]
+
+**SHOULD FIX: false positives**
+7. "Trans-Siberian railway" → orientation-gender in both modes ("trans" before a hyphen) [153, None both]
+8. "warrant officer rank army" → crime in Strict [154, None both]
+9. "ICE storm warning" → immigration in both modes (upper-case "ICE storm") [155, None both]
+
+**Checked and fine:** the 14 harm negatives (kill time, kill for a pizza, poison ivy, shoot a photo, hitman game and others), "abuse of power", "black ice", "Breaking Bad", "AA batteries", "church near me", "liberal arts colleges", "conservative estimate", "Pride and Prejudice". "gay pride parade dates" and "transgender athletes debate" are flagged on purpose (Strict and Standard, decision 4).
+

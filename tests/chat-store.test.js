@@ -245,3 +245,12 @@ assert.deepEqual(parseLegacyChats('{"a":1}'), []);
 assert.throws(() => createChatStore({}), /directory/);
 
 console.log('chat-store tests passed');
+
+// Task 1c: only explicit booleans survive sanitization.
+{
+ const {sanitizeChat} = require('../src/chat-store');
+ for (const value of [true,false,'pending','true',1,null,undefined]) {
+  const clean = sanitizeChat({id:'consent-fixture',messages:[],saveConsent:value});
+  if (typeof value === 'boolean' ? clean.saveConsent !== value : Object.hasOwn(clean,'saveConsent')) { console.error('C1'); process.exit(1); }
+ }
+}

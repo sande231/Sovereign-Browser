@@ -51,6 +51,7 @@ function sanitizeChat(chat) {
     updatedAt: cleanString(chat.updatedAt, 40) || new Date().toISOString(),
     messages: messages.filter(isPlainObject).slice(-MAX_MESSAGES)
   };
+  if (typeof chat.saveConsent === 'boolean') clean.saveConsent = chat.saveConsent;
   if (Buffer.byteLength(JSON.stringify(clean), 'utf8') > MAX_CHAT_BYTES) {
     return null;
   }

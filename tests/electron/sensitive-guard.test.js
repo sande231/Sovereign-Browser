@@ -45,7 +45,7 @@ async function orchestrate() {
   delete env.ELECTRON_RUN_AS_NODE;
   // Child output is intentionally not forwarded: only the case id can leave this harness.
   const child = spawn(process.execPath,[script],{env,stdio:['ignore','pipe','pipe']});
-  let failedId = childPhase === 'main' ? '1-main' : /^[0-9]/.test(childPhase) ? childPhase : '8-'+childPhase, leaked = false, stackLines = [];
+  let failedId = childPhase === 'main' ? '1-main' : /^[0-9]/.test(childPhase) ? childPhase : '8-'+childPhase, leaked = false;
   const scan = () => { let tail = ''; return chunk => { const text = tail + chunk.toString(); if (text.includes('SECRETQ-7731')) leaked = true; tail = text.slice(-11); }; };
   child.stdout.on('data', scan()); child.stderr.on('data', scan());
   let diagnostics = '';
@@ -55,15 +55,15 @@ async function orchestrate() {
     for (const line of lines) {
       try {
         const report = JSON.parse(line);
-        if (/^[0-9]+[a-z]?(?:-[a-z]+)*$/.test(report.caseId) && Array.isArray(report.stackLines) && report.stackLines.every(n => /^\d+:\d+$/.test(n))) {
-          failedId = report.caseId; stackLines = report.stackLines;
+        if (/^[0-9]+[a-z]?(?:-[a-z]+)*$/.test(report.caseId)) {
+          failedId = report.caseId;
         }
       } catch {}
     }
   });
   const timer=setTimeout(()=>child.kill('SIGKILL'),script === __filename ? 180000 : 600000);
   child.on('error',()=>{clearTimeout(timer);reject(failure(failedId));});
-  child.on('exit',code=>{clearTimeout(timer);code===0&&!leaked?resolve():reject(Object.assign(failure(leaked ? '7d' : failedId), { stackLines }));});
+  child.on('exit',code=>{clearTimeout(timer);code===0&&!leaked?resolve():reject(failure(leaked ? '7d' : failedId));});
  });
  await run('main', profile);
  for (const kind of ['fresh','old']) {
@@ -74,7 +74,7 @@ async function orchestrate() {
  for (const name of ['ui-smoke','media-chat','safe-redirects','ask-layout','stage1-usability','offline-mode']) {
   await run('9-'+name, fs.mkdtempSync(path.join(os.tmpdir(),'sovereign-sensitive-regression-')), path.join(__dirname,name+'.test.js'));
  }
- console.log('sensitive-guard Electron cases 1–11 passed');
+ console.log('sensitive-guard Electron cases 1–19 passed');
 }
 async function main() {
  await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
@@ -166,11 +166,104 @@ async function main() {
  await invoke('chats.clear');
  const remaining=await invoke('privacy.getReceipts');
  check('11b',remaining.every(r=>!r.chatId&&!r.sensitiveOverride)&&remaining.some(r=>r.id==='keep'));
+
+ // Task 1c cases 12–17 and editor gap case 19. Only case ids leave this harness.
+ const guard = require('../../src/sensitive-guard');
+ const hasText = (page, text) => page.executeJavaScript(`document.body.textContent.includes(${JSON.stringify(text)})`);
+ const listChats = async () => { const snapshot = await invoke('chats.list'); return snapshot.chats || snapshot; };
+ for (const mode of ['web','local','offline']) {
+  await invoke('network.setMode',mode === 'offline' ? 'offline' : 'online');
+  count=0; await submit('12-'+mode,'I want to hurt someone',mode === 'web');
+  check('12-'+mode,count===0 && await ask.executeJavaScript("messages.at(-1).content === SovereignSensitiveGuard.HARM_REPLY && !document.querySelector('.sensitive-anyway') && !webToggle.checked && webToggle.disabled"));
+ }
+ await invoke('network.setMode','online');
+ count=0; await submit('13','my husband hits me '+marker);
+ check('13a',count===0 && await hasText(ask,guard.notSentSentence(['abuse'])) && await hasText(ask,guard.ABUSE_RESOURCES));
+ check('16a',!(JSON.stringify(await invoke('privacy.getReceipts'))).includes(marker));
+ check('16b',(await invoke('privacy.getReceipts')).some(r=>r.entries.some(e=>e.whatWasSent==='blocked (sensitive topic: abuse or domestic violence) – nothing sent')));
+ await invoke('privacy.exportReceipts'); check('16c',!fs.readFileSync(exported,'utf8').includes(marker));
+ await submit('13b','my husband hits me, call me at 415-555-0134');
+ await ask.executeJavaScript("document.querySelector('.sensitive-anyway').click()",true);
+ expectedQuery=guard.removeIdentifiers('my husband hits me, call me at 415-555-0134').text; count=0;
+ await ask.executeJavaScript("document.querySelector('.sensitive-send').click()",true);
+ await wait('13-request',()=>count===1); check('13c',matched); await wait('13-done',()=>ask.executeJavaScript('!running'));
+ const pairs=[['I was arrested last night what happens next','crime rate in Baltimore'],['how to quit drinking, I drink every night','how alcohol is made'],["I think I'm pregnant",'fertile soil for tomatoes'],['I think I might be gay','trans fat foods to avoid'],['I overstayed my visa what should I do','history of Ellis Island'],['should I leave my religion','history of the Catholic Church']];
+ for (const [positive,negative] of pairs) {
+  count=0;
+  await search.executeJavaScript(`document.querySelector('#question').value=${JSON.stringify(positive)}; document.querySelector('#search-form').requestSubmit()`,true);
+  await wait('14-positive',()=>hasText(search,guard.notSentSentence(guard.classifyQuestion(positive).categories))); check('14-positive',count===0);
+  await search.executeJavaScript(`document.querySelector('#question').value=${JSON.stringify(negative)}; document.querySelector('#search-form').requestSubmit()`,true);
+  await wait('14-negative',()=>count===1); await delay(100); check('14-negative',count===1);
+ }
+ await submit('17a','I want to hurt someone');
+ const short='Save this chat? Anyone using this computer could see it.';
+ const long=short+" Don't save will also remove the earlier part of this chat from this device.";
+ let consentId=await ask.executeJavaScript('chatId');
+ check('17a',await ask.executeJavaScript(`document.querySelector('.save-consent p')?.textContent===${JSON.stringify(short)}`) && !(await listChats()).some(c=>c.id===consentId));
+ await ask.executeJavaScript("document.querySelector('.save-consent-decline').click()",true);
+ await ask.executeJavaScript("answerQuestion('I want to hurt someone',{appendUser:true})",true);
+ check('17a-later',!(await listChats()).some(c=>c.id===consentId));
+ // Seed an ordinary saved turn without a downloaded model.
+ await ask.executeJavaScript("newChat(); messages.push({id:'ordinary-fixture',role:'user',content:'ordinary fixture'}); persistCurrentChat()",true);
+ consentId=await ask.executeJavaScript('chatId');
+ await wait('17b-saved',async()=>(await listChats()).some(c=>c.id===consentId));
+ await invoke('privacy.startActivity',{requestId:'consent-earlier',chatId:consentId,type:'ask',localOnly:true});
+ await ask.executeJavaScript("answerQuestion('my husband hits me',{appendUser:true,webEnabled:true})",true);
+ check('17b-wording',await ask.executeJavaScript(`document.querySelector('.save-consent p')?.textContent===${JSON.stringify(long)}`));
+ await ask.executeJavaScript("document.querySelector('.save-consent-decline').click()",true);
+ await wait('17b-deleted',async()=>!(await listChats()).some(c=>c.id===consentId));
+ check('17b-receipts',!(await invoke('privacy.getReceipts')).some(r=>r.chatId===consentId));
+ await submit('17c','my husband hits me'); consentId=await ask.executeJavaScript('chatId');
+ await ask.executeJavaScript("document.querySelector('.save-consent-save').click()",true);
+ await wait('17c-saved',async()=>(await listChats()).some(c=>c.id===consentId&&c.saveConsent===true));
+ await ask.executeJavaScript("answerQuestion('I want to hurt someone',{appendUser:true})",true);
+ check('17c-later',await ask.executeJavaScript("!document.querySelector('.save-consent')"));
+ await wait('15-saved',async()=>(await listChats()).some(c=>c.id===consentId&&c.messages.some(m=>m.content===guard.HARM_REPLY)));
+ await ask.executeJavaScript("newChat(); document.querySelector('.chat-history-title').click()",true);
+ await wait('15-restored',()=>ask.executeJavaScript("crisisConversation && !webToggle.checked && webToggle.disabled"));
+ const denied=await invoke('chats.save',{id:'direct-consent-fixture',messages:[{role:'user',content:'I want to kill myself'}]});
+ check('17d',denied.needsConsent===true&&!(await listChats()).some(c=>c.id==='direct-consent-fixture'));
+ await ask.executeJavaScript('saveChatsOnDevice=false',true); await submit('17e','I want to hurt someone');
+ check('17e',await ask.executeJavaScript("!document.querySelector('.save-consent')")); await ask.executeJavaScript('saveChatsOnDevice=true',true);
+ // Closing/new chat without choosing also removes the pre-trigger copy.
+ await ask.executeJavaScript("newChat(); messages.push({id:'ordinary-fixture',role:'user',content:'ordinary fixture'}); persistCurrentChat()",true);
+ consentId=await ask.executeJavaScript('chatId'); await wait('17-unanswered-saved',async()=>(await listChats()).some(c=>c.id===consentId));
+ await ask.executeJavaScript("answerQuestion('I want to hurt someone',{appendUser:true});",true);
+ await ask.executeJavaScript('newChat()',true);
+ await wait('17-unanswered-deleted',async()=>!(await listChats()).some(c=>c.id===consentId));
+ const oldPages=new Set(webContents.getAllWebContents());
+ await chrome.executeJavaScript("window.sovereign.newTab('sovereign://ask/')",true);
+ await wait('17-close-page',()=>webContents.getAllWebContents().some(w=>!oldPages.has(w)&&isAsk(w)));
+ const closing=webContents.getAllWebContents().find(w=>!oldPages.has(w)&&isAsk(w));
+ await wait('17-close-ready',()=>closing.executeJavaScript("typeof saveChatsOnDevice !== 'undefined' && saveChatsOnDevice"));
+ await closing.executeJavaScript("messages.push({id:'closing-fixture',role:'user',content:'ordinary fixture'}); persistCurrentChat()",true);
+ const closingId=await closing.executeJavaScript('chatId');
+ await wait('17-close-saved',async()=>(await listChats()).some(c=>c.id===closingId));
+ await closing.executeJavaScript("answerQuestion('I want to hurt someone',{appendUser:true})",true);
+ await chrome.executeJavaScript("window.sovereign.getState().then(state=>window.sovereign.closeTab(state.activeTabId))",true);
+ await wait('17-close-deleted',async()=>!(await listChats()).some(c=>c.id===closingId));
+ for (const page of [ask,search]) {
+  if(page===ask) await submit('19-start','I have a fever');
+  else {
+   await page.executeJavaScript("document.querySelector('#question').value='I have a fever'; document.querySelector('#search-form').requestSubmit()",true);
+   await wait('19-search',()=>page.executeJavaScript("Boolean(document.querySelector('.sensitive-anyway'))"));
+  }
+  await page.executeJavaScript("document.querySelector('.sensitive-anyway').click()",true);
+  for(const [question,reply] of [['I want to kill myself',guard.CRISIS_REPLY],['I want to hurt someone',guard.HARM_REPLY]]) {
+   count=0;
+   await page.executeJavaScript(`document.querySelector('.sensitive-query').value=${JSON.stringify(question)}; document.querySelector('.sensitive-query').dispatchEvent(new Event('input'))`,true);
+   check('19-reply',count===0 && await page.executeJavaScript(`document.querySelector('.sensitive-preview').textContent===${JSON.stringify(reply)} && document.querySelector('.sensitive-send').disabled`));
+   if(page===ask) check('19-ask',await page.executeJavaScript("!webToggle.checked && webToggle.disabled && Boolean(document.querySelector('.save-consent')) && document.body.textContent.includes('Web search is off for this conversation.')"));
+  }
+  await page.executeJavaScript("document.querySelector('.sensitive-query').value='ordinary fixture'; document.querySelector('.sensitive-query').dispatchEvent(new Event('input'))",true);
+  check('19-preview',await page.executeJavaScript("document.querySelector('.sensitive-preview').textContent==='ordinary fixture'"));
+ }
+
  // Case 18: crisis first on every surface, including seeded Offline Search.
- const crisisQuestion = 'I want to kill myself ' + marker;
+ for (const [crisisQuestion, replyName] of [['I want to kill myself '+marker,'CRISIS_REPLY'],['I want to hurt someone '+marker,'HARM_REPLY']]) {
  const verifyCrisis = async (id, page) => {
   // Ask renders replies as paragraphs/lists (newlines and bullets change), so compare letters and digits only.
-  await wait(id+'-reply', () => page.executeJavaScript("(() => { const flat = s => s.replace(/[^A-Za-z0-9]/g, ''); return flat(document.body.textContent).includes(flat(SovereignSensitiveGuard.CRISIS_REPLY)); })()"));
+  await wait(id+'-reply', () => page.executeJavaScript("(() => { const flat = s => s.replace(/[^A-Za-z0-9]/g, ''); return flat(document.body.textContent).includes(flat(SovereignSensitiveGuard["+JSON.stringify(replyName)+"])); })()"));
   check(id, count === 0 && await page.executeJavaScript("document.body.textContent.includes('988') && document.body.textContent.includes('local emergency number') && !document.body.textContent.includes('Web search is off in Offline mode') && !document.body.textContent.includes('Image search needs Online mode')"));
   check(id+'-receipt', !JSON.stringify(await invoke('privacy.getReceipts')).includes(marker));
  };
@@ -200,19 +293,27 @@ async function main() {
   for (const web of mode === 'offline' ? [false] : [false, true]) {
    const id = '18-ask-'+mode+(web ? '-web' : '-local');
    count = 0; await submit(id, crisisQuestion, web); await verifyCrisis(id, ask);
+   await ask.executeJavaScript(`attachments.push({id:'extracting-fixture',status:'extracting',name:'fixture.txt'}); chatInput.value=${JSON.stringify(crisisQuestion+' summarize the attached document')}; document.querySelector('#chat-form').requestSubmit()`,true);
+   await wait('18-attachment-done',()=>ask.executeJavaScript('!running')); await verifyCrisis('18-attachment',ask);
+   await ask.executeJavaScript(`lastRequest={question:${JSON.stringify(crisisQuestion)},webEnabled:true}; retryLast()`,true);
+   await wait('18-retry-done',()=>ask.executeJavaScript('!running')); await verifyCrisis('18-retry',ask);
+   await ask.executeJavaScript(`runInlineMediaSearch({action:{type:'search-media',question:${JSON.stringify(crisisQuestion)}}})`,true);
+   await verifyCrisis('18-inline',ask);
+   check('18-main-search',(await invoke('search.query',{query:crisisQuestion,override:true})).level==='crisis');
+   check('18-main-media',(await invoke('search.media',{query:crisisQuestion,override:true})).level==='crisis');
+   check('18-main-sources',(await invoke('search.readSources',{question:crisisQuestion,results:[]})).level==='crisis');
+
   }
+  count = 0;
+  await submit('18-image', 'show me images '+crisisQuestion, true);
+  await verifyCrisis('18-image', ask);
  }
- count = 0;
- await submit('18-image', 'show me images I want to kill myself '+marker, true);
- await verifyCrisis('18-image', ask);
+ }
  // Case 9 is run by the orchestrator after these checks.
- console.log('1–11'); server.close(); app.exit(0);
+ console.log('1–19'); server.close(); app.exit(0);
 }
 const task = phase === 'orchestrate' ? app.whenReady().then(orchestrate) : phase === 'main' ? main() : preferencePhase();
 task.then(() => app.exit(0), error => {
  const caseId = /^[0-9]+[a-z]?(?:-[a-z]+)*$/.test(error.caseId) ? error.caseId : activeCase;
- const stackLines = error.stackLines?.length ? error.stackLines : String(error.stack || '').split('\n').slice(1).flatMap(line => {
-  const match = line.match(/:(\d+):(\d+)\)?$/); return match ? [match[1]+':'+match[2]] : [];
- });
- console.error(JSON.stringify({ caseId, stackLines })); server.close(); app.exit(1);
+ console.error(JSON.stringify({ caseId })); server.close(); app.exit(1);
 });

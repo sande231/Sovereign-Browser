@@ -1,14 +1,17 @@
 // Local DOM only: the preview and main share the same identifier removal function.
 (function attachSensitiveUI(global) {
-  function render(container, { question, result, send, local, disabled = false }) {
+  function render(container, { question, result, send, local, onCrisis, disabled = false }) {
     const guard = global.SovereignSensitiveGuard;
     const notice = document.createElement('section'); notice.className = 'sensitive-notice';
     const sentence = document.createElement('p');
-    sentence.textContent = result.level === 'crisis' ? guard.CRISIS_REPLY : guard.notSentSentence(result.categories, result.modelFlag);
+    sentence.textContent = result.level === 'crisis' ? guard.crisisReply(result) : guard.notSentSentence(result.categories, result.modelFlag);
     notice.append(sentence);
     if (result.level === 'crisis') { container.append(notice); return; }
     if (result.categories.includes('self-harm')) {
       const line = document.createElement('p'); line.textContent = guard.CRISIS_SHORT_LINE; notice.append(line);
+    }
+    if (result.categories.includes('abuse')) {
+      const line = document.createElement('p'); line.textContent = guard.ABUSE_RESOURCES; line.style.whiteSpace = 'pre-wrap'; notice.append(line);
     }
     const button = (text, className, action) => {
       const item = document.createElement('button'); item.type = 'button'; item.className = 'secondary-action ' + className;
@@ -31,8 +34,13 @@
       const preview = document.createElement('pre'); preview.className = 'sensitive-preview';
       const sendButton = document.createElement('button'); sendButton.type = 'button'; sendButton.className = 'primary-action sensitive-send'; sendButton.textContent = 'Send this search';
       const update = () => {
-        const clean = guard.removeIdentifiers(input.value); preview.textContent = clean.text;
-        sendButton.disabled = disabled || !clean.text || clean.text.length > 300 || guard.classifyQuestion(input.value).level === 'crisis';
+        const classification = guard.classifyQuestion(input.value);
+        const crisis = classification.level === 'crisis';
+        const clean = guard.removeIdentifiers(input.value);
+        preview.textContent = crisis ? guard.crisisReply(classification) : clean.text;
+        label.hidden = crisis; removed.hidden = crisis;
+        sendButton.disabled = disabled || !clean.text || clean.text.length > 300 || crisis;
+        if (crisis && onCrisis) { onCrisis(classification); disabled = true; }
       };
       input.addEventListener('input', () => { removed.textContent = describe(guard.removeIdentifiers(input.value).removed); update(); });
       sendButton.addEventListener('click', () => { update(); if (!sendButton.disabled) { sendButton.disabled = true; send(input.value); } });
