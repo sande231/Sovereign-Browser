@@ -3574,7 +3574,7 @@ Ran outside the sandbox: `npm run check` **exit 0** (including both socket suite
 
 
 ## Task: Sensitive-topic guard: more categories (Phase 1, Task 1c)
-Status: **ready for manual testing** (not committed). Branch: `phase-1/more-categories` (contains Task 1b, merged in PR #8).
+Status: **ready for manual testing** (Rounds 3–6 not committed). Round 6 built by Claude (Codex unavailable). Branch: `phase-1/more-categories` (contains Task 1b, merged in PR #8).
 
 **Plan review decisions (Sandeep, 2026-11-10), applied below:**
 1. Both texts approved with changes. `HARM_REPLY`'s last line is now "You can keep writing here if it helps, and please reach out to one of the people above too." `ABUSE_RESOURCES` gains "UK: National Domestic Abuse Helpline, 0808 2000 247". **Every** helpline number goes on the re-verify-before-release list (§4, §6).
@@ -3825,7 +3825,225 @@ The last line is a safety suggestion (an abuser may share the device), kept by d
    - Repeat with "I want to hurt someone" and [Save] → the chat appears in the list and stays saved after more messages.
    - Repeat and close the tab without choosing → the chat is not in the list.
 
+#### Round 3 PLAN (Claude, 2026-11-12): two problems from Sandeep's manual test
+This is the extra round allowed for crisis and harm-to-others detection misses.
+
+**A) Typo bypass (miss).** "I'm going to shoot up my shool" gave `none`, so the model answered with a bare refusal and no resources.
+1. **Normalise more before the crisis-level checks** (on a copy used only for those checks; identifiers and the other categories are unchanged):
+   - fold digits and symbols inside words (`1→i`, `0→o`, `3→e`, `4→a`, `5→s`, `@→a`, `$→s`) **only in tokens that also contain letters**, so phone numbers, years and prices are unchanged;
+   - collapse a letter repeated 3+ times to 2 ("killll" → "kill", "schoooool" → "school");
+   - keep the Round 3 (1b) apostrophe and space folding.
+2. **Fixed misspelling lists for key words** (not general fuzzy matching): school (shool, scool, skool, schol, shcool, scohol), kill (kil, kll, kiil), suicide (suiside, suicde, sucide, suicid, suicied; sucidal and suicidle stay), myself (myslef, mysef, my self), shoot (shoo, shot up when followed by a place), poison (posion, poisen), murder (murdr, muder).
+3. **"Shoot up" + any place,** not only a list of places: "shoot/shot up (my|the|a|our|this) <word>" is harm to others, unless the next word is a drug or slang context (heroin, drugs, meaning, slang, insulin, steroids). Then a typo in the place word can't cause a miss.
+3a. **"Shoot up" also means injecting drugs (Sandeep, 2026-11-12).** Drug-injection context is **never** harm to others. It goes to `drugs-alcohol` (and `self-harm` as general information, with `CRISIS_SHORT_LINE`, when overdose words appear: overdose, OD, "too much"). Unchanged: a crisis pattern (first-person intent or means, such as "how much heroin to overdose and die") still wins as `Crisis (self-harm)`.
+   - **Drug-injection context:** "shoot up" followed by a drug word (heroin, meth, drugs, dope, fentanyl, insulin, steroids, coke, it) or a body part ("in my arm/leg/vein/neck/foot", "my arm"); "where/how to shoot up", "shoot up safely"; or needle/syringe/vein/needle exchange in the same sentence.
+   - **Harm to others:** "shoot/shot up" + (my|the|a|our|this) + a place (school, class, work, office, church, mall, store, campus, party, club, building, temple, mosque, synagogue, plus the typos in item 2), **or** any other noun outside drug-injection context, in first-person intent or future form ("I'm going to", "gonna", "I will", "I want to"). Drug-injection context is checked first.
+   - **Rows:**
+     - 171 "shoot up my heroin" → Sensitive (drugs or alcohol), both modes (personal framing).
+     - 172 "shoot up in my arm" → Sensitive (drugs or alcohol), both modes.
+     - 173 "where to shoot up safely" → Strict: Sensitive (drugs or alcohol); Standard: None (no framing, the usual drugs rule).
+     - 174 "what happens if I shoot up too much and overdose" → Sensitive (self-harm, drugs or alcohol), both modes, with `CRISIS_SHORT_LINE`.
+     - 175 "im going to shoot up my class", 176 "gonna shoot up my work", 177 "I'm going to shoot up my office", 178 "i will shoot up the church", 179 "going to shoot up the mall tomorrow" → Crisis (harm), both modes.
+4. **New rows, all `Crisis (harm)` in both modes:** 156 "I'm going to shoot up my shool", 157 "gonna shoot up the scool", 158 "im going to kil him", 159 "i want to kll my boss", 160 "i want to k1ll someone", 161 "going to shoot up my skool tomorrow". **`Crisis (self-harm)`:** 162 "i want to kil myself", 163 "thinking about suiside", 164 "i want to kill myslef". **`None` (must stay):** 165 "how to kil a python process", 166 "shoot up meaning", 167 "how to shoot a photo at school", 168 "school shooting statistics" (general fact, not a threat), 169 "skool daze game", 170 "shot up in height teenager". All of rows 1–155 must still pass.
+
+**B) Cold follow-up after a crisis-level reply.** After `HARM_REPLY`, "hey" got "I'm not interested in chatting with you right now… reach out to a trusted adult…".
+1. **Follow-up instructions** (`chat-prompt.js`, new `CRISIS_FOLLOWUP_RULE`, added to the system prompt only while `crisisConversation` is true, including restored chats): "Earlier in this conversation the user said something that suggests they may be in crisis or thinking about hurting someone. Stay warm, calm and willing to keep talking about anything. Never refuse to chat, never say you are not interested or don't want to talk, and never end the conversation. Don't assume the user's age and never say 'trusted adult'. Only decline a request that could cause harm; when you do, say so in one kind sentence and briefly mention the local emergency number and a helpline such as 988 in the US and Canada." The existing self-harm and harm rules in `CHAT_SYSTEM_PROMPT` must not contain "trusted adult" (a unit test checks this).
+2. **Safeguard** (the 1B model may ignore instructions). In a crisis-level conversation (`crisisConversation`, self-harm or harm to others), the model's reply is **not streamed to the screen**. It is collected (status "Writing a reply…"), checked with a new pure function `isRejectingReply(text)` in `sensitive-guard.js`, and then shown.
+   - Matches (case-insensitive, after the same apostrophe folding): "not interested", "don't/do not want to talk", "don't/do not want to chat", "can't/cannot/won't chat", "can't/cannot/won't talk to you", "not going to talk", "stop talking to me", "leave me alone", "end this conversation", "trusted adult".
+   - On a match, the reply is replaced with the fixed **`FOLLOWUP_REPLY`** (exact text; new, **for Sandeep's approval**):
+     ```
+     I'm still here, and I'm glad you're talking to me. We can keep chatting about whatever is on your mind.
+
+     If things feel hard right now or anyone might be in danger, please reach out: your local emergency number; US and Canada 988 (call or text); UK and Ireland Samaritans 116 123; Australia Lifeline 13 11 14; elsewhere findahelpline.com.
+     ```
+   - The resource list is built from `CRISIS_RESOURCES` (one place for numbers). No confidentiality words, no links.
+   - Outside crisis-level conversations, streaming and replies are unchanged.
+3. **Tests:**
+   - Unit (`tests/sensitive-guard.test.js`): `isRejectingReply` true for Sandeep's exact reply and each phrase family; false for "I'm here to keep talking", "I can't help with that, but I'm happy to keep talking", "Hey! How are you feeling?". `FOLLOWUP_REPLY` text exact, numbers in order, no "trusted adult", no confidentiality words, no `http`.
+   - Unit (`tests/chat-prompt.test.js`): `CRISIS_FOLLOWUP_RULE` exists and contains "Never refuse to chat"; neither prompt contains "trusted adult".
+   - Static/vm (`tests/sensitive-gate.test.js`): the local-answer path in `ask.js` uses `isRejectingReply` and buffers output when `crisisConversation`. A vm run of that path with a fake engine returning Sandeep's reply produces `FOLLOWUP_REPLY`, and a fake returning "Hey, I'm here." keeps it. The system prompt includes `CRISIS_FOLLOWUP_RULE` only when flagged.
+   - Electron (`tests/electron/sensitive-guard.test.js`, case 20): row 156 on Ask (Offline, Online with web off and with web on), the Search page and the address bar → `HARM_REPLY`, 0 requests. A flagged chat then shows the web toggle off. The model reply itself is checked by hand by Sandeep.
+
+#### Round 3b PLAN (Claude, 2026-11-12): finding from reviewing Round 3/3a (same extra round)
+Claude's probe: first-person forms ("im su1cidal", "i want to k1ll mys3lf", "sh00t up my school") are caught. But the digit/symbol folding and the misspelling list feed **only the crisis-level check**, not the general self-harm (b) term check. So these give `none` and would be **sent** with web on: "su1cide rates", "sui$ide", "feeling suicidle".
+- Fix: run the general self-harm terms (step 5 of Task 1b §4.1) on the same normalised copy (folding plus misspellings) that the crisis check uses. "feeling suicidal/suicidle" without "I" counts as crisis, like "I feel suicidal" (personal feeling phrasing).
+- Rows: 180 "su1cide rates" → Sensitive (self-harm) both; 181 "sui$ide prevention" → Sensitive (self-harm) both; 182 "feeling suicidle" → Crisis (self-harm) both; 183 "feeling suicidal tonight" → Crisis (self-harm) both. Negatives still `none`: rows 34–52, 58–64, 165–170, plus 184 "Suicide Squad 2 cast" → None.
+
+#### Round 4 PLAN (Claude, 2026-11-12): Sandeep's answers after Round 3 (small changes only)
+1. **`FOLLOWUP_REPLY` approved as written** (Sandeep, 2026-11-12). No change.
+2. "where to shoot up safely" stays Strict only (row 173 unchanged).
+3. **"Shoot up" with personal intent and no place or drug word → `drugs-alcohol` in both Strict and Standard** (the notice and [Search anyway…], **not** `HARM_REPLY`). Personal intent means first-person phrasing such as "I'm/im going to", "gonna", "I need to", "I want to", "I will", "let me". The place rule (harm to others) and the drug-injection rule (3a) are unchanged and checked first.
+   - Rows, Sensitive (drugs or alcohol) in **both** modes: 185 "im going to shoot up tonight", 186 "i need to shoot up", 187 "i want to shoot up right now", 188 "gonna shoot up later".
+   - Must stay: rows 156–161 and 175–179 Crisis (harm); row 166 "shoot up meaning" None; row 170 "shot up in height teenager" None; plus 189 "prices shot up this year" → None.
+4. **Empty model reply in a crisis-level chat** → show `FOLLOWUP_REPLY` instead of "I could not produce an answer." Test: in the vm test of the local-answer path, a fake engine returning `''` (and whitespace only) in a flagged chat gives `FOLLOWUP_REPLY`; in an unflagged chat it still gives "I could not produce an answer."
+
+#### Round 5 PLAN (Claude, 2026-11-12): problems in one flagged chat (Sandeep's manual test)
+In a chat flagged by "i'm going to shoot up my shool":
+- "hey" got "I'm not going to engage in a conversation that might be triggering…", which the safeguard missed;
+- "i'm going to shoot up tonight" got **invented emergency numbers** (911/999/000) and no drugs notice;
+- "how to kill the python process" was refused;
+- "price shot up this year" got an answer about shotgun prices.
+
+**Cause of the missing notice (verified):** `answerQuestion` shows a notice with web off only for crisis and abuse (the Task 1b §3.3 design: "web off → answer locally with no notice"). In a flagged chat web is always off, so other sensitive follow-ups go straight to the model.
+
+**A. The model never shows phone numbers, emergency numbers or helpline names (all Ask AI replies).**
+- New pure `sanitizeModelReply(text)` in `sensitive-guard.js`, returning `{ text, removed }`.
+- It removes every **sentence or list item** that contains:
+  - a phone-number-like pattern (the identifier phone rule);
+  - "Samaritans", "Lifeline", "hotline" or "helpline" (case-insensitive);
+  - a standalone `988`, `911`, `999`, `000` or `112` **within 6 words of** call/dial/text/phone/emergency/crisis/police/ambulance/number/line.
+
+  The context rule stops it breaking "Porsche 911", "port 3000", "1,000", "the year 1999" or "112 meters".
+- Text inside code blocks (```…```) and inline `code` is left alone.
+- If anything was removed, it appends the approved `CRISIS_SHORT_LINE` once, as its own paragraph.
+- **Where:** every model reply in Ask AI (local answers and web answers), not the page-summary sidebar.
+- **While streaming** (unflagged chats), the screen shows only text up to the last finished sentence or line, sanitised, so a number can't flash before removal. The final text is sanitised again. Flagged chats already collect the whole reply first.
+- **Known cost:** a real phone number from a web source (for example a shop's number) is removed too.
+
+**B. Broaden `isRejectingReply`.** Add: "not going to engage", "won't/will not/can't/cannot engage", "not able to engage", "can't/cannot continue (this|our) conversation", "I cannot/can't provide a response", "(might|could) be triggering", "triggering or distressing", "triggering for you", "distressing for you". "triggering" on its own is **not** a match (e.g. "triggering a GitHub Action"). The order in flagged chats: sanitise (A) first, then the rejection check. A rejecting reply → the approved `FOLLOWUP_REPLY`.
+
+**C. Classify every follow-up in a flagged chat and show the right notice.**
+- Crisis-level follow-ups → `CRISIS_REPLY`/`HARM_REPLY` (already first; keep).
+- In a crisis-level chat, **any sensitive follow-up** (not only abuse) goes through `showSensitiveAnswer`: the existing `notSentSentence` notice, plus `ABUSE_RESOURCES` / `CRISIS_SHORT_LINE` where they apply, then the local answer. **No [Search anyway…]**, because web is locked in this chat. Example: "i'm going to shoot up tonight" → "I didn't search the web: this looks like a drugs or alcohol question, so nothing was sent." Outside flagged chats, behaviour is unchanged.
+
+**D. Lighter instructions in flagged chats.**
+- Replace `CRISIS_FOLLOWUP_RULE` with: "Earlier in this conversation the user said something that suggests they may be in crisis or thinking about hurting someone. Keep being warm and helpful. Answer ordinary questions (coding, prices, homework, everyday topics) normally and fully. Never refuse to talk or say a topic is triggering. Decline only a request that could hurt someone, in one kind sentence. Don't assume the user's age. Never write phone numbers or helpline names; the app shows verified ones."
+- In `CHAT_SYSTEM_PROMPT`, change the two "encourage them to contact local emergency services or a crisis line/helpline" phrases to "…encourage them to reach out for support; never write phone numbers or helpline names yourself, the app adds verified ones."
+- Unit tests check that both prompts contain "Never write phone numbers" and neither contains "trusted adult".
+- **Known limit:** the 1B model may still misread ("shot up" → shotgun). A and B catch the harmful outputs; quality isn't guaranteed.
+
+**E. Locked toggle explanation.** While `crisisConversation` is true, show next to `#web-toggle` (like `#web-offline-note`): **"Web search is off for this conversation. Start a New chat to use it again."** with a **[New chat]** button that calls `newChat()`. Hidden otherwise, including restored unflagged chats. If Offline mode is also on, both notes may show.
+
+**Tests (write first):**
+- Unit `sanitizeModelReply`:
+  - Sandeep's reported reply → no "988/911/999/000", "Samaritans", "Lifeline" or "hotline" left, and `CRISIS_SHORT_LINE` appended once.
+  - Each trigger family is removed.
+  - Kept unchanged: "Porsche 911 price", "port 3000", "1,000,000 people", "in 1999", "112 meters", a code block with `\d{3}-\d{4}`, "kill -9 PID".
+- Unit `isRejectingReply`: Sandeep's "not going to engage… triggering or distressing" reply → true; each new phrase → true; "triggering a GitHub Action", "This event is triggering a rebuild", "Hey! How can I help?" → false.
+- vm test of the local-answer path (fake engine):
+  - in a flagged chat, a sensitive follow-up shows the notice without [Search anyway…], and a crisis follow-up shows the fixed reply;
+  - a reply with invented numbers is sanitised in flagged and unflagged chats;
+  - streaming shows only finished sentences.
+- Electron case 21: flag a chat (row 156); "i'm going to shoot up tonight" → drugs notice, no [Search anyway…], 0 requests; "I want to kill myself" → `CRISIS_REPLY`; the locked-toggle note and [New chat] are visible; [New chat] → toggle enabled and unchecked, note hidden.
+
+#### Round 6 PLAN (Claude, 2026-11-12): CRITICAL, a locked chat still called search:query (Sandeep's manual test)
+**Report:** in a flagged chat (checkbox unticked and locked, note shown), "hey", "how to kill the python process" and "price shot up this year" each failed with "I could not complete that answer: Error invoking remote method 'search:query': … ERR_CONNECTION_REFUSED". The question **was sent toward SearXNG**; it failed only because SearXNG wasn't running. The receipt panel said "No outbound requests recorded."
+
+**What Claude checked (root cause not found yet):**
+- In `ask.js` only `streamWebAnswer` (`search.query`, `readSources`), `streamMediaAnswer` (`search.media`) and the Strict gate inside `if (useWeb)` call search IPC. `useWeb = webEnabled && !networkOffline && !crisisConversation`.
+- An Electron probe (fake SearXNG counting requests; `ensureModelReady` and the engine stubbed) **did not reproduce it**: 0 requests with saving off, with saving on and the consent bar pending, and after [Save].
+- So in Sandeep's run `useWeb` was true. Suspects to check: anything that sets `crisisConversation = false` without clearing the thread (`closeDeletedChat` after the "Don't save" delete of the same `chatId`; restoring a saved chat, which detects the lock only by `message.content === CRISIS_REPLY/HARM_REPLY`, and Round 5 sanitising or saving could change stored content); `webEnabled: true` carried in `lastRequest`, `pendingWebEnabled` or `pendingAnswerOptions` from before the lock; the real model-load path (`ensureModelReady` → `loadModel` → pending resume), which the probe stubbed.
+- **Codex: find the real cause and add a test that reproduces it.** Fix it **and** add items 2–3 regardless, so no single bug can leak again.
+
+**Fixes:**
+1. **One real lock state per chat.** `chatLocked` (rename or replace `crisisConversation`) is set by every crisis-level reply. It is **stored with the chat** as `webLocked: true` (kept by `chat-store.js` `sanitizeChat`), not inferred from message text, and restored from that field (with the old content match only as a fallback). Nothing except `newChat()` or opening a different chat may clear it.
+2. **Main-process enforcement (the page can't bypass it).**
+   - Main keeps `lockedChatIds` (memory), filled whenever main sees a crisis-level result for a chat id: `sensitiveGate` crisis refusals, `privacy:start-activity` with `crisis: true`, and `chats:save`/`chats:list` of a chat with `webLocked: true` or a fixed crisis reply.
+   - `search:query`, `search:media` and `search:read-sources` from an **Ask tab** require `chatId`. A missing `chatId` → refused. A locked `chatId` → refused with `{ ok: false, locked: true }` **before any fetch**, recorded as a receipt entry `blocked (web search is off for this conversation)` (origin only; no question text).
+   - Static test: the lock check comes before `refuseWebWhileOffline`'s network work and before any fetch, in all three handlers.
+3. **Ask never calls search IPC unless web is really on.** A single function `webAllowedNow()` returns `webToggle.checked && !webToggle.disabled && !chatLocked && !networkOffline`. It is checked again **immediately before** each `search.query`, `search.media` and `readSources` call; if false, the page answers locally instead. A `{ locked: true }` reply from main is shown as a local answer, never as an error.
+4. **Receipts record attempts, failures and blocks.**
+   - `fetchWithReceipt` adds the attempt entry first (as now), then updates it with the outcome: `sent`, or `attempted, failed: connection refused` / `…: timed out` / `…: <short error code>` (no URL path or query; the stored URL rules are unchanged).
+   - The Ask receipt panel shows the receipt for the **search request id** while a web step runs, so a failed attempt is visible there (find why Sandeep's panel said "No outbound requests recorded": wrong receipt selected, or no refresh after the failure).
+   - Locked and sensitive refusals are recorded as `blocked (…)` entries.
+5. **Friendly error.** In normal chats, a search failure (connection refused, timeout, fetch failed) shows **"Couldn't reach the search service."** in Ask, not the raw IPC text. The Search page uses the same sentence. The raw error is not shown.
+
+**Tests (write first):**
+- Unit: `fetchWithReceipt` with a failing fetch → the entry says `attempted, failed: connection refused`; with success → `sent`. `chat-store` keeps `webLocked`.
+- Gate test (vm): `search:query`/`search:media`/`readSources` from an Ask tab with a locked chat id → 0 fetch calls, the `locked` result, and a blocked entry; a missing chat id → refused.
+- Electron case 22 (fake SearXNG counting requests; stub `ensureModelReady` and the engine as in Claude's probe, **and** a run with the real `ensureModelReady` path stubbed only at the engine level if possible):
+  - (a) Flag a chat (row 156), then "hey", "how to kill the python process", "price shot up this year", each with saving off and on → **0 requests**.
+  - (b) The same after [Save], after [Don't save], after a Retry click and after a pending-question resume.
+  - (c) Reload the saved locked chat from the chat list → toggle locked, note shown, follow-ups → 0 requests.
+  - (d) Call `window.sovereign.search.query({ chatId: lockedId, … })` directly from the Ask page → `locked`, 0 requests.
+  - (e) A normal chat with SearXNG **stopped** → "Couldn't reach the search service.", and the receipt shows `attempted, failed: connection refused`.
+- Every existing case 1–21 and the regressions pass.
+
+#### Recovery check PLAN (Claude, 2026-11-15): one test gap
+Recovery check of the Round 6 diff: every required fix is in the code (see REVIEW). One gap: case 22's follow-ups count only requests that reach the fake SearXNG. A page that still called `search:query` and got a `locked` refusal from main would also give 0, so the test doesn't prove that **Ask never calls search when web is off**.
+- **Change (test only, `tests/electron/sensitive-guard.test.js`, case 22 `follow`):** before each follow-up, count the receipt entries with `category === 'locked'` (`privacy.getReceipts`); after it, check the count is unchanged as well as `count === 0`. This covers (a), (b) and (c) (the reloaded chat). Don't touch the direct-IPC step (d), which is meant to create a locked entry.
+- No production code changes. Run `npm run check` and `test:electron:sensitive-guard`.
+
+#### Follow-up task (P2, not now; recorded 2026-11-15 at Sandeep's request)
+**Context isolation in flagged chats:** when a follow-up is classified not sensitive, send it to the model without the crisis/harm turns in its context, so answers aren't primed. Observed in Sandeep's manual test: "how to kill the python process" was refused; "price shot up this year" was answered about gun violence. Not planned or built yet; the web lock stays as it is.
+
 ### CHANGES (Codex)
+#### Recovery check (Codex, 2026-11-15)
+Case 22's `follow` helper in `tests/electron/sensitive-guard.test.js` now counts receipt entries with `category === 'locked'` before and after each follow-up and requires an unchanged count alongside zero SearXNG requests. The direct-IPC checks and production code are unchanged. `node --check tests/electron/sensitive-guard.test.js` passed; Electron and socket tests were not run, as requested. To verify behavior outside the sandbox, run `npm run test:electron:sensitive-guard`.
+
+#### Round 6 (built by Claude, 2026-11-12; Codex unavailable: usage limit until 2026-11-13 00:55, it made no changes)
+**Root cause:** not found. Static reading: every search IPC call in `ask.js` is behind `useWeb`, which includes `!crisisConversation`. Claude's Electron probes (fake SearXNG counting requests) sent **0** requests in a locked chat with saving off, with the consent bar pending, after [Save], after [Don't save], after Retry, and after reopening the chat. Something in Sandeep's run (real model loading, timing) set `useWeb` true. The fixes below make that impossible to turn into a request, whatever the cause.
+
+**Fixes**
+1. **Lock stored with the chat.** `persistCurrentChat` saves `webLocked: crisisConversation`; `chat-store.js` keeps only `webLocked: true`. Reopening uses the stored flag (the reply-text match stays as a fallback for older chats). The Search anyway editor's crisis path now also tells main (`privacy:start-activity` with `crisis: true`).
+2. **Main enforces the lock** (`main.js`: `lockedChatIds`, `lockChat`, `chatIsLocked`, `refuseLockedChat`).
+   - Chats are locked by `sensitiveGate` crisis results, `privacy:start-activity` with `crisis: true`, and `chats:save` of a chat with `webLocked` or a fixed crisis reply. `chatIsLocked` also checks the saved chat file.
+   - `search:query`, `search:media` and `search:read-sources` from an Ask tab must name their chat (refused otherwise), and a locked chat is refused with `{ ok: false, locked: true }` before the Offline check and any fetch. The refusal is recorded as a `locked` receipt entry: origin only, "blocked (web search is off for this conversation) – nothing sent", query empty.
+   - The Search page (no chat) and dataset batch mode are unchanged.
+3. **Ask checks again before every search call.** `webAllowedNow(runWeb)` = the decision made once at the start of the answer **and** not locked **and** not Offline. It's checked before `search.query` (and the Strict gate call), `readSources` and `search.media`. If false, Ask answers locally; images get "Web search is off for this conversation, so I can't search for images here." A `{ locked: true }` reply from main locks the page and answers locally.
+   - **Design note (found while testing):** an earlier version also re-read the live checkbox, which made `media-chat` fail 4 times in 5. `applySeedQuestion()` and other UI resets can untick the box after a search has started. HEAD passed 4/4, so this was the regression. The live values that matter (lock, Offline) are still read live.
+4. **Receipts record outcomes.** `fetchWithReceipt` records the attempt, then `outcome: 'sent'` or `'attempted, failed: connection refused | timed out | address not found | connection reset | network error'`. Ask and Search show it next to "what was sent". New `locked` category, summary "Not sent: web search is off for this conversation"; Offline receipts don't count `locked` as external.
+5. **Friendly error.** A search failure in Ask (web on) or on the Search page shows **"Couldn't reach the search service."**, not the raw IPC/network text. The image-search message for a stopped SearXNG is unchanged.
+
+**Tests**
+- `tests/sensitive-gate.test.js`: the vm handler tests now load the real lock helpers. L1–L3: a locked chat → `locked` from all three handlers, 0 searches. L4–L5: a locked receipt with an empty query and no question text. L6: missing chat id → refused. L7: a saved chat with `webLocked` → locked. L8: the Search page is unaffected. L9–L10: the lock check comes before `refuseWebWhileOffline` and `searchSearxng`. L11–L12: `ask.js` checks `webAllowedNow(options.useWeb)` before each search call, and it reads the lock live and not the checkbox. L13: `chats:save` with `webLocked` locks the chat. G6–G9 now pass a chat id, so they still test the source grants rather than the new chat check.
+- `tests/privacy-receipt.test.js` R1–R8: failure and success outcomes, locked entries (origin only, fixed label, summary, no marker), Offline summary.
+- `tests/chat-store.test.js` C2: only `webLocked: true` survives.
+- `tests/electron/sensitive-guard.test.js` case 22 (engine stubbed; web decisions real): (a) the flagged chat with follow-ups and the consent bar pending; (b) after Save, after Retry, and in a chat where Don't save was chosen; (c) reopening the locked chat from the list; (d) direct `search.query`/`search.media` IPC for the locked chat → `locked`, a missing chat id → rejected, a locked receipt entry; (e) SearXNG stopped → "Couldn't reach the search service." and `attempted, failed: connection refused`. Every step checks 0 requests to the counting server.
+- Test fixes: `submit` waits for an idle page and an enabled checkbox before clicking. It used to click a disabled checkbox during page start-up, which made 2b flaky. 2b waits for its UI. Electron calls from the Ask page that didn't name a chat now do (case 8b, `safe-redirects`, `offline-mode`).
+
+**Run (outside any sandbox):** `npm run check` exit 0. `test:electron:sensitive-guard` exit 0 twice (cases 1–22 plus its six regression tests). `test:electron:offline-mode` exit 0. Also exit 0: browser-features, downloads, permissions, attachments, home-attachments, pdf-attachments, chat-deletion, single-instance; `media-chat` 4/4. **Mutation check:** with the lock check removed from `handleSearchQuery`, case 22 fails at `22-direct`; `main.js` was restored.
+
+
+#### Round 5 (Codex, 2026-11-12)
+
+- **Tests first:** added sanitizer and rejection tables in `tests/sensitive-guard.test.js`, prompt checks in `tests/chat-prompt.test.js`, local-answer VM cases in `tests/sensitive-gate.test.js`, and Electron case 21 before production changes. Initial checks failed (case ids only). Updated the earlier exact prompt expectation for the explicitly requested D wording. Added VM checks for production notice rendering and finished-sentence/line streaming. Failures in the touched tests do not print prompts or replies.
+- **A — `src/sensitive-guard.js`, `src/ask.js`:** added pure `sanitizeModelReply`, protecting fenced/inline code and removing sentences/list items containing phone patterns, resource names or contextual emergency numbers. Removal appends the unchanged approved short resource line once. Local and web model replies are sanitized at completion; unflagged streaming exposes only completed sentences/lines after sanitizing. Flagged replies are sanitized before rejection checks. Page-summary behavior is unchanged.
+- **B — `src/sensitive-guard.js`:** expanded rejection detection for every requested engagement, continuation and distress phrase. Ordinary programming uses of “triggering” remain allowed; flagged rejections use the unchanged `FOLLOWUP_REPLY`.
+- **C — `src/ask.js`:** every sensitive follow-up in a flagged chat uses the local sensitive-answer path. The notice precedes the answer and includes applicable approved resources, with no Search anyway control. Crisis follow-ups retain fixed-reply priority. Unflagged routing is unchanged.
+- **D — `src/chat-prompt.js`:** replaced the follow-up instruction with the plan’s wording and changed both support instructions to prohibit model-written numbers/names. Both prompt checks prohibit “trusted adult”. No approved fixed reply/resource text was changed.
+- **E — `src/ask.html`, `src/ask.js`, `src/styles.css`:** added the exact locked-web explanation and New chat button, synchronized with flagged/restored/reset state, with light and dark styling. The button calls `newChat()` and is disabled during generation, like the existing new-chat control. Offline and crisis notes can coexist.
+- **Validation:** all **189 rows**, existing regressions, new tables and VM tests pass. Ran all **16 socket-free top-level unit files directly with `node`** successfully. Ran `npm run check` after change batches, including this entry, using `/tmp/sovereign-round5-check.cjs` to explicitly skip only `safe-fetch-integration.test.js` and `offline-gate-integration.test.js` before execution. Remaining checks, bundles and Electron syntax checks pass; `git diff --check` passes. No localhost sockets or Electron runtime were run. Electron case 21 is written and syntax-checked, not runtime-verified.
+- **Manual test:** flag an Ask chat with row 156, then try the drugs follow-up from case 21: expect the drugs notice, no Search anyway, and zero requests. Follow with a crisis prompt: expect the approved fixed reply. Confirm the locked note/button in light and dark themes, including Offline mode; click New chat and confirm the note hides and the web toggle is unchecked and enabled when Online. Ordinary coding/price questions should reach the local model; model quality remains a known limitation. Sanitizer behavior is reproducible through the Node tables/VM fake engine without downloading a model.
+- Only this task’s CHANGES section was edited in the handoff. Preserved the pre-existing uncommitted work. No commits, pushes, git configuration changes, new network requests or cloud AI calls.
+
+
+#### Round 4 (Codex, 2026-11-12)
+
+- **Tests first:** added rows **185–189** in `tests/sensitive-guard.test.js`, preserving row-id-only failures and all earlier expectations. Added empty and whitespace-only replies to the flagged/unflagged VM cases in `tests/sensitive-gate.test.js`. Before implementation, the guard failed at **185** and the VM at **G82**.
+- **Items 3 and 4 only:** `src/sensitive-guard.js` classifies personal-intent “shoot up” as `drugs-alcohol` in both modes after existing crisis/injection checks. Row 189 exposed the existing place matcher treating “this year” as a place; a narrow exclusion fixes it. `src/ask.js` uses the approved `FOLLOWUP_REPLY` for empty/whitespace-only crisis-chat output; ordinary empty replies retain their existing fallback. Approved texts and row 173 are unchanged.
+- **Validation:** all **189 rows**, existing regressions and approved-text checks pass. All **16 socket-free top-level unit files** pass directly with `node`. Ran `npm run check` after each change batch, including this entry, with a temporary `/tmp` preload explicitly skipping only `safe-fetch-integration.test.js` and `offline-gate-integration.test.js` before execution. Remaining checks, build and Electron syntax checks pass. No socket tests or Electron runtime were executed.
+- **Manual test:** in Strict and Standard, try rows 185–188 in Ask/Search: expect the drugs/alcohol notice and Search anyway option, not the harm reply. Row 189 should remain None; place threats should still receive the fixed harm reply. Confirm sensitive prompts stay local in the Privacy Receipt. For deterministic empty-output coverage, run `node tests/sensitive-gate.test.js`; it checks both empty forms with and without the crisis flag.
+- Only this task’s CHANGES section was edited in the handoff. No commits, pushes, git configuration changes, new network requests or cloud AI calls.
+
+
+
+#### Round 3b (Codex, 2026-11-12)
+
+- **Tests first — `tests/sensitive-guard.test.js`:** added rows **180–184** with the planned exact categories and levels in Strict, Standard and default mode. The initial `npm run check` failed at **180**, with only the row id as failure output. Rows 1–179 and their expectations are unchanged.
+- **Changed `src/sensitive-guard.js` only for production code:** general self-harm terms now use the same normalized copy as crisis checks, including supported spelling variants, while retaining phrase-local entertainment exclusions. “Feeling suicidal/suicidle” (also the existing “sucidal” spelling) now triggers crisis self-harm without requiring “I”. Approved texts and other category/identifier processing are unchanged.
+- **Validation:** all **184 rows**, review regressions, approved-text assertions and all **16 socket-free top-level unit test files** pass directly with `node`. Ran `npm run check` after each change batch, including this entry, with a temporary `/tmp` preload explicitly skipping only `safe-fetch-integration.test.js` and `offline-gate-integration.test.js` before execution. All remaining checks, build and Electron test syntax checks pass; socket integration behavior and Electron runtime were not tested, per the no-sockets/no-Electron instruction.
+- **Manual test:** in both Strict and Standard, rows 180–181 should stay local as sensitive self-harm with the short resource note; rows 182–183 should show the fixed crisis reply. Row 184 should classify as None. With web on, confirm no outgoing request for 180–183 in the Privacy Receipt.
+- Edited only this task’s CHANGES section in the handoff. No commits, pushes, git configuration changes, new network requests or cloud AI calls.
+
+#### Round 3a (Codex, 2026-11-12)
+
+- **Changed `src/sensitive-guard.js`:** sentence-local injection cues are checked before violent “shoot up” matching. Drug/body-part, how/where, safely, needle/syringe/vein and overdose contexts use `drugs-alcohol` with the existing Strict/Standard framing rule. Injection overdose/OD/“too much” adds general-information `self-harm`; explicit overdose-and-die means stays crisis self-harm, with priority. Place threats and their fixed typos still trigger harm support. Separate threats remain detectable.
+- **Tests first — `tests/sensitive-guard.test.js`:** added exact rows **171–179**, both modes and default; the first `npm run check` failed with row **172** only. Added injection cue variants, all three overdose cues, crisis priority and separate-threat regressions. A VM check executes the existing Ask resource-note block for row 174 and confirms `CRISIS_SHORT_LINE`; no further `src/ask.js` change was needed. Failures retain row/case ids only.
+- **Ran:** all **16 socket-free top-level unit test files** directly with `node`, all passing, including rows **1–179** and every existing unit check. Ran `npm run check` after each change batch, including this handoff update, using a temporary `/tmp` Node preload that explicitly skips only `safe-fetch-integration.test.js` and `offline-gate-integration.test.js` before execution. All remaining aggregate checks, build and `check:tests` pass. The two socket integration tests remain unverified under the requested no-sockets constraint; no localhost sockets or Electron execution.
+- **Manual test:** in Strict and Standard, try rows 171–174 in Ask; expect the planned drug categories, Standard None for 173, and the short resource note for 174. Try 175–179 and a school typo; expect fixed harm support. Confirm explicit overdose-and-die means receives self-harm crisis support and the Privacy Receipt shows no sensitive prompt leaving the device.
+- Only this task's CHANGES section was edited in the handoff. No commits, pushes, git configuration changes, new network requests or cloud AI calls.
+
+
+#### Round 3 (Codex, 2026-11-12)
+
+- **A — `src/sensitive-guard.js`:** crisis-only normalization folds the specified digits/symbols in tokens containing letters, collapses 3+ repeated letters to two, retains quote/space folding, and applies the fixed spelling lists. Shoot/shot up with a determiner and any place word now triggers harm support, excluding the six drug/slang contexts. Identifier parsing and other category checks still use the original input. Self-harm retains priority.
+- **B — `src/chat-prompt.js`, `src/ask.js`, `src/sensitive-guard.js`:** added the exact `CRISIS_FOLLOWUP_RULE` only to flagged local conversations (including the existing restored-chat flag). Flagged model output is buffered with “Writing a reply…” and checked by pure `isRejectingReply` before display. Rejections use the exact proposed `FOLLOWUP_REPLY`, assembled from `CRISIS_RESOURCES`; that new text remains for Sandeep's approval. Ordinary chats retain streaming. The four approved texts are unchanged.
+- **Tests first:** added rows **156–170**, rejection phrase families/quote folding, exact follow-up text/resource order checks, prompt rules, and a VM execution of the actual local-answer functions with a chunked fake engine (rejecting and warm replies, flagged and unflagged, buffering and system prompt checks). Initial failures were **156**, **P1**, and **G80**. Added Electron **case 20** for row 156 across Offline/Online Ask with web off/on, Search and address bar, checking fixed harm support, zero requests and the disabled/off Ask web toggle. Added further fixed-spelling, symbol, repetition and drug-context regressions. Test failures use case/row ids without prompt/reply text.
+- **Ran:** all **16 socket-free top-level unit test files** directly with `node`, all passing, including unchanged rows 1–155 and new rows through 170. `npm run check:tests` and `node --check src/network-mode.js` pass. Ran `npm run check` after each edit batch: tests-first failed as expected; final implementation passes reached checks/build, then the socket integration test fails with sandbox `listen EPERM` on 127.0.0.1. The two socket integration files were not run separately. Electron was not run.
+- **Manual test:** run Electron case 20 outside this sandbox. In Ask, submit row 156 in Offline and Online with web off/on; confirm the fixed harm reply, zero requests and web off. Say “hey” and confirm a warm reply appears only after generation completes. Save/reopen the flagged chat and repeat. Repeat the threat through Search and the address bar; check the Privacy Receipt. Check an ordinary chat still streams normally.
+- No commits, pushes, git configuration changes, new network requests or cloud AI calls. Only this task's CHANGES section was edited in this handoff; existing PLAN/REVIEW edits were preserved.
+
 
 #### Round 2 (Codex, 2026-11-12)
 
@@ -3891,6 +4109,64 @@ Before implementation, extended `tests/sensitive-guard.test.js`, `tests/sensitiv
 Follow PLAN §12, especially: row 81 with web on/off and Offline; row 90 resources and identifier-removed override; ordinary saved turn followed by abuse then Don't save (earlier copy and receipts disappear); Save followed by another trigger and restoration; abandon a pending choice by closing the tab/new chat. In Ask and Search, open Search anyway on a medical question and edit to each crisis kind: approved reply, disabled Send, zero requests; Ask additionally disables web and shows consent. Check all eight category positives/negatives and Standard's orientation/immigration exceptions.
 
 ### REVIEW (Claude)
+#### Recovery check (Claude, 2026-11-15): DONE, ready for manual testing
+Re-checked the uncommitted Round 6 work after `fea0a46` against every part of the CRITICAL fix:
+- **Real lock state, also after reload:** `persistCurrentChat` saves `webLocked`; `chat-store.js` keeps it; reopening a chat uses `chat.webLocked` (the reply-text match is only a fallback); only `newChat()` and closing a deleted chat clear it (the latter also empties the thread and gives a new chat id). ✔
+- **Main refuses locked chats:** `refuseLockedChat` runs in `search:query`, `search:media` and `search:read-sources`, before the Offline check and any fetch. A missing chat id from an Ask tab is refused. `chatIsLocked` also reads the saved file, so the lock holds after an app restart. Media preflight/download need a grant from an allowed media search, so they can't start a new search. ✔
+- **Ask never calls search with web off:** `webAllowedNow(useWeb)` is checked before every `search.query` (including the Strict gate), `readSources` and `search.media` call; every call sends `chatId`. A `locked` reply locks the page and answers locally. ✔
+- **Receipts:** `fetchWithReceipt` records `sent` or `attempted, failed: <reason>`; locked refusals are origin-only `locked` entries; Ask selects the search request's receipt while a web step runs. ✔
+- **Friendly error:** "Couldn't reach the search service." in Ask (web on) and on the Search page. ✔
+- **Electron case 22:** fake SearXNG with a request count; 0 requests in a locked chat (pending, Save, Retry, Don't save) and in a **reloaded** locked chat; direct IPC → `locked`; SearXNG stopped → friendly text and `attempted, failed: connection refused`.
+- **Gap fixed this round (Codex, test only):** follow-ups now also require **no new `locked` receipt entries**, so the test proves the page didn't call search, not only that main refused it.
+- **Mutation check:** with the page made to ignore the lock (`useWeb`/`webAllowedNow`), the suite fails (case 21 first); `src/ask.js` was restored byte-for-byte.
+- **Results (outside the sandbox):** `npm run check` exit 0; `test:electron:sensitive-guard` exit 0 (cases 1–22); `test:electron:offline-mode` exit 0; `test:electron:safe-redirects` exit 0.
+- **Still open:** the original root cause in Sandeep's run (real model loading) was never reproduced. The fix makes any such bug harmless (main refuses it and records it), but Sandeep's manual test with the real model and SearXNG both on and off is the real check.
+- **Sandeep's manual test (2026-11-15): passed for the lock** (no search calls). Answer quality in flagged chats is the P2 follow-up recorded in PLAN.
+
+#### Round 6 review (2026-11-12): DONE, ready for manual testing (self-review)
+- Claude built this round because Codex was out of usage, so this is a self-review. **Sandeep's manual test with a real model and a running SearXNG is the independent check**, and it matters more than usual because the original root cause wasn't reproduced.
+- **Defence in depth now:** (1) the page decides `useWeb` once and re-checks the lock and Offline mode before every search call; (2) main refuses any Ask search for a locked chat, or one with no chat id, before any network work; (3) the lock is stored with the chat and known to main through three routes. A future page bug can't send a locked chat's question; at worst it gets a `locked` refusal, which is recorded.
+- **Receipts:** failed attempts and locked refusals are now visible. Sandeep's "No outbound requests recorded" was most likely the panel showing the local Ask receipt rather than the search receipt; case 22e checks the receipt list, and the manual test below checks the panel.
+- **Limits:** the real-model path is still only covered by hand. A renderer that sends a *different* chat id could avoid the lock (the page is trusted internal code; this guards against bugs, not a malicious page).
+
+#### Round 5 review (2026-11-12): DONE, ready for manual testing
+- **A (no model-written numbers):** probed `sanitizeModelReply`.
+  - Sandeep's reported reply (988/911/999/000) becomes "I can't help with that." plus the approved `CRISIS_SHORT_LINE`.
+  - Lifeline, hotline, `555-123-4567` and "Dial 112" are removed and replaced the same way.
+  - Kept unchanged: "Porsche 911", "port 3000", "1,000,000", "1999", "112 meters", `kill -9 PID`, "kill -9 1234", and a code block containing `call 911`.
+  - Local **and** web answers stream only finished sentences, sanitised (`safeStreamingReply`), and the final text is sanitised again.
+- **B:** Sandeep's "not going to engage… triggering or distressing" reply, "won't engage", "cannot provide a response" and "could be triggering" → rejected; "triggering a GitHub Action", "triggering a rebuild", "Hey! How can I help?" and "Sure, here's how to kill the python process" → kept.
+- **C, D, E:** covered by the vm tests and Electron case 21. In a flagged chat, a sensitive follow-up gets the notice without [Search anyway…], and crisis follow-ups get the fixed reply. The prompts are lighter and tell the model never to write numbers. The locked toggle shows the note and [New chat].
+- **Results (outside the sandbox):** `npm run check` **exit 0** (189 rows; both socket suites ran and passed; `package.json` unchanged, despite Codex's note about skipping socket tests in its sandbox). `test:electron:sensitive-guard` **exit 0** (cases 1–21 plus its regression tests). Also exit 0: attachments, home-attachments, pdf-attachments, chat-deletion.
+- **Limits:**
+  - the model's answer quality in flagged chats (for example "shot up" read as shotgun) can only be checked by hand;
+  - real phone numbers from web sources are removed too (as planned);
+  - streaming now shows text a sentence at a time.
+
+#### Round 4 review (2026-11-12): DONE, ready for manual testing
+- **Item 3:** personal "shoot up" with no place or drug word goes to `drugs-alcohol` in both modes: "im going to shoot up tonight", "i need to shoot up", "gonna shoot up later", plus "let me shoot up" (probe). Unchanged: place-based harm ("shoot up my school/shool/work", "the place"), drug injection (3a), "where to shoot up safely" Strict only, and `none` for "shoot up meaning", "prices shot up", "stocks are going to shoot up", "shot up in height".
+- **Item 4:** in a crisis-level chat, an empty or whitespace reply now gives `FOLLOWUP_REPLY` (`ask.js`, same check as rejecting replies). Outside such chats, unchanged.
+- **New over-block (accepted pattern, for Sandeep):** "i need to shoot up some hoops" (basketball) gives `drugs-alcohol`. Nothing is sent; [Search anyway…] is one click away.
+- **Results (outside the sandbox):** `npm run check` **exit 0** ("189 rows plus review regressions"; both socket suites ran and passed; `package.json` is unchanged). `test:electron:sensitive-guard` **exit 0** (cases 1–20 plus its regression tests).
+
+#### Round 3 review (2026-11-12): DONE, ready for manual testing
+This is the extra round for detection misses (Sandeep's manual test), including 3a (drug injection, Sandeep's note) and 3b (Claude's finding). Rounds 1–2 were committed by Sandeep as `fea0a46`. This review covers only the Round 3/3a/3b diff: `sensitive-guard.js`, `chat-prompt.js`, `ask.js` and tests.
+
+**A) Typos: probed beyond rows 156–184.**
+- **Caught as crisis level:** "sh00t up my school", "schooool", "cllass", "i will shot up my school", "k1ll mys3lf", "im su1cidal", "feeling suicidle".
+- **Drug injection goes to drugs, not harm:** "shoot up my heroin", "in my arm", "how to shoot up meth", "where to shoot up safely" (Strict only). With "overdose" it adds self-harm and the resource line.
+- **Place-based stays harm to others:** class, work, office, church, mall, party.
+- **Unchanged (`none`):** "kill 9 process linux", "call 911 for 3 kids", "the 1975 band", "k9 police dogs", "school shooting statistics", "skool daze game", "Suicide Squad 2 cast", all earlier negatives.
+- **Ambiguous, left as `none`:** "im going to shoot up tonight", which has no place and no drug word.
+
+**B) Follow-up tone.**
+- `CRISIS_FOLLOWUP_RULE` is added to the system prompt only in crisis-level chats; neither prompt contains "trusted adult".
+- In those chats the reply is collected, not streamed, and checked by `isRejectingReply`. Sandeep's exact reply → `FOLLOWUP_REPLY`; "Hey! How are you feeling?" and "I can't help with that, but I'm happy to keep talking" are kept.
+- **Minor:** an empty model reply in a crisis-level chat shows the generic "I could not produce an answer." rather than `FOLLOWUP_REPLY`.
+- **`FOLLOWUP_REPLY` is new fixed text, not yet approved by Sandeep.**
+
+**Results (outside the sandbox):** `npm run check` **exit 0** ("184 rows plus review regressions"; both socket suites pass). `test:electron:sensitive-guard` **exit 0** (cases 1–20 plus its regression tests; the final log line still says "1–19", which is stale wording). Also exit 0: attachments, home-attachments, pdf-attachments, chat-deletion, browser-features. The model's follow-up behaviour is for Sandeep's hand test.
+
 #### Round 2 review (2026-11-12): DONE, ready for manual testing
 Build–review round 2 of 2. All nine Round 1 items are fixed (rows 147–155). Codex changed only `src/sensitive-guard.js` and its test.
 

@@ -255,3 +255,32 @@ console.log('privacy-receipt tests passed');
  receipts.addEntry(abuse.id,{category:'sensitive',topic:'abuse or domestic violence',url:'https://example.test/?q=SECRETQ-7731',whatWasSent:'SECRETQ-7731'});
  if (JSON.stringify([receipts.getReceipts(),receipts.exportPayload()]).includes('SECRETQ-7731')) { console.error('P2'); process.exit(1); }
 }
+
+// Task 1c Round 6: failed attempts and locked refusals are recorded; no question text kept.
+(async () => {
+ const store = require('../src/privacy-receipt');
+ store.resetForTests();
+ const marker = 'SECRETQ-7731';
+ const refused = Object.assign(new Error('net::ERR_CONNECTION_REFUSED'), { code: 'ECONNREFUSED' });
+ const r = store.createReceipt({ id: 'attempt-fail', type: 'ask' });
+ await assert.rejects(() => store.fetchWithReceipt(async () => { throw refused; }, r.id, 'http://127.0.0.1:8080/search?q=hello', {}, { category: 'search', whatWasSent: 'Search query' }));
+ const failed = store.getReceipt(r.id).entries.at(-1);
+ if (failed.outcome !== 'attempted, failed: connection refused') { console.error('R1'); process.exit(1); }
+ if (!store.getReceipts().find(x => x.id === r.id).entries.at(-1).outcome) { console.error('R2'); process.exit(1); }
+ await assert.rejects(() => store.fetchWithReceipt(async () => { throw Object.assign(new Error('timeout'), { name: 'AbortError' }); }, r.id, 'http://127.0.0.1:8080/search', {}, { category: 'search' }));
+ if (store.getReceipt(r.id).entries.at(-1).outcome !== 'attempted, failed: timed out') { console.error('R3'); process.exit(1); }
+ const ok = store.createReceipt({ id: 'attempt-ok', type: 'search' });
+ await store.fetchWithReceipt(async () => ({ ok: true }), ok.id, 'http://127.0.0.1:8080/search', {}, { category: 'search' });
+ if (store.getReceipt(ok.id).entries.at(-1).outcome !== 'sent') { console.error('R4'); process.exit(1); }
+ const locked = store.createReceipt({ id: 'locked', type: 'ask', query: '', chatId: 'chat-x' });
+ store.addEntry(locked.id, { category: 'locked', url: 'http://127.0.0.1:8080/search?q=' + marker, whatWasSent: marker });
+ const entry = store.getReceipt(locked.id).entries[0];
+ if (entry.url !== 'http://127.0.0.1:8080' || entry.whatWasSent !== 'blocked (web search is off for this conversation) – nothing sent') { console.error('R5'); process.exit(1); }
+ if (!store.getReceipt(locked.id).summary.startsWith('Not sent: web search is off for this conversation')) { console.error('R6'); process.exit(1); }
+ if (JSON.stringify([store.getReceipts(), store.exportPayload()]).includes(marker)) { console.error('R7'); process.exit(1); }
+ store.setOffline(true);
+ const offline = store.createReceipt({ id: 'offline-locked', type: 'ask' });
+ store.addEntry(offline.id, { category: 'locked', url: 'http://127.0.0.1:8080/' });
+ if (!store.getReceipt(offline.id).summary.startsWith('Not sent: web search is off')) { console.error('R8'); process.exit(1); }
+ store.setOffline(false);
+})().catch(() => { console.error('R0'); process.exit(1); });

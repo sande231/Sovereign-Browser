@@ -2838,3 +2838,11 @@ button:disabled {
 .sensitive-query { min-height: 80px; padding: 10px; color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 6px; }
 .sensitive-preview { white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; margin: 0; border: 1px solid currentColor; border-radius: 6px; }
 :root[data-theme="dark"] .sensitive-notice { background: #302c20; border-color: #8d805b; color: #f2e7c9; }
+
+.web-crisis-note { color: #51452c; font-size: 12px; line-height: 1.5; }
+.web-crisis-note[hidden] { display: none; }
+.web-crisis-note button { margin-left: 6px; }
+:root[data-theme="dark"] .web-crisis-note { color: #f2e7c9; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .web-crisis-note { color: #f2e7c9; }
+}

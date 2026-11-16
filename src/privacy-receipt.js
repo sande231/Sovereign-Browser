@@ -22,11 +22,13 @@ const VALID_CATEGORIES = new Set([
   'permission',
   'blocked',
   'sensitive',
+  'locked',
   'other'
 ]);
 
 const PERMISSION_RECEIPT_ID = 'website-permissions';
 const BLOCKED_WHAT_WAS_SENT = 'blocked (offline mode) – nothing sent';
+const LOCKED_WHAT_WAS_SENT = 'blocked (web search is off for this conversation) – nothing sent';
 
 let receipts = [];
 const listeners = new Set();
@@ -120,12 +122,13 @@ function buildSummary(receipt) {
   if (receipt.crisis) return 'Nothing left this device: support information shown';
   const sensitive = receipt.entries.filter(entry => entry.category === 'sensitive');
   if (sensitive.length) return `Not sent: sensitive topic (${[...new Set(sensitive.map(entry => entry.topic))].join(', ')})` + (receipt.type === 'ask' ? ' · AI generated locally' : '');
+  if (receipt.entries.some(entry => entry.category === 'locked')) return 'Not sent: web search is off for this conversation' + (receipt.type === 'ask' ? ' · AI generated locally' : '');
   const allEntries = Array.isArray(receipt.entries) ? receipt.entries : [];
   const blockedEntries = allEntries.filter(entry => entry.category === 'blocked');
   const entries = allEntries.filter(entry => entry.category !== 'blocked');
   if (receipt.offline) {
     // Computed, never hard-coded: a leak must show up as a non-zero count.
-    const external = entries.filter(entry => entry.category !== 'permission').length;
+    const external = entries.filter(entry => !['permission', 'locked'].includes(entry.category)).length;
     const blockedCount = blockedEntries.reduce((total, entry) => total + (Number(entry.count) || 1), 0);
     const head = [`Offline: ${external} external request${external === 1 ? '' : 's'}`];
     if (blockedCount > 0) head.push(`${blockedCount} blocked (offline mode)`);
@@ -275,7 +278,8 @@ function addEntry(receiptId, details = {}) {
     return addBlocked(target, details);
   }
   const topic = category === 'sensitive' ? safeString(details.topic, 160) : '';
-  const url = category === 'sensitive' ? originOnly(details.url) : cleanUrl(details.url);
+  // Refused requests keep the origin only: the path or query can hold the question.
+  const url = ['sensitive', 'locked'].includes(category) ? originOnly(details.url) : cleanUrl(details.url);
   const entry = {
     timestamp: timestamp(),
     category,
@@ -283,7 +287,11 @@ function addEntry(receiptId, details = {}) {
     host: hostFromUrl(url),
     url,
     ...(category === 'sensitive' ? { topic } : {}),
-    whatWasSent: category === 'sensitive' ? `blocked (sensitive topic: ${topic}) – nothing sent` : safeString(details.whatWasSent || 'request metadata only; no request body logged', 500)
+    whatWasSent: category === 'sensitive'
+      ? `blocked (sensitive topic: ${topic}) – nothing sent`
+      : category === 'locked'
+        ? LOCKED_WHAT_WAS_SENT
+        : safeString(details.whatWasSent || 'request metadata only; no request body logged', 500)
   };
   target.entries.push(entry);
   if (target.entries.length > MAX_ENTRIES_PER_RECEIPT) {
@@ -427,6 +435,17 @@ function recordSearxngForwarding(receiptId, { url = '', engines = [] } = {}) {
   return sanitizeReceipt(target);
 }
 
+// Short, query-free description of why a request failed.
+function failureReason(error) {
+  const text = `${error?.code || ''} ${error?.cause?.code || ''} ${error?.name || ''} ${error?.message || ''}`;
+  if (/ECONNREFUSED|ERR_CONNECTION_REFUSED|connection refused/i.test(text)) return 'connection refused';
+  if (/ETIMEDOUT|TIMED_OUT|AbortError|timeout|timed out/i.test(text)) return 'timed out';
+  if (/ENOTFOUND|ERR_NAME_NOT_RESOLVED|EAI_AGAIN/i.test(text)) return 'address not found';
+  if (/ECONNRESET|ERR_CONNECTION_RESET/i.test(text)) return 'connection reset';
+  return 'network error';
+}
+
+// Records the attempt before the request, then its outcome: "sent" or "attempted, failed: …".
 async function fetchWithReceipt(fetchImpl, receiptId, url, options = {}, details = {}) {
   addEntry(receiptId, {
     category: details.category,
@@ -434,7 +453,23 @@ async function fetchWithReceipt(fetchImpl, receiptId, url, options = {}, details
     url,
     whatWasSent: details.whatWasSent
   });
-  return fetchImpl(url, options);
+  const target = getReceipt(safeString(receiptId, 100)) || receipts[0];
+  const entry = target?.entries[target.entries.length - 1];
+  const settle = outcome => {
+    if (!entry) return;
+    entry.outcome = outcome;
+    target.updatedAt = timestamp();
+    target.summary = buildSummary(target);
+    notify(target);
+  };
+  try {
+    const response = await fetchImpl(url, options);
+    settle('sent');
+    return response;
+  } catch (error) {
+    settle(`attempted, failed: ${failureReason(error)}`);
+    throw error;
+  }
 }
 
 function getLatestReceipt() {

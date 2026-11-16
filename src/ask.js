@@ -17,9 +17,13 @@ const exportMarkdownButton = document.querySelector('#export-md');
 const exportPdfButton = document.querySelector('#export-pdf');
 const newChatButton = document.querySelector('#new-chat');
 const webToggle = document.querySelector('#web-toggle');
+const webCrisisNote = document.querySelector('#web-crisis-note');
+const webCrisisNewChat = document.querySelector('#web-crisis-new-chat');
 const webOfflineNote = document.querySelector('#web-offline-note');
 const MODEL_OFFLINE_TEXT = "The AI model isn't on this computer yet. Offline mode is on, so it can't be downloaded. Switch to Online to download it (about 705 MB); you can turn Offline back on afterwards.";
 const MEDIA_OFFLINE_TEXT = 'Image search needs Online mode. Switch to Online in the toolbar to search the web for images.';
+const SEARCH_UNREACHABLE_TEXT = "Couldn't reach the search service.";
+const SEARCH_UNREACHABLE = /ERR_CONNECTION_REFUSED|ECONNREFUSED|ERR_CONNECTION_RESET|ECONNRESET|ETIMEDOUT|ERR_TIMED_OUT|timed out|did not respond|ENOTFOUND|ERR_NAME_NOT_RESOLVED|fetch failed|ERR_ADDRESS_UNREACHABLE|ERR_INTERNET_DISCONNECTED/i;
 const OFFLINE_STOP_TEXT = 'Offline mode turned on, so the web search was stopped. Ask again to answer from your files and open pages.';
 let networkOffline = false;
 let offlineInterrupted = false;
@@ -46,6 +50,7 @@ const privacyReceiptHistory = document.querySelector('#privacy-receipt-history')
 const privacyExportJsonButton = document.querySelector('#privacy-export-json');
 
 const CHAT_SYSTEM_PROMPT = window.SovereignChatPrompt.CHAT_SYSTEM_PROMPT;
+const CRISIS_FOLLOWUP_RULE = window.SovereignChatPrompt.CRISIS_FOLLOWUP_RULE;
 
 let messages = [];
 let running = false;
@@ -227,7 +232,8 @@ function renderPrivacyReceipt(receipt) {
     const host = document.createElement('td');
     host.textContent = entry.host || 'unknown';
     const sent = document.createElement('td');
-    sent.textContent = entry.whatWasSent || 'request metadata only';
+    // Outcome is "sent" or "attempted, failed: …"; failed attempts stay visible.
+    sent.textContent = (entry.whatWasSent || 'request metadata only') + (entry.outcome ? ` – ${entry.outcome}` : '');
     row.append(category, host, sent);
     privacyReceiptRows.append(row);
   }
@@ -326,6 +332,8 @@ function setRunning(nextRunning) {
   stopButton.disabled = !running;
   chatInput.disabled = running;
   webToggle.disabled = running || networkOffline || crisisConversation;
+  webCrisisNote.hidden = !crisisConversation;
+  webCrisisNewChat.disabled = running;
   attachmentInput.disabled = running;
   chatThread.querySelectorAll('.chat-inline-action').forEach(button => {
     button.disabled = running || (networkOffline && button.dataset.needsWeb === '1');
@@ -770,13 +778,26 @@ function renderMessage(message) {
   }
   renderSources(body, message.sources || []);
   renderMediaCards(body, message);
-  if (message.sensitive) window.SovereignSensitiveUI.render(body, {
+  if (message.sensitive && crisisConversation) {
+    const guard = window.SovereignSensitiveGuard;
+    const notice = document.createElement('section'); notice.className = 'sensitive-notice';
+    for (const text of [guard.notSentSentence(message.sensitive.categories, message.sensitive.modelFlag),
+      message.sensitive.categories.includes('self-harm') ? guard.CRISIS_SHORT_LINE : '',
+      message.sensitive.categories.includes('abuse') ? guard.ABUSE_RESOURCES : ''].filter(Boolean)) {
+      const line = document.createElement('p'); line.textContent = text; notice.append(line);
+    }
+    body.prepend(notice);
+  }
+  if (message.sensitive && !crisisConversation) window.SovereignSensitiveUI.render(body, {
     question: message.sensitiveQuestion, result: message.sensitive,
     disabled: running || networkOffline || crisisConversation,
     onCrisis: result => {
       crisisConversation = true; webToggle.checked = false; webToggle.disabled = true;
+      webCrisisNote.hidden = false;
       pendingQuestion = ''; pendingWebEnabled = false;
       requireSaveConsent(result);
+      // Tell main too, so its per-chat lock holds even if this page state is lost.
+      window.sovereign.privacy.startActivity({ requestId: messageId(), type: 'ask', chatId, crisis: true, query: '', localOnly: true }).catch(() => {});
       const reply = window.SovereignSensitiveGuard.crisisReply(result);
       if (!messages.some(item => item.content === reply)) messages.push({ id: messageId(), role: 'assistant', content: reply, note: 'Web search is off for this conversation.' });
       // Do not rebuild the editor while the user is typing.
@@ -824,6 +845,7 @@ function shouldAutoScroll() {
 }
 
 function renderThread(options = {}) {
+  webCrisisNote.hidden = !crisisConversation;
   const autoScroll = options.forceScroll || shouldAutoScroll();
   document.body.classList.toggle('ask-has-messages', messages.length > 0);
   chatThread.replaceChildren();
@@ -1763,6 +1785,7 @@ async function persistCurrentChat() {
   const entry = {
     id: chatId,
     saveConsent,
+    webLocked: crisisConversation,
     title: String(title).slice(0, 120),
     updatedAt: now,
     messages: messages.slice(-40).map(savedMessage)
@@ -1850,8 +1873,10 @@ function renderChatHistory() {
       saveConsent = chat.saveConsent === true ? true : undefined;
       consentHadSavedCopy = false;
       webToggle.checked = false;
-      crisisConversation = restored.some(message => [window.SovereignSensitiveGuard.CRISIS_REPLY, window.SovereignSensitiveGuard.HARM_REPLY].includes(message.content));
+      // The stored flag is the source of truth; the reply-text match covers chats saved before it existed.
+      crisisConversation = chat.webLocked === true || restored.some(message => [window.SovereignSensitiveGuard.CRISIS_REPLY, window.SovereignSensitiveGuard.HARM_REPLY].includes(message.content));
       webToggle.disabled = networkOffline || crisisConversation;
+      webCrisisNote.hidden = !crisisConversation;
       messages = restored;
       chatHistoryExpanded = null;
       mediaTurns = restored.filter(message => message.action?.type === 'answer-text' && message.mediaResults?.length).slice(-8).map(message => ({
@@ -2038,10 +2063,21 @@ function directMessages(question, attachmentSources = []) {
   const history = priorConversationContext(question, 8);
   const userContent = attachmentPrompt(question, attachmentSources);
   return [
-    { role: 'system', content: CHAT_SYSTEM_PROMPT },
+    { role: 'system', content: CHAT_SYSTEM_PROMPT + (crisisConversation ? ' ' + CRISIS_FOLLOWUP_RULE : '') },
     ...history,
     { role: 'user', content: userContent }
   ];
+}
+
+function safeStreamingReply(text) {
+  // Hold unfinished code and the unfinished sentence/line until more tokens arrive.
+  let end = 0;
+  const tokens = /```[\s\S]*?(?:```|$)|`[^`\n]*(?:`|$)|[.!?]+(?=\s)|\n/g;
+  for (const match of text.matchAll(tokens)) {
+    if (match[0].startsWith('`')) continue;
+    end = match.index + match[0].length;
+  }
+  return window.SovereignSensitiveGuard.sanitizeModelReply(text.slice(0, end)).text;
 }
 
 async function streamLocalAnswer(question, assistantId) {
@@ -2053,14 +2089,18 @@ async function streamLocalAnswer(question, assistantId) {
       note: 'Using temporary uploaded-file excerpts. File contents are parsed locally and treated as untrusted source material.'
     });
   }
-  setStatus('Generating locally...');
+  setStatus(crisisConversation ? 'Writing a reply…' : 'Generating locally...');
   const messagesForModel = directMessages(question, attachmentSources);
   lastModelMessages = messagesForModel;
   if (sensitiveModelPending) await sensitiveModelPending;
   await getEngineApi().summarize(messagesForModel, chunk => {
     output += chunk;
-    updateAssistant(assistantId, { content: output, sources: attachmentSources });
+    if (!crisisConversation) updateAssistant(assistantId, { content: safeStreamingReply(output), sources: attachmentSources });
   });
+  output = window.SovereignSensitiveGuard.sanitizeModelReply(output).text;
+  if (crisisConversation && (!output.trim() || window.SovereignSensitiveGuard.isRejectingReply(output))) {
+    output = window.SovereignSensitiveGuard.FOLLOWUP_REPLY;
+  }
   updateAssistant(assistantId, {
     content: output.trim() || 'I could not produce an answer.',
     sources: attachmentSources
@@ -2071,7 +2111,23 @@ async function streamLocalAnswer(question, assistantId) {
   setStatus('Answer generated locally.');
 }
 
+// Checked again right before every search call. runWeb is the decision made once at the start
+// of this answer (toggle on, not Offline, chat not locked); the lock and Offline mode are read
+// live, so a chat that gets locked mid-answer never searches. The checkbox is not re-read here:
+// unrelated UI resets (seeded questions, hand-offs) can untick it while a search is starting.
+function webAllowedNow(runWeb) {
+  return Boolean(runWeb) && !crisisConversation && !networkOffline;
+}
+
+// Main refused because this chat is locked: lock the page too and answer locally.
+function applyMainLock() {
+  crisisConversation = true;
+  webToggle.checked = false;
+  webCrisisNote.hidden = false;
+}
+
 async function streamWebAnswer(question, assistantId, options = {}) {
+  if (!webAllowedNow(options.useWeb)) { await streamLocalAnswer(question, assistantId); return; }
   const searchUtils = getSearchUtils();
   currentRequestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   selectPrivacyReceiptForActivity(currentRequestId);
@@ -2084,6 +2140,7 @@ async function streamWebAnswer(question, assistantId, options = {}) {
     endpoint: searchSettings.settings.endpoint
   });
 
+  if (response.locked) { applyMainLock(); await streamLocalAnswer(question, assistantId); return; }
   if (response.sensitive) { await showSensitiveAnswer(question, assistantId, response); return; }
   if (!response.results || response.results.length === 0) {
     updateAssistant(assistantId, {
@@ -2094,6 +2151,7 @@ async function streamWebAnswer(question, assistantId, options = {}) {
     return;
   }
 
+  if (!webAllowedNow(options.useWeb)) { await streamLocalAnswer(question, assistantId); return; }
   setStatus('Reading source pages...');
   const sourceBundle = await window.sovereign.search.readSources({
     requestId: currentRequestId,
@@ -2101,6 +2159,7 @@ async function streamWebAnswer(question, assistantId, options = {}) {
     question,
     results: response.results
   });
+  if (sourceBundle?.locked) { applyMainLock(); await streamLocalAnswer(question, assistantId); return; }
   const evidenceResults = evidenceResultsForSources(response.results, sourceBundle.sources);
   updateAssistant(assistantId, { sources: evidenceResults });
 
@@ -2114,7 +2173,7 @@ async function streamWebAnswer(question, assistantId, options = {}) {
   if (sensitiveModelPending) await sensitiveModelPending;
   await getEngineApi().summarize(messagesForModel, chunk => {
     output += chunk;
-    updateAssistant(assistantId, { content: output, sources: evidenceResults });
+    updateAssistant(assistantId, { content: safeStreamingReply(output), sources: evidenceResults });
   });
 
   const finalResult = typeof searchUtils.finalizeSearchAnswerWithMeta === 'function'
@@ -2127,7 +2186,7 @@ async function streamWebAnswer(question, assistantId, options = {}) {
       };
 
   updateAssistant(assistantId, {
-    content: finalResult.answer,
+    content: window.SovereignSensitiveGuard.sanitizeModelReply(finalResult.answer).text,
     sources: evidenceResults,
     note: finalResult.outcome === 'ai-generated'
       ? ''
@@ -2214,6 +2273,10 @@ async function runInlineMediaSearch(message) {
 }
 
 async function streamMediaAnswer(question, assistantId, options = {}) {
+  if (!webAllowedNow(options.useWeb)) {
+    updateAssistant(assistantId, { content: 'Web search is off for this conversation, so I can’t search for images here.', action: null, note: '' });
+    return;
+  }
   const type = window.SovereignMediaIntent.mediaTypeForQuestion(question);
   const query = options.override ? question : window.SovereignMediaIntent.mediaQueryForQuestion(question);
   currentRequestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -2237,6 +2300,11 @@ async function streamMediaAnswer(question, assistantId, options = {}) {
       throw new Error('SearXNG did not respond within 8 seconds. Try again.');
     }
     throw error;
+  }
+  if (response.locked) {
+    applyMainLock();
+    updateAssistant(assistantId, { content: 'Web search is off for this conversation, so I can’t search for images here.', action: null, note: '' });
+    return;
   }
   if (response.sensitive) { await showSensitiveAnswer(question, assistantId, response, true); return; }
   const results = await validatedMediaResults(response.results, type);
@@ -2377,7 +2445,7 @@ async function answerQuestion(question, options = {}) {
     await startLocalAskReceipt('', true);
     setRunning(false); persistCurrentChat(); renderThread(); return;
   }
-  if (!useWeb && classification.categories.includes('abuse')) {
+  if (!useWeb && (classification.categories.includes('abuse') || (crisisConversation && classification.level === 'sensitive'))) {
     await startLocalAskReceipt('');
     const id = messageId(); messages.push({ id, role: 'assistant', content: '' });
     await showSensitiveAnswer(question, id, classification);
@@ -2388,9 +2456,10 @@ async function answerQuestion(question, options = {}) {
       privacySettings = await window.sovereign.privacy.getSettings();
       const checked = guard.classifyQuestion(question, { strictness: privacySettings.sensitiveTopics });
       options.modelFlag = checked.level === 'none' && !options.override ? await strictModelFlag(question) : '';
-      if (!options.override && (checked.level === 'sensitive' || options.modelFlag)) {
+      if (webAllowedNow(useWeb) && !options.override && (checked.level === 'sensitive' || options.modelFlag)) {
         // Ask main to enforce and record the refusal before model readiness or any fetch.
         const result = await window.sovereign.search.query({ requestId: messageId(), query: question, chatId, modelFlag: options.modelFlag });
+        if (result.locked) applyMainLock();
         if (result.sensitive) {
           const id = messageId(); messages.push({ id, role: 'assistant', content: '' });
           await showSensitiveAnswer(question, id, result, useMedia);
@@ -2457,10 +2526,10 @@ async function answerQuestion(question, options = {}) {
         });
         setStatus('Enable web search to find media.', true);
       } else {
-        await streamMediaAnswer(question, assistantId, options);
+        await streamMediaAnswer(question, assistantId, { ...options, useWeb });
       }
     } else {
-      if (useWeb) await streamWebAnswer(question, assistantId, options);
+      if (useWeb) await streamWebAnswer(question, assistantId, { ...options, useWeb });
       else await streamLocalAnswer(question, assistantId);
       if (!window.SovereignMediaIntent.isMediaRequest(question) && window.SovereignMediaIntent.mentionsMedia(question)) {
         updateAssistant(assistantId, {
@@ -2472,6 +2541,12 @@ async function answerQuestion(question, options = {}) {
     if (offlineInterrupted || /Offline mode is on/.test(error?.message || '')) {
       updateAssistant(assistantId, { content: OFFLINE_STOP_TEXT, action: null, note: '' });
       setStatus(OFFLINE_STOP_TEXT, true);
+      return;
+    }
+    if (useWeb && SEARCH_UNREACHABLE.test(error?.message || '')) {
+      // Never show raw IPC/network text for a search failure.
+      updateAssistant(assistantId, { content: SEARCH_UNREACHABLE_TEXT, action: null, note: '' });
+      setStatus(SEARCH_UNREACHABLE_TEXT, true);
       return;
     }
     const canceled = error?.name === 'AbortError' || /canceled|cancelled|aborted|interrupt/i.test(error?.message || '');
@@ -2862,6 +2937,7 @@ copyButton.addEventListener('click', copyLastAnswer);
 exportMarkdownButton.addEventListener('click', () => exportLastAnswer('markdown'));
 exportPdfButton.addEventListener('click', () => exportLastAnswer('pdf'));
 newChatButton.addEventListener('click', newChat);
+webCrisisNewChat.addEventListener('click', newChat);
 attachmentInput.addEventListener('change', () => {
   addFiles(attachmentInput.files).catch(error => setStatus(error.message, true));
 });

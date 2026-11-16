@@ -254,3 +254,12 @@ console.log('chat-store tests passed');
   if (typeof value === 'boolean' ? clean.saveConsent !== value : Object.hasOwn(clean,'saveConsent')) { console.error('C1'); process.exit(1); }
  }
 }
+
+// Task 1c Round 6: the per-chat web lock is stored only as an explicit true.
+{
+ const {sanitizeChat} = require('../src/chat-store');
+ for (const value of [true,false,'true',1,null,undefined]) {
+  const clean = sanitizeChat({id:'lock-fixture',messages:[],webLocked:value});
+  if (value === true ? clean.webLocked !== true : Object.hasOwn(clean,'webLocked')) { console.error('C2'); process.exit(1); }
+ }
+}
