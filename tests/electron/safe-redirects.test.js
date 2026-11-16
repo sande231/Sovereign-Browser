@@ -46,7 +46,7 @@ async function main() {
   const origin = `http://public.test:${server.address().port}`;
   const invoke = (method, input) => ask.executeJavaScript(`window.sovereign.${method}(${JSON.stringify(input)})`, true);
   await invoke('search.updateSettings', { endpoint: `http://127.0.0.1:${server.address().port}/search` });
-  await invoke('search.media', { requestId: 'safe-images', query: 'redirect image', type: 'images' });
+  await invoke('search.media', { requestId: 'safe-images', chatId: 'safe-redirects-chat', query: 'redirect image', type: 'images' });
   await assert.rejects(invoke('media.preflight', { url: `${origin}/redirect-to-loopback` }), /private-network/);
   assert.equal(secret, 0);
   await invoke('privacy.startActivity', { requestId: 'safe-images', type: 'ask', query: 'images' });
@@ -56,8 +56,8 @@ async function main() {
   let entries = receipts.flatMap(r => r.entries);
   assert(entries.some(e => e.host.startsWith('public.test:') && e.category === 'image'));
   assert(entries.some(e => e.host.startsWith('public2.test:') && e.whatWasSent.includes('redirect from public.test')));
-  await invoke('search.query', { requestId: 'safe-sources', query: 'HTTP redirect history' });
-  const sources = await invoke('search.readSources', { requestId: 'safe-sources', question: 'HTTP redirect history', results: [{ url: `${origin}/article`, title: 'History', snippet: 'fallback' }] });
+  await invoke('search.query', { requestId: 'safe-sources', chatId: 'safe-redirects-chat', query: 'HTTP redirect history' });
+  const sources = await invoke('search.readSources', { requestId: 'safe-sources', chatId: 'safe-redirects-chat', question: 'HTTP redirect history', results: [{ url: `${origin}/article`, title: 'History', snippet: 'fallback' }] });
   assert.equal(sources.sources[0].evidenceMode, 'page');
   receipts = await invoke('privacy.getReceipts');
   entries = receipts.flatMap(r => r.entries).filter(e => e.category === 'source-page');

@@ -4920,6 +4920,7 @@ ipcMain.handle('privacy:start-activity', (event, request) => {
     chatId: input.chatId,
     crisis: input.crisis === true
   });
+  if (input.crisis === true) lockChat(input.chatId);
   assignPrivacyReceiptToSender(event.sender, receipt.id);
   if (input.purpose === 'saved-chat-media' && Array.isArray(input.thumbnailUrls)) {
     const saved = chatStore().list().find(chat => chat.id === input.chatId);
@@ -5059,6 +5060,46 @@ function requireAllowedMedia(sender, url) {
   const grant = allowedMediaUrls.get(urlKey(url, String(sender.id)));
   if (!grant || grant.expires <= Date.now()) throw new Error('Media request requires an allowed search.');
 }
+// Web search lock per chat (docs/HANDOFF.md, Task 1c Round 6). A chat that showed a crisis-level
+// reply never searches again. Main enforces it, so a page bug can't send the question anyway.
+const lockedChatIds = new Set();
+const FIXED_CRISIS_REPLIES = () => [sensitiveGuard.CRISIS_REPLY, sensitiveGuard.HARM_REPLY];
+
+function lockChat(chatId) {
+  const id = String(chatId || '').slice(0, 100);
+  if (id) lockedChatIds.add(id);
+}
+
+function chatIsLocked(chatId) {
+  const id = String(chatId || '').slice(0, 100);
+  if (!id) return false;
+  if (lockedChatIds.has(id)) return true;
+  try {
+    const saved = chatStore().list().find(chat => chat.id === id);
+    if (saved && (saved.webLocked === true || saved.messages.some(message => FIXED_CRISIS_REPLIES().includes(message.content)))) {
+      lockedChatIds.add(id);
+      return true;
+    }
+  } catch {
+    // An unreadable chat file can't unlock anything; the in-memory set still applies.
+  }
+  return false;
+}
+
+// Ask AI must name its chat, and a locked chat is refused before any network work.
+// Returns a refusal object, or null when the request may continue.
+function refuseLockedChat(sender, tab, input, url) {
+  const fromDataset = datasetWindow && sender === datasetWindow.webContents;
+  if (tab?.kind !== 'ask' || fromDataset) return null;
+  const chatId = typeof input.chatId === 'string' ? input.chatId.slice(0, 100) : '';
+  if (!chatId) throw new Error('Ask AI web requests must name their chat.');
+  if (!chatIsLocked(chatId)) return null;
+  const receipt = privacyReceipts.createReceipt({ type: 'ask', label: 'Web search off', query: '', chatId, localOnly: true });
+  privacyReceipts.addEntry(receipt.id, { category: 'locked', url: url || searchSettings.endpoint });
+  assignPrivacyReceiptToSender(sender, receipt.id);
+  return { ok: false, locked: true };
+}
+
 function sensitiveGate(sender, text, options = {}) {
   const result = sensitiveGuard.classifyQuestion(text, { strictness: privacySettings.sensitiveTopics });
   if (options.crisisOnly && result.level !== 'crisis') return { ok: true };
@@ -5068,6 +5109,7 @@ function sensitiveGate(sender, text, options = {}) {
     result.categories = Object.keys(sensitiveGuard.LABELS).filter(category => category === modelFlag || result.categories.includes(category));
   }
   const query = options.override === true ? sensitiveGuard.removeIdentifiers(text).text : String(text || '').replace(/\s+/g, ' ').trim();
+  if (result.level === 'crisis') lockChat(options.chatId);
   if (result.level === 'crisis' || (result.level === 'sensitive' && options.override !== true)) {
     // Do not reuse caller ids: an earlier receipt may already contain query text.
     const receipt = privacyReceipts.createReceipt({ type: findTabBySender(sender).tab?.kind === 'search' ? 'search' : 'ask', label: 'Sensitive topic', query: '', chatId: options.chatId, crisis: result.level === 'crisis', localOnly: true });
@@ -5092,6 +5134,8 @@ async function handleSearchQuery(event, request) {
   const input = request && typeof request === 'object' ? request : {};
   const crisis = sensitiveGate(event.sender, input.query, { ...input, crisisOnly: true });
   if (!crisis.ok) return crisis;
+  const locked = refuseLockedChat(event.sender, tab, input, input.endpoint || searchSettings.endpoint);
+  if (locked) return locked;
   const requestId = String(input.requestId || '').slice(0, 80);
   if (!requestId) {
     throw new Error('Search request is missing an id.');
@@ -5164,6 +5208,8 @@ async function handleMediaSearch(event, request) {
   const input = request && typeof request === 'object' ? request : {};
   const crisis = sensitiveGate(event.sender, input.query, { ...input, crisisOnly: true });
   if (!crisis.ok) return crisis;
+  const locked = refuseLockedChat(event.sender, tab, input, input.endpoint || searchSettings.endpoint);
+  if (locked) return locked;
   refuseWebWhileOffline(event.sender, searchSettings.endpoint);
   const requestId = String(input.requestId || '').slice(0, 80);
   if (!requestId) {
@@ -5329,6 +5375,8 @@ async function handleReadSources(event, request) {
   const input = request && typeof request === 'object' ? request : {};
   const crisis = sensitiveGate(event.sender, input.question, { ...input, crisisOnly: true });
   if (!crisis.ok) return crisis;
+  const locked = refuseLockedChat(event.sender, tab, input, '');
+  if (locked) return locked;
   refuseWebWhileOffline(event.sender, '');
   const requestId = String(input.requestId || '').slice(0, 80);
   if (!requestId) {
@@ -5678,6 +5726,7 @@ ipcMain.handle('chats:save', (event, chat) => {
     return result.level === 'crisis' || result.categories.includes('harm-to-others') || result.categories.includes('abuse');
   });
   if ((needsConsent || pendingChatConsents.has(chat?.id)) && chat?.saveConsent !== true) return { ok: false, needsConsent: true };
+  if (chat?.webLocked === true || (Array.isArray(chat?.messages) && chat.messages.some(message => FIXED_CRISIS_REPLIES().includes(message?.content)))) lockChat(chat.id);
   chatStore().save(chat);
   if (chat?.saveConsent === true) pendingChatConsents.delete(chat.id);
   return broadcastSavedChats();

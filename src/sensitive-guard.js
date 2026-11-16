@@ -10,6 +10,51 @@
   ];
   const CRISIS_REPLY = "I'm really sorry you're feeling this way. You don't have to go through this alone, and you deserve support right now.\n\nPlease reach out now:\n" + CRISIS_RESOURCES.map(item => '• ' + item.text).join('\n') + "\n\nIf you can, tell someone you trust how you're feeling, today.\n\nYou can keep writing here if it helps, and please reach out to one of the people above too.";
   const CRISIS_SHORT_LINE = 'If this is about you or someone close to you, please reach out now: ' + CRISIS_RESOURCES.map(item => item.short).join('; ') + '.';
+  const FOLLOWUP_REPLY = "I'm still here, and I'm glad you're talking to me. We can keep chatting about whatever is on your mind.\n\nIf things feel hard right now or anyone might be in danger, please reach out: " + CRISIS_RESOURCES.map(item => item.short).join('; ') + '.';
+  function foldCrisisQuotes(text) {
+    return String(text || '').toLowerCase().replace(/[’‘‛ʼ′"“”]/g, "'").replace(/\s+/g, ' ').trim();
+  }
+  function isRejectingReply(text) {
+    return /\b(?:not interested|(?:don't|do not) want to (?:talk|chat)|(?:can't|cannot|won't) (?:chat|talk to you)|not going to talk|stop talking to me|leave me alone|end this conversation|trusted adult|not going to engage|(?:won't|will not|can't|cannot|not able to) engage|(?:can't|cannot) continue (?:this|our) conversation|i (?:cannot|can't) provide a response|(?:might|could) be triggering|triggering or distressing|(?:triggering|distressing) for you)\b/.test(foldCrisisQuotes(text));
+  }
+  function sanitizeModelReply(text) {
+    const original = String(text || '');
+    // Protect code before sentence splitting, including punctuation and numbers in it.
+    const code = [];
+    const masked = original.replace(/```[\s\S]*?(?:```|$)|`[^`\n]*`/g, value => {
+      code.push(value); return `\uE000${code.length - 1}\uE001`;
+    });
+    const unsafe = value => {
+      if (removeIdentifiers(value).removed.phone || /samaritans|lifeline|hotline|helpline/i.test(value)) return true;
+      const words = value.toLowerCase().match(/[a-z0-9]+(?:,[0-9]+)*/g) || [];
+      return words.some((word, i) => /^(988|911|999|000|112)$/.test(word) && words.some((other, j) =>
+        Math.abs(i - j) <= 7 && /^(call|dial|text|phone|emergency|crisis|police|ambulance|number|line)$/.test(other)));
+    };
+    let removed = false;
+    const kept = masked.split(/(\n)/).map(line => {
+      // A list item is a unit even when it contains multiple sentences.
+      if (/^\s*(?:[-*•]|\d+[.)])\s/.test(line) && unsafe(line)) { removed = true; return ''; }
+      // A dot inside a phone number or decimal is not a sentence boundary.
+      return (line.match(/[^.!?]*[.!?]+(?=\s|$)|[\s\S]+$/g) || []).filter(sentence => {
+        if (!unsafe(sentence)) return true;
+        removed = true; return false;
+      }).join('');
+    }).join('').replace(/\uE000(\d+)\uE001/g, (_, i) => code[Number(i)]);
+    return { text: removed ? [kept.trim(), CRISIS_SHORT_LINE].filter(Boolean).join('\n\n') : original, removed };
+  }
+  function normalizeCrisisText(text) {
+    const substitutions = { '1': 'i', '0': 'o', '3': 'e', '4': 'a', '5': 's', '@': 'a', '$': 's' };
+    return foldCrisisQuotes(text)
+      .replace(/[a-z0-9@$]+/g, token => /[a-z]/.test(token) ? token.replace(/[10345@$]/g, char => substitutions[char]) : token)
+      .replace(/([a-z])\1{2,}/g, '$1$1')
+      .replace(/\b(?:shool|scool|skool|schol|shcool|scohol)\b/g, 'school')
+      .replace(/\b(?:kil|kll|kiil)\b/g, 'kill')
+      .replace(/\b(?:suiside|suicde|sucide|suicid|suicied)\b/g, 'suicide')
+      .replace(/\b(?:myslef|mysef|my self)\b/g, 'myself')
+      .replace(/\bshoo\b/g, 'shoot')
+      .replace(/\b(?:posion|poisen)\b/g, 'poison')
+      .replace(/\b(?:murdr|muder)\b/g, 'murder');
+  }
   // Last verified: pending human verification by Sandeep before release.
   const HARM_RESOURCES = [
     'If anyone is in danger right now, call your local emergency number.',
@@ -56,14 +101,22 @@
     remove(/\b\d{1,6}\s+(?:[A-Za-z][A-Za-z'-]*\s+){1,4}(?:St(?:reet)?|Ave(?:nue)?|Rd|Road|Blvd|Lane|Ln|Dr(?:ive)?|Court|Ct|Way|Place|Pl|Terrace)\b\.?/gi, 'address');
     return { text: text.replace(/\s+/g, ' ').trim(), removed };
   }
+  // Resolve injection meaning within a sentence before matching violent "shoot up".
+  function isInjectionSentence(text) {
+    return /\b(?:shoot|shot) up\b/.test(text) && (
+      /\b(?:shoot|shot) up (?:(?:my |the |a |our |this )?(?:heroin|meth|drugs|dope|fentanyl|insulin|steroids|coke|it)|(?:in (?:my |the |a )?|my )(?:arm|leg|vein|neck|foot)|safely|too much)\b/.test(text)
+      || /\b(?:where|how) to (?:shoot|shot) up\b/.test(text)
+      || /\b(?:needles?|syringes?|veins?|overdose|od)\b/.test(text)
+    );
+  }
   function classifyQuestion(value, { strictness = 'strict' } = {}) {
     const original = String(value || '');
     let text = original.toLowerCase().replace(/’/g, "'").replace(/\s+/g, ' ').trim();
     text = text.replace(/^(?:(?:can you|please|tell me|show me|help me understand|explain)\s+)+/, '');
-    // Keep broader quote normalisation local to crisis detection.
-    const crisisText = original.toLowerCase().replace(/[’‘‛ʼ′"“”]/g, "'").replace(/\s+/g, ' ').trim();
+    // Share broader normalisation only between crisis and general self-harm checks.
+    const crisisText = normalizeCrisisText(original);
     const crisisForms = [crisisText, crisisText.replace(/'/g, '')];
-    const crisisPattern = /\b(?:i want to (?:die|kill myself|commit suicide)|i(?:'m|m| am| feel)(?: feeling)? (?:suicidal|sucidal|suicidle)|i(?:'m|m| am)? thinking about (?:killing myself|suicide)|end it all|no reason to live|want to disappear forever|kill myself|end my life|don'?t want to (?:live|be here anymore)|better off dead|hurt(?:ing)? myself|cut(?:ting)? myself|how many pills.{0,30}overdose|lethal dose|painless way to die|how to hang (?:myself|yourself|oneself|(?:a )?noose)|how to commit suicide)\b/;
+    const crisisPattern = /\b(?:i want to (?:die|kill myself|commit suicide)|i(?:'m|m| am| feel)(?: feeling)? (?:suicidal|sucidal|suicidle)|feeling (?:suicidal|sucidal|suicidle)|(?:i(?:'m|m| am)? )?thinking about (?:killing myself|suicide)|end it all|no reason to live|want to disappear forever|kill myself|end my life|don'?t want to (?:live|be here anymore)|better off dead|hurt(?:ing)? myself|cut(?:ting)? myself|how many pills.{0,30}overdose|how much [^.!?]{0,60}overdose and die|lethal dose|painless way to die|how to hang (?:myself|yourself|oneself|(?:a )?noose)|how to commit suicide)\b/;
     const crisisKms = [...crisisText.matchAll(/\bkms\b/g)].some(match => {
       // In the explicitly requested "want to kms", "to" is not a distance word.
       const before = crisisText.slice(0, match.index).replace(/\bwant to\s*$/, 'want ');
@@ -74,20 +127,24 @@
     });
     if (crisisForms.some(candidate => crisisPattern.test(candidate)) || crisisKms) return { level: 'crisis', categories: ['self-harm'] };
     // Self-harm above always wins. Remove only entertainment phrases, not the whole question.
-    const harmText = crisisForms[1].replace(/\bhow to get away with murder\s+(?:cast|season|episode|show)\b/g, '').replace(/\bmurder mystery\b/g, '');
+    const injectionSentences = text.split(/[.!?;\n]+/).filter(isInjectionSentence);
+    const harmText = crisisForms[1].split(/([.!?;\n]+)/).map(sentence => isInjectionSentence(sentence) ? sentence.replace(/\b(?:shoot|shot) up\b/g, 'inject') : sentence).join('').replace(/\bhow to get away with murder\s+(?:cast|season|episode|show)\b/g, '').replace(/\bmurder mystery\b/g, '');
     const target = '(?:someone|somebody|a person|him|her|them|people|my (?:boss|ex|partner|husband|wife|boyfriend|girlfriend|parent|mother|father|mom|dad|brother|sister|son|daughter|friend|neighbor|neighbour|coworker))';
     const place = '(?:(?:my|our|the|a|an) )?(?:school|workplace|office|church|mosque|synagogue|temple|mall|store|restaurant|club|bar|hospital|university|college|classroom|campus|concert|theater|theatre)';
-    const action = '(?:(?:hurt|kill|stab|shoot|beat(?: up)?|poison) '+target+'|beat the (?:crap|hell) out of '+target+'|shoot up '+place+')';
+    const anyPlace = '(?!this year\\b)(?:my|the|a|our|this) (?!heroin\\b|drugs\\b|meaning\\b|slang\\b|insulin\\b|steroids\\b)[a-z]+\\b';
+    const shootPlace = '(?:shoot|shot) up '+anyPlace;
+    const action = '(?:(?:hurt|kill|stab|shoot|beat(?: up)?|poison) '+target+'|beat the (?:crap|hell) out of '+target+'|shoot up '+place+'|'+shootPlace+')';
     const intent = new RegExp('\\b(?:i(?: want to|m going to| am going to| will| could| plan to|m gonna| am gonna)|(?:i )?gonna) '+action+'\\b');
     const planning = new RegExp('\\b(?:how (?:to|do i|can i)|(?:best )?ways? to|help me) '+action+'\\b');
-    if (intent.test(harmText) || planning.test(harmText) || /\b(?:get away with murder|make someone disappear|hurt someone without getting caught)\b/.test(harmText)) return { level: 'crisis', categories: ['harm-to-others'] };
+    if (intent.test(harmText) || planning.test(harmText) || new RegExp('\\b'+shootPlace).test(harmText) || /\b(?:get away with murder|make someone disappear|hurt someone without getting caught)\b/.test(harmText)) return { level: 'crisis', categories: ['harm-to-others'] };
     text = text.replace(/\b(?:economic depression|great depression|depression-era|suicide (?:squad|doors|kings?)|medical (?:school|student|drama)|legal (?:tender|size|pad)|bar exam|bank of (?:a|the) river|kill (?:\w+ ){0,3}(?:process(?:es)?|task|job|server|thread|tab|switch|lights)|execute (?:\w+ ){0,2}(?:script|query)|shoot (?:a )?(?:photo|video))\b/g, '');
     const hits = new Set();
     const identifiers = removeIdentifiers(original);
     const knownNames = new Set(['New York', 'Los Angeles', 'San Francisco', 'Google Chrome', 'Microsoft Windows']);
     const contextualName = [...original.matchAll(/\b[A-Z][a-z]+(?: [A-Z][a-z]+){1,2}\b/g)].some(match => !knownNames.has(match[0])) && /\b(?:address|lives|phone|email|arrested|diagnosed|pregnant|divorce|salary|dating|cheating|criminal record|DUI)\b/i.test(original);
     if (Object.values(identifiers.removed).some(Boolean) || contextualName) hits.add('personal-identifiers');
-    if (/\b(?:suicide|suicidal|self-harm|self-injury)\b/.test(text)) hits.add('self-harm');
+    const selfHarmText = crisisText.replace(/\bsuicide (?:squad|doors|kings?)\b/g, '');
+    if (/\b(?:suicide|suicidal|sucidal|suicidle|self-harm|self-injury)\b/.test(selfHarmText) || injectionSentences.some(sentence => /\b(?:overdose|od|too much)\b/.test(sentence))) hits.add('self-harm');
     const sexualText = text.replace(/\bc\+\+\s+std\b/g, '').replace(/\bstd\s*::/g, '');
     if (/\b(?:sti|std|hiv|herpes|chlamydia|gonorrhea|syphilis|hpv|erectile dysfunction|morning-after pill|abortion pill|pregnancy test)\b/.test(sexualText) || /\bPrEP\b/.test(original)) hits.add('sexual-health');
     // Preserve case for US and remove Roman-numeral contexts before framing.
@@ -107,8 +164,10 @@
     if (personalOrStrict && /\b(?:(?:hits?|beats|hurts|threatens|choked|strangled|slapped|kicked|pushed) me|threatens to hurt me|abusive (?:partner|husband|wife|boyfriend|girlfriend|parent)|domestic violence|(?:scared|afraid) of my (?:partner|husband|wife|boyfriend|girlfriend|parent|mom|dad|mother|father|brother|sister)|child abuse|controls my (?:money|phone))\b/.test(abuseText)) hits.add('abuse');
     const crimeText = text.replace(/\b(?:warrant officers?|crime rates?|true crime|law and order|police academy|court of appeals)\b/g, '');
     if (personalOrStrict && (/\b(?:charged with|warrant|felony|misdemeanor|probation|parole|criminal record|plea deal|public defender|expunge|court date|police (?:questioned|searched|came to))\b/.test(crimeText) || (!contextualName && /\barrested\b/.test(crimeText)))) hits.add('crime');
+    // Place threats and explicit injection cues have already been checked above.
+    if (/\b(?:i(?:'m|m| am) going to|(?:i(?:'m|m| am)? )?gonna|i (?:need to|want to|will)|let me) shoot up\b/.test(text)) hits.add('drugs-alcohol');
     const drugsText = text.replace(/\b(?:how alcohol is made|(?:rubbing|isopropyl) alcohol|weed (?:killer|control)|prohibition|drug store)\b/g, '');
-    if (personalOrStrict && /\b(?:cocaine|heroin|meth|fentanyl|mdma|lsd|ketamine|opioids?|weed|marijuana|cannabis|addicted|addiction|rehab|relapse|withdrawal|sober|sobriety|alcoholic|alcoholism|drinking problem|drink every night|drug test|aa meetings?|substance abuse)\b/.test(drugsText)) hits.add('drugs-alcohol');
+    if (personalOrStrict && (injectionSentences.length > 0 || /\b(?:cocaine|heroin|meth|fentanyl|mdma|lsd|ketamine|opioids?|weed|marijuana|cannabis|addicted|addiction|rehab|relapse|withdrawal|sober|sobriety|alcoholic|alcoholism|drinking problem|drink every night|drug test|aa meetings?|substance abuse)\b/.test(drugsText))) hits.add('drugs-alcohol');
     const reproductiveText = text.replace(/\b(?:pregnant pause|pregnancy test|abortion pill|fertile soil|fertilizer|birth rate|period of \w+)\b/g, '');
     if (personalOrStrict && /\b(?:pregnant|pregnancy|miscarriage|abortion|ivf|fertility|ovulation|birth control|contraception|trying to conceive|period is (?:\w+ ){0,3}late|missed (?:my )?period)\b/.test(reproductiveText)) hits.add('reproductive-health');
     const orientationText = text.replace(/\b(?:trans-siberian|trans fat|queer eye|gay nineties)\b/g, '');
@@ -123,7 +182,7 @@
   function notSentSentence(categories, modelFlag = false) {
     return `I didn't search the web: this ${modelFlag ? 'may be' : 'looks like'} ${/^[aeiou]/i.test(categoryLabels(categories)) ? 'an' : 'a'} ${categoryLabels(categories)} question${modelFlag ? ' (checked by the local AI)' : ''}, so nothing was sent.`;
   }
-  const api = { classifyQuestion, removeIdentifiers, CRISIS_REPLY, CRISIS_SHORT_LINE, CRISIS_RESOURCES, HARM_REPLY, HARM_RESOURCES, ABUSE_RESOURCES, ABUSE_RESOURCE_LIST, crisisReply, LABELS, categoryLabels, notSentSentence };
+  const api = { sanitizeModelReply, isRejectingReply, FOLLOWUP_REPLY, classifyQuestion, removeIdentifiers, CRISIS_REPLY, CRISIS_SHORT_LINE, CRISIS_RESOURCES, HARM_REPLY, HARM_RESOURCES, ABUSE_RESOURCES, ABUSE_RESOURCE_LIST, crisisReply, LABELS, categoryLabels, notSentSentence };
   global.SovereignSensitiveGuard = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

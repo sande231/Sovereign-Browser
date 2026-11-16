@@ -100,7 +100,8 @@ function renderPrivacyReceipt(receipt) {
     const host = document.createElement('td');
     host.textContent = entry.host || 'unknown';
     const sent = document.createElement('td');
-    sent.textContent = entry.whatWasSent || 'request metadata only';
+    // Outcome is "sent" or "attempted, failed: …"; failed attempts stay visible.
+    sent.textContent = (entry.whatWasSent || 'request metadata only') + (entry.outcome ? ` – ${entry.outcome}` : '');
     row.append(category, host, sent);
     privacyReceiptRows.append(row);
   }
@@ -350,7 +351,9 @@ async function runSearch(options = {}) {
     setSearchStatus(response.results.length === 0 ? 'Search completed with no results.' : `Search returned ${response.results.length} result${response.results.length === 1 ? '' : 's'}.`);
   } catch (error) {
     const canceled = error?.name === 'AbortError' || /canceled|cancelled|aborted/i.test(error?.message || '');
-    setSearchStatus(canceled ? 'Search canceled.' : error.message, !canceled);
+    // Never show raw IPC/network text for a search failure.
+    const unreachable = /ERR_CONNECTION_REFUSED|ECONNREFUSED|ERR_CONNECTION_RESET|ECONNRESET|ETIMEDOUT|ERR_TIMED_OUT|timed out|did not respond|ENOTFOUND|ERR_NAME_NOT_RESOLVED|fetch failed|ERR_ADDRESS_UNREACHABLE|ERR_INTERNET_DISCONNECTED/i.test(error?.message || '');
+    setSearchStatus(canceled ? 'Search canceled.' : unreachable ? "Couldn't reach the search service." : error.message, !canceled);
   } finally {
     currentRequestId = null;
     setRunning(false);

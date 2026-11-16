@@ -1,4 +1,5 @@
-const assert = require('node:assert/strict');
+// Keep failures to case ids; never expose prompt content.
+const assert = { ok: value => checkFollowup('P0', value), match: (value, pattern) => checkFollowup('P0', pattern.test(value)) };
 const { CHAT_SYSTEM_PROMPT, IMAGE_RULE } = require('../src/chat-prompt');
 const oldSentences = [
   'You are Sovereign, a local AI assistant running inside a trusted browser page.',
@@ -19,3 +20,11 @@ for (const pattern of [
 ]) assert.match(IMAGE_RULE, pattern);
 assert.ok(require('../src/search-utils').SEARCH_SYSTEM_PROMPT.includes(IMAGE_RULE));
 console.log('chat-prompt tests passed');
+
+function checkFollowup(id, value) { if (!value) { console.error(id); process.exit(1); } }
+const { CRISIS_FOLLOWUP_RULE } = require('../src/chat-prompt');
+checkFollowup('P1', typeof CRISIS_FOLLOWUP_RULE === 'string' && CRISIS_FOLLOWUP_RULE.includes('Never refuse to talk'));
+checkFollowup('P2', !/trusted adult/i.test(CHAT_SYSTEM_PROMPT));
+checkFollowup('P3', !/trusted adult/i.test(require('../src/search-utils').SEARCH_SYSTEM_PROMPT));
+
+for (const [i, prompt] of [CHAT_SYSTEM_PROMPT, CRISIS_FOLLOWUP_RULE].entries()) checkFollowup('P5'+i, /Never write phone numbers/i.test(prompt) && !/trusted adult/i.test(prompt));

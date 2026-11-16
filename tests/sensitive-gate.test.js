@@ -10,6 +10,70 @@ function body(name, text = source) {
 }
 async function main() {
  const askSource = fs.readFileSync(require.resolve('../src/ask'), 'utf8');
+ // Execute the actual local-answer functions with a fake, chunked engine.
+ for (const flagged of [true, false]) {
+  for (const [reply, rejecting] of [["I'm not interested in chatting with you right now… reach out to a trusted adult…", true], ["Hey, I'm here.", false], ['Call 911. Keep talking.', false], ['Keep talking. Call 911', false], ['', false], [' \t\n ', false]]) {
+   const updates = [], statuses = [];
+   let modelMessages;
+   const prompt = require('../src/chat-prompt');
+   const guard = require('../src/sensitive-guard');
+   const local = vm.createContext({
+    crisisConversation: flagged, CHAT_SYSTEM_PROMPT: prompt.CHAT_SYSTEM_PROMPT,
+    CRISIS_FOLLOWUP_RULE: prompt.CRISIS_FOLLOWUP_RULE,
+    window: { SovereignSensitiveGuard: guard, SovereignChatPrompt: prompt },
+    priorConversationContext: () => [], attachmentPrompt: q => q,
+    selectedAttachmentSources: () => [], sensitiveModelPending: null, messages: [],
+    updateAssistant: (_id, value) => updates.push(value), setStatus: value => statuses.push(value),
+    getEngineApi: () => ({ summarize: async (input, chunk) => {
+     modelMessages = input;
+     chunk(reply.slice(0, 12));
+     if (!flagged) assert.ok(!updates.at(-1).content.includes('911') && (!reply.startsWith('Keep talking.') || updates.at(-1).content === ''), 'G86');
+     assert.ok(updates.length === (flagged ? 0 : 1), 'G80');
+     chunk(reply.slice(12));
+     assert.ok(updates.length === (flagged ? 0 : 2), 'G81');
+    } })
+   });
+   vm.runInContext(body('safeStreamingReply', askSource)+'\n'+body('directMessages', askSource)+'\n'+body('streamLocalAnswer', askSource), local);
+   await local.streamLocalAnswer('hey', 'fixture');
+   assert.ok(updates.at(-1).content === (flagged && (rejecting || !reply.trim()) ? guard.FOLLOWUP_REPLY : guard.sanitizeModelReply(reply).text.trim() || 'I could not produce an answer.'), 'G82');
+   assert.ok(modelMessages[0].content === prompt.CHAT_SYSTEM_PROMPT + (flagged ? ' '+prompt.CRISIS_FOLLOWUP_RULE : ''), 'G83');
+   assert.ok(!flagged || statuses[0] === 'Writing a reply…', 'G84');
+  }
+ }
+
+ const guard5 = require('../src/sensitive-guard');
+ for (const [question, crisis] of [["i'm going to shoot up tonight", false], ['I want to kill myself', true]]) {
+  const messages = []; let localCalls = 0;
+  const ctx = vm.createContext({window:{SovereignSensitiveGuard:guard5,SovereignMediaIntent:{isMediaRequest:()=>false}},
+   crisisConversation:true, networkOffline:false, privacySettings:{sensitiveTopics:'strict'}, messages,
+   attachmentSnapshot:()=>[], messageId:()=>String(messages.length), requireSaveConsent(){}, startLocalAskReceipt:async()=>{},
+   setRunning(){}, persistCurrentChat(){}, renderThread(){}, updateAssistant:(id, patch)=>Object.assign(messages.find(m=>m.id===id),patch),
+   ensureModelReady:async()=>true, streamLocalAnswer:async()=>{localCalls++;}, webToggle:{},
+  });
+  vm.runInContext(body('showSensitiveAnswer',askSource)+'\n'+body('answerQuestion',askSource),ctx);
+  await ctx.answerQuestion(question,{appendUser:true});
+  assert.ok(crisis ? messages.at(-1).content===guard5.CRISIS_REPLY && localCalls===0 : messages.at(-1).sensitive.categories.includes('drugs-alcohol') && localCalls===1, 'G87');
+ }
+
+ // Render the production locked notice, without an override action.
+ class NoticeElement {
+  constructor() { this.children=[]; this.dataset={}; }
+  append(...items) { this.children.push(...items); }
+  prepend(...items) { this.children.unshift(...items); }
+ }
+ const renderContext=vm.createContext({document:{createElement:()=>new NoticeElement()}, crisisConversation:true,
+  window:{SovereignSensitiveGuard:guard5,SovereignSensitiveUI:{render(){throw new Error('G88');}}},
+  renderRichText(){}, renderSources(){}, renderMediaCards(){} });
+ vm.runInContext(body('renderMessage',askSource),renderContext);
+ const rendered=renderContext.renderMessage({id:'fixture',role:'assistant',content:'',sensitive:guard5.classifyQuestion("i'm going to shoot up tonight")});
+ assert.ok(rendered.children[1].children[0].children[0].textContent===guard5.notSentSentence(['drugs-alcohol']), 'G88');
+ const streamContext=vm.createContext({window:{SovereignSensitiveGuard:guard5}});
+ vm.runInContext(body('safeStreamingReply',askSource),streamContext);
+ for (const [input, expected] of [['Hello. unfinished','Hello.'],['Hello\nunfinished','Hello\n'],['Call 911',''],['```\ncall 911',''],['`call 911','']]) {
+  assert.ok(streamContext.safeStreamingReply(input)===expected, 'G89');
+ }
+ assert.ok(body('streamWebAnswer',askSource).includes('safeStreamingReply(output)') && body('streamWebAnswer',askSource).includes('sanitizeModelReply(finalResult.answer)'), 'G90');
+ assert.ok(body('streamLocalAnswer', askSource).includes('isRejectingReply'), 'G85');
  const searchSource = fs.readFileSync(require.resolve('../src/search'), 'utf8');
  const before = (text, first, second, id) => assert.ok(text.indexOf(first) >= 0 && text.indexOf(first) < text.indexOf(second), id);
  before(body('handleSearchQuery'), 'crisis', 'refuseWebWhileOffline', 'G14');
@@ -20,7 +84,7 @@ async function main() {
  before(body('retryLast', askSource), 'crisis', 'needsReprocess', 'G19');
  before(body('handleReadSources'), 'crisis', 'refuseWebWhileOffline', 'G20');
  const receipts = require('../src/privacy-receipt'); receipts.resetForTests();
- let calls = 0, sent = '', activity = [], offline = false;
+ let calls = 0, sent = '', activity = [], offline = false, savedChats = [];
  const context = vm.createContext({
   sensitiveGuard: require('../src/sensitive-guard'), privacySettings: { sensitiveTopics: 'strict' },
   privacyReceipts: receipts, searchSettings: { endpoint: 'http://localhost:8080/' },
@@ -30,12 +94,16 @@ async function main() {
   refuseWebWhileOffline() { if (offline) throw new Error('G11'); }, AbortController, URL,
   requestActivityEntry: value => value, pushSearchActivity: value => activity.push(value),
   searchActivityEvents: [], makeReceiptFetch() {}, recordSearxngForwardingSafely() {},
-  searchSearxng: async input => { calls++; sent = input.query; return { query: sent, results: [] }; }
+  searchSearxng: async input => { calls++; sent = input.query; return { query: sent, results: [] }; },
+  // Round 6: per-chat web lock helpers run for real; saved chats come from this fake store.
+  lockedChatIds: new Set(), chatStore: () => ({ list: () => savedChats }),
+  FIXED_CRISIS_REPLIES: () => { const g = require('../src/sensitive-guard'); return [g.CRISIS_REPLY, g.HARM_REPLY]; }, require
  });
- vm.runInContext([body('sensitiveGate'), body('handleSearchQuery')].join('\n'), context);
+ vm.runInContext([body('lockChat'), body('chatIsLocked'), body('refuseLockedChat'), body('sensitiveGate'), body('handleSearchQuery')].join('\n'), context);
  const event = { sender: { id: 7 } };
  const marker = 'SECRETQ-7731';
- const run = (query, extra = {}) => context.handleSearchQuery(event, { query, requestId: 'gate-' + Math.random(), ...extra });
+ // Each request names its own chat, so a crisis request doesn't lock the next case.
+ const run = (query, extra = {}) => context.handleSearchQuery(event, { query, requestId: 'gate-' + Math.random(), chatId: 'gate-chat-' + Math.random(), ...extra });
  const refusal = await run('I have a fever ' + marker);
  assert.ok(refusal.sensitive && calls === 0, 'G1');
  assert.ok(!JSON.stringify([activity, receipts.exportPayload()]).includes(marker), 'G2');
@@ -60,9 +128,9 @@ async function main() {
    const previous = calls;
    const result = await run(query, { override: true });
    assert.ok(result.level === 'crisis' && calls === previous, 'G14');
-   assert.ok((await context.handleMediaSearch(event, {query, override:true})).level === 'crisis' && calls === previous, 'G15');
+   assert.ok((await context.handleMediaSearch(event, {query, override:true, chatId:'gate-media-'+Math.random()})).level === 'crisis' && calls === previous, 'G15');
    vm.runInContext(body('handleReadSources'), context);
-   assert.ok((await context.handleReadSources(event, {question:query, override:true})).level === 'crisis', 'G20');
+   assert.ok((await context.handleReadSources(event, {question:query, override:true, chatId:'gate-read-'+Math.random()})).level === 'crisis', 'G20');
   }
  }
  offline = false;
@@ -71,6 +139,38 @@ async function main() {
  assert.ok(calls === previous + 1 && !sent.includes('415') && sent.includes('hits me'), 'G21');
  await run('my husband hits me '+marker);
  assert.ok(!JSON.stringify([activity, receipts.exportPayload()]).includes(marker), 'G22');
+ // Round 6: a locked chat is refused in main before any search, for every web handler.
+ offline = false;
+ const lockedId = 'locked-chat';
+ await run('I want to hurt someone', { chatId: lockedId });
+ const lockedBefore = calls;
+ const lockedResult = await run('weather in Paris ' + marker, { chatId: lockedId });
+ assert.ok(lockedResult.locked === true && calls === lockedBefore, 'L1');
+ assert.ok((await context.handleMediaSearch(event, { query: 'pictures of cats', requestId: 'm-locked', chatId: lockedId })).locked === true && calls === lockedBefore, 'L2');
+ assert.ok((await context.handleReadSources(event, { question: 'weather', requestId: 'r-locked', chatId: lockedId, results: [] })).locked === true, 'L3');
+ const lockedReceipts = receipts.getReceipts().filter(r => r.entries.some(e => e.category === 'locked'));
+ assert.ok(lockedReceipts.length >= 1 && lockedReceipts.every(r => r.query === '' && r.summary.startsWith('Not sent: web search is off')), 'L4');
+ assert.ok(!JSON.stringify(receipts.exportPayload()).includes(marker) && !JSON.stringify(receipts.exportPayload()).includes('weather in Paris'), 'L5');
+ await assert.rejects(() => context.handleSearchQuery(event, { query: 'weather', requestId: 'no-chat' }), /must name their chat/, 'L6');
+ savedChats = [{ id: 'saved-locked', webLocked: true, messages: [] }];
+ assert.ok((await run('weather in Rome', { chatId: 'saved-locked' })).locked === true && calls === lockedBefore, 'L7');
+ const searchTab = context.findTabBySender;
+ context.findTabBySender = () => ({ tab: { kind: 'search' } });
+ await context.handleSearchQuery(event, { query: 'weather in Oslo', requestId: 'search-page' });
+ assert.ok(calls === lockedBefore + 1, 'L8');
+ context.findTabBySender = searchTab;
+ for (const name of ['handleSearchQuery', 'handleMediaSearch', 'handleReadSources']) {
+  before(body(name), 'refuseLockedChat', 'refuseWebWhileOffline', 'L9');
+ }
+ before(body('handleSearchQuery'), 'refuseLockedChat', 'searchSearxng', 'L10');
+ // The Ask page checks webAllowedNow() right before each search call.
+ for (const [fn, call] of [['streamWebAnswer', 'search.query'], ['streamWebAnswer', 'search.readSources'], ['streamMediaAnswer', 'search.media']]) {
+  const text = body(fn, askSource);
+  const callAt = text.indexOf(call);
+  assert.ok(callAt > 0 && text.lastIndexOf('webAllowedNow(options.useWeb)', callAt) >= 0, 'L11');
+ }
+ // The lock and Offline mode are read live; the checkbox is not (UI resets can untick it mid-answer).
+ assert.ok(!body('webAllowedNow', askSource).includes('disabled') && body('webAllowedNow', askSource).includes('crisisConversation') && !body('webAllowedNow', askSource).includes('webToggle'), 'L12');
  const uiSource = fs.readFileSync(require.resolve('../src/sensitive-ui'), 'utf8');
  assert.ok(uiSource.includes('crisisReply') && uiSource.includes("level === 'crisis'"), 'G23');
  const guard = require('../src/sensitive-guard');
@@ -81,7 +181,9 @@ async function main() {
  let saveHandler, writes = 0;
  const saveContext = vm.createContext({ sensitiveGuard:guard, chatSenderTab(){}, aiSettings:{saveChatsOnDevice:true},
   chatStore:()=>({save(){writes++;}}), broadcastSavedChats:()=>({chats:[]}), pendingChatConsents:new Map(),
-  ipcMain:{handle(_name, handler){saveHandler=handler;}} });
+  ipcMain:{handle(_name, handler){saveHandler=handler;}},
+  lockedChatIds:new Set(), FIXED_CRISIS_REPLIES:()=>[guard.CRISIS_REPLY, guard.HARM_REPLY] });
+ vm.runInContext(body('lockChat'), saveContext);
  vm.runInContext(source.slice(source.indexOf("ipcMain.handle('chats:save'"), source.indexOf("ipcMain.handle('chats:delete'")), saveContext);
  for (const content of ['I want to kill myself','I want to hurt someone','my husband hits me']) {
   const result = saveHandler(event,{id:'consent-fixture',messages:[{role:'user',content}]});
@@ -90,12 +192,15 @@ async function main() {
  for (const content of [guard.CRISIS_REPLY,guard.HARM_REPLY]) assert.ok(saveHandler(event,{id:'consent-fixture',messages:[{role:'assistant',content}]}).needsConsent && writes === 0,'G25');
  saveHandler(event,{id:'consent-fixture',saveConsent:true,messages:[{role:'user',content:'my husband hits me'}]});
  assert.ok(writes === 1,'G26');
+ // Round 6: saving a chat with webLocked (or a fixed crisis reply) locks it in main.
+ saveHandler(event,{id:'locked-by-flag',saveConsent:true,webLocked:true,messages:[{role:'user',content:'hello'}]});
+ assert.ok(saveContext.lockedChatIds.has('locked-by-flag'),'L13');
  // Source grants are sender-scoped, URL-scoped, expiring and consumed.
  let reads = 0;
  context.privacyReceiptIdForSender = () => '';
  context.readSourcePages = async () => { reads++; return { sources: [] }; };
  vm.runInContext(body('handleReadSources'), context);
- const sourceInput = { requestId:'source', question:'fixture', results:[{url:'https://example.test/source'}] };
+ const sourceInput = { requestId:'source', chatId:'source-chat', question:'fixture', results:[{url:'https://example.test/source'}] };
  const blockedRead = async id => {
   let blocked = false; try { await context.handleReadSources(event, sourceInput); } catch { blocked = true; }
   assert.ok(blocked && reads === 0, id);

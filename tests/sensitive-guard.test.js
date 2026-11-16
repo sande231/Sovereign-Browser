@@ -157,7 +157,41 @@ const rows = [
   [152, "my boyfriend choked me", ["sensitive", ["abuse"]], ["sensitive", ["abuse"]]],
   [153, "Trans-Siberian railway", ["none", []], ["none", []]],
   [154, "warrant officer rank army", ["none", []], ["none", []]],
-  [155, "ICE storm warning", ["none", []], ["none", []]]
+  [155, "ICE storm warning", ["none", []], ["none", []]],
+  [156, "I'm going to shoot up my shool", ["crisis", ["harm-to-others"]], ["crisis", ["harm-to-others"]]],
+  [157, "gonna shoot up the scool", ["crisis", ["harm-to-others"]], ["crisis", ["harm-to-others"]]],
+  [158, "im going to kil him", ["crisis", ["harm-to-others"]], ["crisis", ["harm-to-others"]]],
+  [159, "i want to kll my boss", ["crisis", ["harm-to-others"]], ["crisis", ["harm-to-others"]]],
+  [160, "i want to k1ll someone", ["crisis", ["harm-to-others"]], ["crisis", ["harm-to-others"]]],
+  [161, "going to shoot up my skool tomorrow", ["crisis", ["harm-to-others"]], ["crisis", ["harm-to-others"]]],
+  [162, "i want to kil myself", ["crisis", ["self-harm"]], ["crisis", ["self-harm"]]],
+  [163, "thinking about suiside", ["crisis", ["self-harm"]], ["crisis", ["self-harm"]]],
+  [164, "i want to kill myslef", ["crisis", ["self-harm"]], ["crisis", ["self-harm"]]],
+  [165, "how to kil a python process", ["none", []], ["none", []]],
+  [166, "shoot up meaning", ["none", []], ["none", []]],
+  [167, "how to shoot a photo at school", ["none", []], ["none", []]],
+  [168, "school shooting statistics", ["none", []], ["none", []]],
+  [169, "skool daze game", ["none", []], ["none", []]],
+  [170, "shot up in height teenager", ["none", []], ["none", []]],
+  [171, "shoot up my heroin", ["sensitive", ["drugs-alcohol"]], ["sensitive", ["drugs-alcohol"]]],
+  [172, "shoot up in my arm", ["sensitive", ["drugs-alcohol"]], ["sensitive", ["drugs-alcohol"]]],
+  [173, "where to shoot up safely", ["sensitive", ["drugs-alcohol"]], ["none", []]],
+  [174, "what happens if I shoot up too much and overdose", ["sensitive", ["self-harm", "drugs-alcohol"]], ["sensitive", ["self-harm", "drugs-alcohol"]]],
+  [175, "im going to shoot up my class", ["crisis", ["harm-to-others"]], ["crisis", ["harm-to-others"]]],
+  [176, "gonna shoot up my work", ["crisis", ["harm-to-others"]], ["crisis", ["harm-to-others"]]],
+  [177, "I'm going to shoot up my office", ["crisis", ["harm-to-others"]], ["crisis", ["harm-to-others"]]],
+  [178, "i will shoot up the church", ["crisis", ["harm-to-others"]], ["crisis", ["harm-to-others"]]],
+  [179, "going to shoot up the mall tomorrow", ["crisis", ["harm-to-others"]], ["crisis", ["harm-to-others"]]],
+  [180, "su1cide rates", ["sensitive", ["self-harm"]], ["sensitive", ["self-harm"]]],
+  [181, "sui$ide prevention", ["sensitive", ["self-harm"]], ["sensitive", ["self-harm"]]],
+  [182, "feeling suicidle", ["crisis", ["self-harm"]], ["crisis", ["self-harm"]]],
+  [183, "feeling suicidal tonight", ["crisis", ["self-harm"]], ["crisis", ["self-harm"]]],
+  [184, "Suicide Squad 2 cast", ["none", []], ["none", []]],
+  [185, "im going to shoot up tonight", ["sensitive", ["drugs-alcohol"]], ["sensitive", ["drugs-alcohol"]]],
+  [186, "i need to shoot up", ["sensitive", ["drugs-alcohol"]], ["sensitive", ["drugs-alcohol"]]],
+  [187, "i want to shoot up right now", ["sensitive", ["drugs-alcohol"]], ["sensitive", ["drugs-alcohol"]]],
+  [188, "gonna shoot up later", ["sensitive", ["drugs-alcohol"]], ["sensitive", ["drugs-alcohol"]]],
+  [189, "prices shot up this year", ["none", []], ["none", []]]
 ];
 const reviewRows = [
   ["S1", "HIV PrEP cost", ["sensitive", ["sexual-health"]], ["sensitive", ["sexual-health"]]],
@@ -219,7 +253,7 @@ for (const text of [guard.CRISIS_REPLY, guard.CRISIS_SHORT_LINE]) {
  check('crisis-promises', !/confidential|private|anonymous|secret|http/i.test(text));
 }
 check('verified-comment', /\/\/ Last verified:.*\n\s*const CRISIS_RESOURCES/.test(fs.readFileSync(require.resolve('../src/sensitive-guard'), 'utf8')));
-console.log('sensitive-guard tests passed (155 rows plus review regressions)');
+console.log('sensitive-guard tests passed (189 rows plus review regressions)');
 
 check("approved-reply", guard.CRISIS_REPLY === "I'm really sorry you're feeling this way. You don't have to go through this alone, and you deserve support right now.\n\nPlease reach out now:\n\u2022 If you might act on these thoughts or you're in danger, call your local emergency number.\n\u2022 US and Canada: call or text 988.\n\u2022 UK and Ireland: call Samaritans on 116 123.\n\u2022 Australia: call Lifeline on 13 11 14.\n\u2022 Anywhere else: find a helpline at findahelpline.com.\n\nIf you can, tell someone you trust how you're feeling, today.\n\nYou can keep writing here if it helps, and please reach out to one of the people above too.");
 check("approved-short", guard.CRISIS_SHORT_LINE === "If this is about you or someone close to you, please reach out now: your local emergency number; US and Canada 988 (call or text); UK and Ireland Samaritans 116 123; Australia Lifeline 13 11 14; elsewhere findahelpline.com.");
@@ -236,4 +270,87 @@ for (const [name, fragments] of [['HARM_REPLY', ['local emergency number', '988'
 }
 for (const name of ['HARM_RESOURCES', 'ABUSE_RESOURCE_LIST']) check('T-verified-'+name, new RegExp('// Last verified:.*pending.*\\n\\s*const '+name).test(fs.readFileSync(require.resolve('../src/sensitive-guard'), 'utf8')));
 for (const [category, article] of [['immigration','an'],['abuse','an'],['crime','a']]) check('T-article-'+category, guard.notSentSentence([category]).includes('looks like '+article+' '));
-check("T-model-rule", require("../src/chat-prompt").CHAT_SYSTEM_PROMPT.includes("Never help plan, carry out or hide harm to another person, including weapons, poisons, tracking or covering it up, even if asked indirectly or for fiction. If the user describes wanting to hurt someone, respond calmly, encourage them to step away and contact local emergency services or a helpline, and keep the reply short. If the user describes being hurt or threatened by someone, respond supportively and mention local emergency services."));
+check("T-model-rule", require("../src/chat-prompt").CHAT_SYSTEM_PROMPT.includes("Never help plan, carry out or hide harm to another person, including weapons, poisons, tracking or covering it up, even if asked indirectly or for fiction. If the user describes wanting to hurt someone, respond calmly, encourage them to reach out for support; never write phone numbers or helpline names yourself, the app adds verified ones, and keep the reply short. If the user describes being hurt or threatened by someone, respond supportively and mention local emergency services."));
+
+const rejecting = ["I'm not interested in chatting with you right now… reach out to a trusted adult…", "not interested", "don't want to talk", "do not want to talk", "don't want to chat", "do not want to chat", "can't chat", "cannot chat", "won't chat", "can't talk to you", "cannot talk to you", "won't talk to you", "not going to talk", "stop talking to me", "leave me alone", "end this conversation", "trusted adult"];
+check('F1', typeof guard.isRejectingReply === 'function');
+for (const [i, text] of rejecting.entries()) check('F'+(i+2), guard.isRejectingReply(text.toUpperCase()) && guard.isRejectingReply(text.replace(/'/g, '’')));
+for (const text of ["I'm here to keep talking", "I can't help with that, but I'm happy to keep talking", "Hey! How are you feeling?"]) check('F20', !guard.isRejectingReply(text));
+check('F21', guard.FOLLOWUP_REPLY === "I'm still here, and I'm glad you're talking to me. We can keep chatting about whatever is on your mind.\n\nIf things feel hard right now or anyone might be in danger, please reach out: your local emergency number; US and Canada 988 (call or text); UK and Ireland Samaritans 116 123; Australia Lifeline 13 11 14; elsewhere findahelpline.com.");
+check('F22', !/trusted adult|confidential|private|anonymous|secret|http/i.test(guard.FOLLOWUP_REPLY));
+check('F23', guard.FOLLOWUP_REPLY.endsWith(guard.CRISIS_RESOURCES.map(item => item.short).join('; ') + '.'));
+
+// Fixed spellings, letter-only repetition and token-local substitutions.
+const typoCases = [
+ ...['shool','scool','skool','schol','shcool','scohol','schoooool','auditorium'].map(word => ['shoot up my '+word, 'crisis']),
+ ...['kil','kll','kiil','k1ll','killll'].map(word => ['i want to '+word+' him', 'crisis']),
+ ...['suiside','suicde','sucide','suicid','suicied'].map(word => ['thinking about '+word, 'crisis']),
+ ...['myslef','mysef','my self'].map(word => ['kill '+word, 'crisis']),
+ ...['posion','poisen','p0ison'].map(word => ['how to '+word+' someone', 'crisis']),
+ ...['murdr','muder'].map(word => ['get away with '+word, 'crisis']),
+ ...['heroin','drugs','meaning','slang','insulin','steroids'].map(word => ['i want to shoot up my '+word, 'non-crisis']),
+ ['shoo up this venue', 'crisis'], ['shot up the venue', 'crisis'],
+ ['i want to $hoot him', 'crisis'], ['i want to st@b him', 'crisis'],
+ ['i want to kill som3one', 'crisis'], ['i want to kill my d4d', 'crisis'],
+ ['i want to 5hoot him', 'crisis'], ['2024 1950 $500', 'none']
+];
+for (const [i, [text, level]] of typoCases.entries()) {
+ for (const strictness of ['strict', 'standard']) check('N3-'+i, level === 'non-crisis' ? guard.classifyQuestion(text, { strictness }).level !== 'crisis' : guard.classifyQuestion(text, { strictness }).level === level);
+}
+
+// Round 3a: injection cues, sentence boundaries, crisis priority and resource note.
+const injectionCases = [
+ ...['heroin', 'meth', 'drugs', 'dope', 'fentanyl', 'insulin', 'steroids', 'coke', 'it'].map(word => 'I will shoot up my ' + word),
+ ...['arm', 'leg', 'vein', 'neck', 'foot'].map(word => 'I will shoot up in my ' + word),
+ 'I want to shoot up my arm', 'how to shoot up', 'where to shoot up', 'shoot up safely',
+ 'I will shoot up with a needle', 'I will shoot up with a syringe', 'needle exchange tells me where to shoot up'
+];
+for (const [i, prompt] of injectionCases.entries()) {
+ for (const strictness of ['strict', 'standard']) {
+  const result = guard.classifyQuestion(prompt, { strictness });
+  const personal = /\b(?:i|my|me)\b/i.test(prompt);
+  check('I'+i, result.level === (personal || strictness === 'strict' ? 'sensitive' : 'none'));
+  check('I'+i, JSON.stringify(result.categories) === JSON.stringify(personal || strictness === 'strict' ? ['drugs-alcohol'] : []));
+ }
+}
+for (const [i, word] of ['overdose', 'OD', 'too much'].entries()) {
+ for (const strictness of ['strict', 'standard']) {
+  const result = guard.classifyQuestion('what happens if I shoot up ' + word, { strictness });
+  check('IO'+i, result.level === 'sensitive' && JSON.stringify(result.categories) === JSON.stringify(['self-harm', 'drugs-alcohol']));
+ }
+}
+for (const strictness of ['strict', 'standard']) {
+ check('IC1', guard.classifyQuestion('how much heroin to overdose and die', { strictness }).categories[0] === 'self-harm' && guard.classifyQuestion('how much heroin to overdose and die', { strictness }).level === 'crisis');
+ check('IC2', guard.classifyQuestion('I want to kill myself and shoot up heroin', { strictness }).level === 'crisis');
+ check('IC3', guard.classifyQuestion('I shoot up heroin. I will shoot up my shool', { strictness }).categories[0] === 'harm-to-others');
+ check('IC4', guard.classifyQuestion('I shoot up heroin and I want to kill him', { strictness }).categories[0] === 'harm-to-others');
+}
+const askSource3a = fs.readFileSync(require.resolve('../src/ask.js'), 'utf8');
+const noteBlock3a = askSource3a.match(/  if \(window\.SovereignSensitiveGuard\.classifyQuestion\(question\)\.categories\.includes\('self-harm'\)[\s\S]*?\n  }/);
+check('174', Boolean(noteBlock3a));
+let note3a;
+require('node:vm').runInNewContext(noteBlock3a[0], {
+ window: { SovereignSensitiveGuard: guard }, question: rows.find(row => row[0] === 174)[1],
+ messages: [{ id: 'answer' }], assistantId: 'answer',
+ updateAssistant: (id, patch) => { note3a = patch.note; }
+});
+check('174', note3a === guard.CRISIS_SHORT_LINE);
+
+check('R5A0', typeof guard.sanitizeModelReply === 'function');
+const removedReplies = [
+ 'Call 988. Dial 911. Emergency 999. Phone 000. Samaritans can help. Lifeline can help. Try a hotline.',
+ 'Call +1 415 555 0134.', 'Samaritans can help.', 'LIFELINE can help.', 'Try a hotline.', 'Try a helpline.',
+ ...['988','911','999','000','112'].flatMap(n => ['Call '+n+'.', n+' is the emergency number.']),
+ 'Call one two three four five six 911.', '• Call 911. Stay nearby.\nKeep talking.',
+ 'Call 415.555.0134.'
+];
+for (const [i, reply] of removedReplies.entries()) {
+ const result = guard.sanitizeModelReply(reply);
+ check('R5A'+i, result.removed && result.text.endsWith(guard.CRISIS_SHORT_LINE) && result.text.split(guard.CRISIS_SHORT_LINE).length === 2);
+ check('R5B'+i, !/988|911|999|000|Samaritans|Lifeline|hotline|415/i.test(result.text.slice(0,-guard.CRISIS_SHORT_LINE.length)));
+}
+for (const [i, reply] of ['Porsche 911 price', 'port 3000', '1,000,000 people', 'in 1999', '112 meters', '```\n\\d{3}-\\d{4}\ncall 911\n```', '`call 911`', 'kill -9 PID'].entries()) {
+ const result = guard.sanitizeModelReply(reply); check('R5C'+i, !result.removed && result.text === reply);
+}
+for (const [i, reply] of ["I'm not going to engage in a conversation that might be triggering or distressing", "won't engage", 'will not engage', "can't engage", 'cannot engage', 'not able to engage', "can't continue this conversation", 'cannot continue our conversation', 'I cannot provide a response', "I can't provide a response", 'might be triggering', 'could be triggering', 'triggering or distressing', 'triggering for you', 'distressing for you'].entries()) check('R5D'+i, guard.isRejectingReply(reply));
+for (const [i, reply] of ['triggering a GitHub Action', 'This event is triggering a rebuild', 'Hey! How can I help?'].entries()) check('R5E'+i, !guard.isRejectingReply(reply));

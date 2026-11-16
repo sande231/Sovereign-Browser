@@ -52,6 +52,8 @@ function sanitizeChat(chat) {
     messages: messages.filter(isPlainObject).slice(-MAX_MESSAGES)
   };
   if (typeof chat.saveConsent === 'boolean') clean.saveConsent = chat.saveConsent;
+  // Web search stays locked for a chat that showed a crisis-level reply.
+  if (chat.webLocked === true) clean.webLocked = true;
   if (Buffer.byteLength(JSON.stringify(clean), 'utf8') > MAX_CHAT_BYTES) {
     return null;
   }

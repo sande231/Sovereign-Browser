@@ -413,8 +413,8 @@ async function child() {
   await waitFor(() => ask.executeJavaScript('Boolean(window.sovereign?.search)', true), 'ask preload');
   const invoke = (method, input) => ask.executeJavaScript(`window.sovereign.${method}(${JSON.stringify(input)})`, true);
   await invoke('privacy.startActivity', { requestId: 'offline-ask', type: 'ask', query: 'SECRET123 question' });
-  await assert.rejects(invoke('search.query', { requestId: 'offline-search', query: 'SECRET123' }), /Offline mode is on/);
-  await assert.rejects(invoke('search.readSources', { requestId: 'offline-sources', question: 'SECRET123', results: [{ url: `http://external.test:${ports.http}/a`, title: 'a', snippet: 'b' }] }), /Offline mode is on/);
+  await assert.rejects(invoke('search.query', { requestId: 'offline-search', chatId: 'offline-chat', query: 'SECRET123' }), /Offline mode is on/);
+  await assert.rejects(invoke('search.readSources', { requestId: 'offline-sources', chatId: 'offline-chat', question: 'SECRET123', results: [{ url: `http://external.test:${ports.http}/a`, title: 'a', snippet: 'b' }] }), /Offline mode is on/);
   await assert.rejects(invoke('media.preflight', { url: `http://external.test:${ports.http}/i.png` }), /Offline mode is on/);
   await assert.rejects(invoke('media.download', { url: `http://external.test:${ports.http}/i.png` }), /Offline mode is on/);
   await assert.rejects(ui(`window.sovereign.downloads.downloadUrl(${JSON.stringify(`http://external.test:${ports.http}/f.bin`)})`), /Offline mode is on/);

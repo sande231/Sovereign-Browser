@@ -74,7 +74,7 @@ async function orchestrate() {
  for (const name of ['ui-smoke','media-chat','safe-redirects','ask-layout','stage1-usability','offline-mode']) {
   await run('9-'+name, fs.mkdtempSync(path.join(os.tmpdir(),'sovereign-sensitive-regression-')), path.join(__dirname,name+'.test.js'));
  }
- console.log('sensitive-guard Electron cases 1–19 passed');
+ console.log('sensitive-guard Electron cases 1–22 passed');
 }
 async function main() {
  await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
@@ -91,13 +91,21 @@ async function main() {
  check('1a', await ask.executeJavaScript("!document.querySelector('#web-toggle').checked"));
  check('1b', await ask.executeJavaScript("document.querySelector('#web-toggle').click(); newChat(); !document.querySelector('#web-toggle').checked"));
  const submit = async (id, q, web = true) => {
-  await ask.executeJavaScript(`newChat(); if (document.querySelector('#web-toggle').checked !== ${web}) document.querySelector('#web-toggle').click(); document.querySelector('#chat-input').value = ${JSON.stringify(q)}; document.querySelector('#chat-form').requestSubmit();`,true);
+  // Start from an idle page; a click on a disabled checkbox is silently ignored.
+  await wait(id+'-idle', () => ask.executeJavaScript('!running'));
+  await ask.executeJavaScript('newChat(); 1', true);
+  // In Offline mode web can't be turned on (crisis cases still run there); otherwise wait for an enabled toggle.
+  if (web) await wait(id+'-toggle', () => ask.executeJavaScript('networkOffline || !webToggle.disabled'));
+  await ask.executeJavaScript(`if (document.querySelector('#web-toggle').checked !== ${web} && !document.querySelector('#web-toggle').disabled) document.querySelector('#web-toggle').click(); document.querySelector('#chat-input').value = ${JSON.stringify(q)}; document.querySelector('#chat-form').requestSubmit();`,true);
+  // Give the page a moment to start running, so the wait can't pass before the answer begins.
+  await delay(200);
   await wait(id+'-submit', () => ask.executeJavaScript('!running'));
  };
  const marker = 'SECRETQ-7731';
  count=0; await submit('2', 'I think I have HIV ' + marker);
  check('2a', count===0);
- check('2b', await ask.executeJavaScript("Boolean(document.querySelector('.sensitive-notice')) && Boolean(document.querySelector('.sensitive-anyway')) && /not downloaded|isn't downloaded/i.test(document.body.textContent)"));
+ // Wait for the UI rather than checking once: the notice and the model message can land a moment after the run ends.
+ await wait('2b', () => ask.executeJavaScript("Boolean(document.querySelector('.sensitive-notice')) && Boolean(document.querySelector('.sensitive-anyway')) && /not downloaded|isn't downloaded/i.test(document.body.textContent)"));
  const receipts = await invoke('privacy.getReceipts');
  check('7a', !JSON.stringify(receipts).includes(marker));
  check('7b', receipts.some(r => r.entries.some(e => e.whatWasSent.startsWith('blocked (sensitive topic:'))));
@@ -138,7 +146,7 @@ async function main() {
  await search.executeJavaScript("document.querySelector('#question').value='how to kill a Python process'; document.querySelector('#search-form').requestSubmit()",true);
  await wait('5-request', ()=>count===1); check('5b',count===1);
  check('8a',(await invoke('privacy.getSettings')).sensitiveTopics==='strict');
- const query = () => invoke('search.query',{requestId:'setting-'+Math.random(),query:'symptoms of type 2 diabetes'});
+ const query = () => invoke('search.query',{requestId:'setting-'+Math.random(),chatId:'setting-chat',query:'symptoms of type 2 diabetes'});
  check('8b',(await query()).sensitive);
  await chrome.executeJavaScript("window.sovereign.newTab('sovereign://settings/')",true);
  await wait('8-settings', ()=>find('sovereign://settings/'));
@@ -309,8 +317,91 @@ async function main() {
   await verifyCrisis('18-image', ask);
  }
  }
+ // Case 20: typo threat on Ask, Search and address bar, without requests.
+ for (const mode of ['offline', 'online']) {
+  await invoke('network.setMode', mode);
+  for (const web of mode === 'offline' ? [false] : [false, true]) {
+   count = 0;
+   await submit('20-ask', "I'm going to shoot up my shool", web);
+   check('20-ask', count === 0 && await ask.executeJavaScript("messages.some(m => m.content === SovereignSensitiveGuard.HARM_REPLY) && !webToggle.checked && webToggle.disabled"));
+  }
+  for (const surface of ['search', 'address']) {
+   const previous = new Set(webContents.getAllWebContents());
+   count = 0;
+   if (surface === 'search') await chrome.executeJavaScript('window.sovereign.newTab('+JSON.stringify('sovereign://search/?q='+encodeURIComponent("I'm going to shoot up my shool")+'&run=1')+')', true);
+   else {
+    await chrome.executeJavaScript("window.sovereign.newTab('sovereign://newtab/')", true);
+    await chrome.executeJavaScript('window.sovereign.navigate('+JSON.stringify("I'm going to shoot up my shool")+')', true);
+   }
+   const page = () => webContents.getAllWebContents().find(w => !previous.has(w) && !w.isDestroyed() && w.getURL().startsWith('sovereign://search/'));
+   await wait('20-page', () => Boolean(page()));
+   await wait('20-reply', () => page().executeJavaScript("(() => { const flat = s => s.replace(/[^A-Za-z0-9]/g, ''); return flat(document.body.textContent).includes(flat(SovereignSensitiveGuard.HARM_REPLY)); })()"));
+   check('20-requests', count === 0);
+  }
+ }
+ // Case 21: flagged follow-ups and the visible way to unlock web search.
+ await invoke('network.setMode', 'online');
+ count=0;
+ await submit('21-flag', "I'm going to shoot up my shool", false);
+ await ask.executeJavaScript("chatInput.value=\"i'm going to shoot up tonight\"; document.querySelector('#chat-form').requestSubmit()",true);
+ await wait('21-drugs',()=>ask.executeJavaScript('!running'));
+ check('21-drugs',count===0 && await ask.executeJavaScript("document.body.textContent.includes(SovereignSensitiveGuard.notSentSentence(['drugs-alcohol'])) && !document.querySelector('.sensitive-anyway')"));
+ await ask.executeJavaScript("chatInput.value='I want to kill myself'; document.querySelector('#chat-form').requestSubmit()",true);
+ await wait('21-crisis',()=>ask.executeJavaScript('!running'));
+ check('21-crisis',count===0 && await ask.executeJavaScript("messages.at(-1).content===SovereignSensitiveGuard.CRISIS_REPLY && !document.querySelector('#web-crisis-note').hidden && Boolean(document.querySelector('#web-crisis-new-chat'))"));
+ await ask.executeJavaScript("document.querySelector('#web-crisis-new-chat').click()",true);
+ check('21-new',await ask.executeJavaScript("!webToggle.disabled && !webToggle.checked && document.querySelector('#web-crisis-note').hidden"));
+ // Case 22 (Round 6, CRITICAL): a locked chat never reaches SearXNG, however it is reached.
+ // The local model is stubbed (no real model in tests); the page's web decisions run for real.
+ await ask.executeJavaScript("ensureModelReady = async () => true; getEngineApi = () => ({ summarize: async (m, cb) => { cb('Hello there.'); return 'Hello there.'; }, stop: async () => {} }); 1", true);
+ const follow = async (id, q) => {
+  const lockedBefore = (await invoke('privacy.getReceipts')).flatMap(r => r.entries).filter(e => e.category === 'locked').length;
+  await ask.executeJavaScript('chatInput.value=' + JSON.stringify(q) + "; if (!webToggle.disabled && !webToggle.checked) webToggle.click(); document.querySelector('#chat-form').requestSubmit(); 1", true);
+  await delay(200); await wait(id + '-run', () => ask.executeJavaScript('!running'));
+  const lockedAfter = (await invoke('privacy.getReceipts')).flatMap(r => r.entries).filter(e => e.category === 'locked').length;
+  check(id, count === 0 && lockedAfter === lockedBefore && await ask.executeJavaScript("!document.body.textContent.includes('search:query') && !document.body.textContent.includes(\"Couldn't reach the search service.\") && webToggle.disabled && !webToggle.checked"));
+ };
+ const followUps = async prefix => { for (const [n, q] of [['a', 'hey'], ['b', 'how to kill the python process'], ['c', 'price shot up this year']]) await follow(prefix + n, q); };
+ // (a) flag with web on, then follow-ups; the consent bar is still pending (saving is on).
+ count = 0;
+ await submit('22-flag', "I'm going to shoot up my shool", true);
+ await followUps('22-pending-');
+ // (b) after Save, after a Retry click, and in a chat where Don't save was chosen.
+ await ask.executeJavaScript("document.querySelector('.save-consent-save').click()", true);
+ await delay(300);
+ await followUps('22-saved-');
+ await ask.executeJavaScript("document.querySelector('#retry-chat').click()", true);
+ await delay(200); await wait('22-retry-run', () => ask.executeJavaScript('!running'));
+ check('22-retry', count === 0);
+ const lockedChat = await ask.executeJavaScript('chatId');
+ const lockedTitle = await ask.executeJavaScript("messages.find(m => m.role === 'user').content.slice(0, 120)");
+ await submit('22-flag-decline', 'I want to hurt someone', true);
+ await ask.executeJavaScript("document.querySelector('.save-consent-decline').click()", true);
+ await delay(300);
+ await followUps('22-declined-');
+ // (c) reopen the saved locked chat from the chat list.
+ await ask.executeJavaScript('newChat(); 1', true);
+ await wait('22-reload-list', () => ask.executeJavaScript('[...document.querySelectorAll("#chat-history-list button")].some(b => b.textContent.includes(' + JSON.stringify(lockedTitle) + '))'));
+ await ask.executeJavaScript('[...document.querySelectorAll("#chat-history-list button")].find(b => b.textContent.includes(' + JSON.stringify(lockedTitle) + ')).click()', true);
+ await wait('22-reload', () => ask.executeJavaScript('chatId === ' + JSON.stringify(lockedChat) + ' && webToggle.disabled && !document.querySelector("#web-crisis-note").hidden'));
+ await followUps('22-reloaded-');
+ // (d) the page can't bypass main: a direct IPC call for the locked chat is refused.
+ const direct = await ask.executeJavaScript('window.sovereign.search.query({ requestId: "direct-locked", chatId: ' + JSON.stringify(lockedChat) + ', query: "weather in Paris" })', true);
+ check('22-direct', direct.locked === true && count === 0);
+ check('22-direct-media', (await ask.executeJavaScript('window.sovereign.search.media({ requestId: "direct-media", chatId: ' + JSON.stringify(lockedChat) + ', query: "cats", type: "images" })', true)).locked === true && count === 0);
+ check('22-no-chat', await ask.executeJavaScript('window.sovereign.search.query({ requestId: "no-chat", query: "weather" }).then(() => false, () => true)', true));
+ check('22-receipt', (await invoke('privacy.getReceipts')).some(r => r.entries.some(e => e.category === 'locked' && e.whatWasSent.includes('web search is off'))));
+ // (e) normal chat with SearXNG stopped: friendly message, and the failed attempt is in the receipt.
+ const closed = http.createServer(); await new Promise(r => closed.listen(0, '127.0.0.1', r));
+ const closedEndpoint = 'http://127.0.0.1:' + closed.address().port + '/search'; await new Promise(r => closed.close(r));
+ await invoke('search.updateSettings', { endpoint: closedEndpoint });
+ await ask.executeJavaScript("newChat(); if (!webToggle.checked) webToggle.click(); chatInput.value = 'weather in Paris'; document.querySelector('#chat-form').requestSubmit(); 1", true);
+ await delay(200); await wait('22-down-run', () => ask.executeJavaScript('!running'));
+ check('22-down', await ask.executeJavaScript("messages.at(-1).content === \"Couldn't reach the search service.\" && !document.body.textContent.includes('search:query') && !document.body.textContent.includes('ERR_CONNECTION_REFUSED')"));
+ check('22-down-receipt', (await invoke('privacy.getReceipts')).some(r => r.entries.some(e => e.outcome === 'attempted, failed: connection refused')));
+ await invoke('search.updateSettings', { endpoint });
  // Case 9 is run by the orchestrator after these checks.
- console.log('1–19'); server.close(); app.exit(0);
+ console.log('1–22'); server.close(); app.exit(0);
 }
 const task = phase === 'orchestrate' ? app.whenReady().then(orchestrate) : phase === 'main' ? main() : preferencePhase();
 task.then(() => app.exit(0), error => {
