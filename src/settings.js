@@ -32,6 +32,9 @@ function setStatus(message, isError = false) {
 async function loadSettings() {
   const state = await window.sovereign.settings.get();
   endpointInput.value = state.search.endpoint;
+  document.querySelector('#knowledge-enabled').checked = Boolean(state.knowledge?.enabled);
+  document.querySelector('#knowledge-endpoint').value = state.knowledge?.endpoint || 'http://127.0.0.1:8090';
+  document.querySelector('#knowledge-guide').href = state.knowledgeGuide;
   themeMode.value = window.SovereignTheme.get();
   renderModelOptions(state);
   modelName.textContent = state.model.name;
@@ -275,12 +278,17 @@ function renderNetworkSettings(network = {}) {
   if (network.offline) networkConfirm.hidden = true;
   networkOffline.checked = Boolean(network.offline);
   networkOnline.checked = !network.offline;
+  const knowledgeEntry = (network.namedAllowlist || []).find(item => item.id === 'kiwix');
+  document.querySelector('#knowledge-allowlist').hidden = !knowledgeEntry;
+  if (knowledgeEntry) {
+    document.querySelector('#knowledge-allowlist strong').textContent = 'Kiwix local knowledge – ' + knowledgeEntry.hostPort;
+  }
   allowlistElement.replaceChildren();
   const entries = Array.isArray(network.offlineAllowlist) ? network.offlineAllowlist : [];
   if (entries.length === 0) {
     const empty = document.createElement('li');
     empty.className = 'settings-help';
-    empty.textContent = 'None. In Offline mode no local address is allowed.';
+    empty.textContent = network.namedAllowlist?.length ? 'No user entries.' : 'None. In Offline mode no local address is allowed.';
     allowlistElement.append(empty);
   }
   for (const entry of entries) {
@@ -396,3 +404,20 @@ window.sovereign.privacy.onSettings(renderSensitiveSettings);
 for (const radio of document.querySelectorAll('input[name="sensitive-topics"]')) radio.addEventListener('change', async () => {
   if (radio.checked) renderSensitiveSettings(await window.sovereign.privacy.updateSettings({ sensitiveTopics: radio.value }));
 });
+
+async function saveKnowledgeSettings() {
+  try {
+    const settings = await window.sovereign.knowledge.updateSettings({ enabled: document.querySelector('#knowledge-enabled').checked, endpoint: document.querySelector('#knowledge-endpoint').value });
+    document.querySelector('#knowledge-endpoint').value = settings.endpoint;
+    document.querySelector('#knowledge-status').textContent = 'Saved.';
+  } catch (error) { document.querySelector('#knowledge-status').textContent = error.message; }
+}
+document.querySelector('#knowledge-save').addEventListener('click', saveKnowledgeSettings);
+document.querySelector('#knowledge-enabled').addEventListener('change', saveKnowledgeSettings);
+document.querySelector('#knowledge-check').addEventListener('click', async () => {
+  const status = await window.sovereign.knowledge.status();
+  document.querySelector('#knowledge-status').textContent = status.reachable ? 'Local knowledge is reachable.' : "Local knowledge isn't running. Set it up in Settings.";
+  const list = document.querySelector('#knowledge-books'); list.replaceChildren();
+  for (const book of status.books || []) { const item = document.createElement('li'); item.textContent = `${book.title} — full-text index: ${book.fullTextIndex ? 'yes' : 'no'}`; list.append(item); }
+});
+document.querySelector('#knowledge-guide').addEventListener('click', event => { event.preventDefault(); window.sovereign.newTab(event.currentTarget.href); });

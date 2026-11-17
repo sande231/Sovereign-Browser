@@ -607,7 +607,7 @@ function renderSources(container, sources = []) {
     url.textContent = source.url || source.fileName || '';
     const mode = document.createElement('span');
     mode.className = `result-source-note ${source.evidenceMode === 'page' ? 'page' : source.evidenceMode === 'file' ? 'page' : 'snippet'}`;
-    mode.textContent = sourceLabel(source);
+    mode.textContent = (source.origin ? (source.origin === 'local' ? 'Local · ' : 'Web · ') : '') + sourceLabel(source);
     body.append(title, url, mode);
     card.append(number, body);
     list.append(card);
@@ -810,6 +810,16 @@ function renderMessage(message) {
       answerQuestion(text, { webEnabled: true, override: true, forceMedia: message.sensitiveMedia, appendUser: true });
     }
   });
+  if (message.localSensitive) {
+    const paragraph = body.querySelector('.sensitive-notice p');
+    if (paragraph) { paragraph.textContent += ' I answered from local knowledge on this computer instead.'; body.prepend(paragraph.parentElement); }
+  }
+  if (message.action?.type === 'answer-without-sources') {
+    const button = document.createElement('button'); button.type = 'button';
+    button.className = 'primary-action compact-action'; button.textContent = 'Answer without sources'; button.disabled = running;
+    button.addEventListener('click', () => { if (running) return; setRunning(true); answerQuestion(message.action.question, { appendUser: false, withoutSources: true, forceText: true, webEnabled: false }); });
+    body.append(button);
+  }
   if (['search-media', 'answer-text'].includes(message.action?.type)) {
     const action = document.createElement('button');
     action.type = 'button';
@@ -832,6 +842,8 @@ function renderMessage(message) {
   if (message.note) {
     const note = document.createElement('div');
     note.className = 'answer-outcome';
+    // Resource notes are multi-line lists (same as sensitive-ui.js), so keep their line breaks.
+    note.style.whiteSpace = 'pre-wrap';
     note.textContent = message.note;
     body.append(note);
   }
@@ -1694,7 +1706,7 @@ async function migrateLegacyChats() {
 }
 
 const SAVED_MEDIA_FIELDS = [
-  'id', 'stableId', 'type', 'title', 'pageUrl', 'hasSourcePage', 'sourceUrl',
+  'id', 'stableId', 'type', 'title', 'pageUrl', 'hasSourcePage', 'sourceUrl', 'origin',
   'sourceDomain', 'mediaUrl', 'originalMediaUrl', 'thumbnailUrl', 'creator',
   'license', 'downloadable', 'downloadKind', 'downloadUrl', 'downloadError'
 ];
@@ -1713,7 +1725,7 @@ function savedMessage(message) {
     })),
     note: message.note || ''
   };
-  if (['answer-text', 'search-media'].includes(message.action?.type)) {
+  if (['answer-text', 'search-media', 'answer-without-sources'].includes(message.action?.type)) {
     clean.action = {
       type: message.action.type,
       question: String(message.action.question || ''),
@@ -2417,6 +2429,189 @@ async function showSensitiveAnswer(question, assistantId, result, media = false)
   else updateAssistant(assistantId, { content: "The local model isn't downloaded or ready yet. Set up the model to answer locally." });
 }
 
+const localToggle = document.querySelector('#local-toggle');
+const localNote = document.querySelector('#local-note');
+let kiwixReady = false;
+const KIWIX_DOWN_TEXT = 'Couldn\'t reach local knowledge (Kiwix). Start it with "docker compose up -d" in the kiwix folder, or turn off Use local knowledge.';
+async function refreshKnowledgeStatus() {
+  try { const status = await window.sovereign.knowledge.status(); kiwixReady = status.enabled && status.reachable; }
+  catch { kiwixReady = false; }
+  localToggle.checked = Boolean(kiwixReady); localToggle.disabled = !kiwixReady;
+  localNote.textContent = kiwixReady ? '' : "Local knowledge isn't running. Set it up in Settings.";
+}
+function localAllowedNow(question) {
+  const classification = window.SovereignSensitiveGuard.classifyQuestion(question, { strictness: privacySettings.sensitiveTopics });
+  return localToggle.checked && kiwixReady && classification.level !== 'crisis' && (!crisisConversation || classification.level === 'none');
+}
+async function streamKnowledgeAnswer(question, assistantId, options = {}) {
+  const guard = window.SovereignSensitiveGuard;
+  let classification = guard.classifyQuestion(question, {
+    strictness: privacySettings.sensitiveTopics
+  });
+  // With web off, retain the existing resources without adding notice A.
+  const resourceNote = !options.useWeb ? [
+    classification.categories.includes('abuse') ? guard.ABUSE_RESOURCES : '',
+    guard.classifyQuestion(question).categories.includes('self-harm') ? guard.CRISIS_SHORT_LINE : ''
+  ].filter(Boolean).join('\n\n') : '';
+  if (!localAllowedNow(question)) return;
+  const requestId = messageId();
+  currentRequestId = requestId;
+  let localResults = [],
+    localSources = [],
+    unavailable = false;
+  try {
+    if (!localAllowedNow(question)) return;
+    const response = await window.sovereign.knowledge[options.useMedia ? 'media' : 'search']({
+      requestId,
+      chatId,
+      query: question
+    });
+    selectPrivacyReceiptForActivity(requestId);
+    if (response.level === 'crisis') {
+      await showSensitiveAnswer(question, assistantId, response);
+      return;
+    }
+    if (response.locked) {
+      await streamLocalAnswer(question, assistantId);
+      return;
+    }
+    classification = response.sensitive || classification;
+    localResults = response.results || [];
+    if (!options.useMedia && localResults.length) {
+      if (!localAllowedNow(question)) return;
+      const bundle = await window.sovereign.knowledge.readSources({
+        requestId,
+        chatId,
+        question,
+        results: localResults
+      });
+      if (bundle.level === 'crisis') {
+        await showSensitiveAnswer(question, assistantId, bundle);
+        return;
+      }
+      if (bundle.locked) {
+        await streamLocalAnswer(question, assistantId);
+        return;
+      }
+      localSources = bundle.sources || [];
+    }
+  } catch {
+    unavailable = true;
+    if (!webAllowedNow(options.useWeb)) {
+      updateAssistant(assistantId, {
+        content: KIWIX_DOWN_TEXT,
+        sources: [],
+        action: {
+          type: 'answer-without-sources',
+          question
+        },
+        note: resourceNote
+      });
+      return;
+    }
+  }
+  let webResults = [],
+    webSources = [];
+  if (webAllowedNow(options.useWeb)) {
+    privacySettings = await window.sovereign.privacy.getSettings();
+    classification = guard.classifyQuestion(question, {
+      strictness: privacySettings.sensitiveTopics
+    });
+    const modelFlag = classification.level === 'none' && !options.override ? await strictModelFlag(question) : '';
+    const webId = requestId;
+    currentRequestId = webId;
+    if (webAllowedNow(options.useWeb)) {
+      const response = await window.sovereign.search[options.useMedia ? 'media' : 'query']({
+        requestId: webId,
+        chatId,
+        query: question,
+        type: 'images',
+        override: options.override,
+        modelFlag
+      });
+      if (response.level === 'crisis') {
+        await showSensitiveAnswer(question, assistantId, response);
+        return;
+      }
+      if (response.locked) applyMainLock();else if (response.sensitive) {
+        updateAssistant(assistantId, {
+          sensitive: response,
+          sensitiveQuestion: question,
+          localSensitive: localResults.length > 0
+        });
+      } else {
+        webResults = (response.results || []).slice(0, 5 - localResults.length).map(item => ({
+          ...item,
+          origin: 'web'
+        }));
+        if (!options.useMedia && webResults.length && webAllowedNow(options.useWeb)) {
+          const bundle = await window.sovereign.search.readSources({
+            requestId: webId,
+            chatId,
+            question,
+            results: webResults
+          });
+          webSources = bundle.sources || [];
+        }
+      }
+    }
+  }
+  if (options.useMedia) {
+    const mediaResults = (await validatedMediaResults([...localResults, ...webResults].slice(0, 5), 'images')).filter(item => item.origin !== 'local' || item.downloadable);
+    updateAssistant(assistantId, {
+      content: mediaResults.length ? 'Images from retrieved sources.' : 'No matching images in local knowledge.',
+      mediaResults,
+      sources: [],
+      note: unavailable ? "Local knowledge wasn't reachable, so these sources are from the web only." : resourceNote
+    });
+    return;
+  }
+  const pairs = [...localResults.map(result => [result, localSources.find(s => s.id === result.id)]), ...webResults.map(result => [result, webSources.find(s => s.id === result.id)])].slice(0, 5);
+  const results = pairs.map(([r], i) => ({
+    ...r,
+    id: i + 1
+  }));
+  const sources = pairs.map(([r, s], i) => ({
+    ...r,
+    ...s,
+    id: i + 1
+  }));
+  if (!results.length) {
+    updateAssistant(assistantId, {
+      content: unavailable ? KIWIX_DOWN_TEXT : 'No local results found.',
+      sources: [],
+      note: resourceNote
+    });
+    return;
+  }
+  const evidence = evidenceResultsForSources(results, sources);
+  updateAssistant(assistantId, {
+    sources: evidence,
+    note: resourceNote
+  });
+  if (!(await ensureModelReady(question, {
+    webEnabled: false
+  }))) return;
+  const utils = getSearchUtils();
+  const modelMessages = utils.buildSourceAnswerMessages(webContextQuestion(question), sources);
+  lastModelMessages = modelMessages;
+  let output = '';
+  if (sensitiveModelPending) await sensitiveModelPending;
+  await getEngineApi().summarize(modelMessages, chunk => {
+    output += chunk;
+    updateAssistant(assistantId, {
+      content: safeStreamingReply(output),
+      sources: evidence
+    });
+  });
+  const final = utils.finalizeSearchAnswerWithMeta(output, evidence, question);
+  updateAssistant(assistantId, {
+    content: guard.sanitizeModelReply(final.answer).text,
+    sources: evidence,
+    note: unavailable ? "Local knowledge wasn't reachable, so these sources are from the web only." : resourceNote
+  });
+}
+
 async function answerQuestion(question, options = {}) {
   // Offline mode overrides the toggle: no web step can start.
   const useWeb = Boolean(options.webEnabled) && !networkOffline && !crisisConversation;
@@ -2444,6 +2639,22 @@ async function answerQuestion(question, options = {}) {
     await showSensitiveAnswer(question, id, classification);
     await startLocalAskReceipt('', true);
     setRunning(false); persistCurrentChat(); renderThread(); return;
+  }
+  if (options.withoutSources || (typeof localAllowedNow === 'function' && localAllowedNow(question))) {
+    const id = messageId(); messages.push({ id, role: 'assistant', content: '', sources: [] });
+    renderThread();
+    try {
+      if (options.withoutSources) {
+        await startLocalAskReceipt(classification.level === 'none' ? question : '');
+        if (await ensureModelReady(question, { webEnabled: false })) {
+          await streamLocalAnswer(question, id);
+          updateAssistant(id, { note: 'Answer from the AI alone, with no sources.' });
+        }
+      } else await streamKnowledgeAnswer(question, id, { ...options, useWeb, useMedia });
+    } catch {
+      updateAssistant(id, { content: KIWIX_DOWN_TEXT, note: '', action: useWeb ? null : { type: 'answer-without-sources', question } });
+    } finally { currentRequestId = null; setRunning(false); persistCurrentChat(); renderThread(); }
+    return;
   }
   if (!useWeb && (classification.categories.includes('abuse') || (crisisConversation && classification.level === 'sensitive'))) {
     await startLocalAskReceipt('');
@@ -2858,6 +3069,7 @@ async function handleModelSetupButton() {
 }
 
 function newChat() {
+  refreshKnowledgeStatus();
   if (saveConsent !== 'pending') persistCurrentChat();
   if (saveConsent === 'pending') declineChatSave();
   saveConsent = undefined; consentHadSavedCopy = false;
@@ -3026,6 +3238,7 @@ window.sovereign.network.getState()
   .then(applyNetworkState)
   .catch(() => {})
   .then(refreshSettings)
+  .then(refreshKnowledgeStatus)
   .then(migrateLegacyChats)
   .then(loadSavedChats)
   .then(refreshModelCacheState)

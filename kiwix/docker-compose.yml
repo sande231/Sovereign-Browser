@@ -1,0 +1,15 @@
+services:
+  kiwix:
+    image: ghcr.io/kiwix/kiwix-serve:3.8.2@sha256:e478554a9920412eeb5ce1d73f24e4b28445ebed233187cdd03c623c32be46a5
+    container_name: sovereign-kiwix
+    ports:
+      - "127.0.0.1:8090:8080"
+    volumes:
+      - ./zim:/data:ro
+    # Traffic test 2026-11-17: docker inspect confirmed these reach kiwix-serve unchanged.
+    # Never set DOWNLOAD: the image's start.sh would then wget a ZIM from the internet.
+    command: ["--blockexternal", "--searchLimit", "10", "*.zim"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"

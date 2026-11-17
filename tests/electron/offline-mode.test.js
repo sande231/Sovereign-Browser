@@ -322,12 +322,26 @@ async function child() {
       await ui("document.querySelector('#network-intro-online').click()");
       await waitFor(introHidden, 'intro hidden after choice');
       assert.equal((await network()).choiceMade, true);
+      // Once chosen, never shown again: not after going Offline and back Online.
+      await ui("window.sovereign.network.setMode('offline', { confirmed: true })");
+      await waitFor(async () => (await network()).mode === 'offline', 'offline after choice');
+      assert.equal(await introHidden(), true, 'intro hidden while Offline after choice');
+      await ui("window.sovereign.network.setMode('online')");
+      await waitFor(async () => (await network()).mode === 'online', 'online after choice');
+      assert.equal(await introHidden(), true, 'intro stays hidden after choice');
     } else if (phase === 'old-again') {
       assert.equal(state.mode, 'online');
       assert.equal(await introHidden(), true, 'asked only once');
     } else {
       assert.equal(state.mode, 'offline', 'unreadable preferences fail closed');
-      assert.equal(await introHidden(), false);
+      // Sandeep 2026-11-17: never offer "Turn on Offline mode" while Offline is already on.
+      assert.equal(state.choiceMade, false);
+      assert.equal(await introHidden(), true, 'intro hidden while Offline is on');
+      // Going Online is itself the choice, so the intro does not appear afterwards.
+      await ui("window.sovereign.network.setMode('online')");
+      await waitFor(async () => (await network()).mode === 'online', 'corrupt: online');
+      assert.equal((await network()).choiceMade, true);
+      assert.equal(await introHidden(), true, 'intro not shown after the user chose Online');
     }
     result.mode = state.mode;
     return result;

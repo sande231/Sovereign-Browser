@@ -1,3 +1,9 @@
+const { isLoopbackHost } = require('./network-mode');
+let knowledgeEndpoint = '';
+function setKnowledgeEndpoint(value) {
+  try { const u = new URL(value); knowledgeEndpoint = u.protocol === 'http:' && isLoopbackHost(u.hostname) ? u.origin : ''; } catch { knowledgeEndpoint = ''; }
+}
+function isKnowledgeLocal(value) { try { return !!knowledgeEndpoint && new URL(value).origin === knowledgeEndpoint; } catch { return false; } }
 const MAX_RECEIPTS = 20;
 const MAX_ENTRIES_PER_RECEIPT = 120;
 
@@ -15,6 +21,7 @@ const CLOUD_AI_HOSTS = [
 ];
 
 const VALID_CATEGORIES = new Set([
+  'local-knowledge',
   'search',
   'source-page',
   'image',
@@ -128,7 +135,7 @@ function buildSummary(receipt) {
   const entries = allEntries.filter(entry => entry.category !== 'blocked');
   if (receipt.offline) {
     // Computed, never hard-coded: a leak must show up as a non-zero count.
-    const external = entries.filter(entry => !['permission', 'locked'].includes(entry.category)).length;
+    const external = entries.filter(entry => !['permission', 'locked'].includes(entry.category) && !entry.localKnowledge).length;
     const blockedCount = blockedEntries.reduce((total, entry) => total + (Number(entry.count) || 1), 0);
     const head = [`Offline: ${external} external request${external === 1 ? '' : 's'}`];
     if (blockedCount > 0) head.push(`${blockedCount} blocked (offline mode)`);
@@ -175,6 +182,7 @@ function summaryParts(receipt) {
     const allowed = permissionEntries.filter(entry => / – allowed /.test(entry.whatWasSent)).length;
     parts.push(`Website permission requests: ${permissionEntries.length} (${allowed} allowed)`);
   }
+  if (entries.some(entry => entry.localKnowledge)) parts.push('local knowledge (Kiwix, 127.0.0.1)');
   if (receipt.type === 'ask') {
     parts.push('AI generated locally');
   }
@@ -279,12 +287,15 @@ function addEntry(receiptId, details = {}) {
   }
   const topic = category === 'sensitive' ? safeString(details.topic, 160) : '';
   // Refused requests keep the origin only: the path or query can hold the question.
-  const url = ['sensitive', 'locked'].includes(category) ? originOnly(details.url) : cleanUrl(details.url);
+  let url = ['sensitive', 'locked'].includes(category) ? originOnly(details.url) : cleanUrl(details.url);
+  if (category === 'local-knowledge' && url) { const parsed = new URL(url); parsed.search = ''; url = parsed.href; }
+  const localKnowledge = category === 'local-knowledge' && isKnowledgeLocal(url);
   const entry = {
     timestamp: timestamp(),
     category,
     method: safeString(details.method || 'GET', 12).toUpperCase() || 'GET',
-    host: hostFromUrl(url),
+    host: localKnowledge ? 'local (Kiwix, 127.0.0.1)' : hostFromUrl(url),
+    ...(category === 'local-knowledge' ? { localKnowledge } : {}),
     url,
     ...(category === 'sensitive' ? { topic } : {}),
     whatWasSent: category === 'sensitive'
@@ -446,6 +457,7 @@ function failureReason(error) {
 }
 
 // Records the attempt before the request, then its outcome: "sent" or "attempted, failed: …".
+// Local knowledge rows say "done": "sent" would contradict "nothing left this device".
 async function fetchWithReceipt(fetchImpl, receiptId, url, options = {}, details = {}) {
   addEntry(receiptId, {
     category: details.category,
@@ -464,7 +476,7 @@ async function fetchWithReceipt(fetchImpl, receiptId, url, options = {}, details
   };
   try {
     const response = await fetchImpl(url, options);
-    settle('sent');
+    settle(entry?.localKnowledge ? 'done' : 'sent');
     return response;
   } catch (error) {
     settle(`attempted, failed: ${failureReason(error)}`);
@@ -502,6 +514,7 @@ function deleteReceipts(predicate) {
 }
 
 function resetForTests() {
+  knowledgeEndpoint = '';
   receipts = [];
   backgroundReceiptId = '';
   offlineMode = false;
@@ -514,6 +527,7 @@ function onUpdate(callback) {
 }
 
 module.exports = {
+  setKnowledgeEndpoint,
   CLOUD_AI_HOSTS,
   deleteReceipts,
   addEntry,

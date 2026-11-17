@@ -358,7 +358,8 @@ function renderNetworkMode(network) {
     ? 'Offline mode: nothing leaves this computer. Click to go online.'
     : 'Online: websites and web search can use the internet. Click to go offline.';
   if (offline && pendingNetworkAction) clearNetworkConfirm();
-  networkIntro.hidden = Boolean(network.choiceMade) || !networkConfirm.hidden;
+  // Asked only while Online and only until the user has chosen (the choice is saved).
+  networkIntro.hidden = Boolean(network.choiceMade) || offline || !networkConfirm.hidden;
 }
 
 async function chooseNetworkMode(action, options) {

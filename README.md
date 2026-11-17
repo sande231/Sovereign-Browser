@@ -202,3 +202,5 @@ Built using Electron, WebLLM, SearXNG, and the open-source tools that support th
 ## Before releasing
 
 - Re-verify every resource in `src/sensitive-guard.js` against the official services before each release: 988 (US and Canada), Samaritans 116 123 (UK and Ireland), Lifeline 13 11 14 (Australia), National Domestic Violence Hotline 1-800-799-7233 (US), National Domestic Abuse Helpline 0808 2000 247 (UK), and findahelpline.com. Only then update the pending last-verified comments. Have `CRISIS_REPLY`, `CRISIS_SHORT_LINE`, `HARM_REPLY` and `ABUSE_RESOURCES` reviewed by a qualified professional before public release.
+
+[Set up offline local knowledge with Kiwix](docs/local-knowledge-setup.md).

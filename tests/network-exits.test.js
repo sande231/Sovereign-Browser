@@ -29,6 +29,7 @@ for (const file of fs.readdirSync('src').filter(file => file.endsWith('.js'))) {
 // Exercise the actual response listener, including case-insensitive CSP preservation.
 let headersListener;
 const headerContext = {
+  isKnowledgeUrl: url => url.startsWith('http://127.0.0.1:8090/'),
   networkMode: createNetworkMode({ initial: 'offline' }),
   offlineLayerOn: () => true,
   offlineConnectSrc: require('../src/network-mode').offlineConnectSrc,
@@ -55,6 +56,12 @@ for (const [mode, layer, url] of [['online', true, 'https://localhost/'], ['offl
   headerContext.networkMode.set(mode);
   headerContext.offlineLayerOn = () => layer;
   headersListener({ url, responseHeaders: {} }, result => assert.equal(JSON.stringify(result), '{}'));
+}
+for (const mode of ['online', 'offline']) {
+ headerContext.networkMode.set(mode);
+ headersListener({url:'http://127.0.0.1:8090/content/wiki/Earth',responseHeaders:{}},result=>{
+  assert.ok(result.responseHeaders['Content-Security-Policy'][0] === "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-src 'self'",'KCSP-'+mode);
+ });
 }
 // The confirmation count and reload share the same set, including allowlisted pages.
 const reloaded = [];

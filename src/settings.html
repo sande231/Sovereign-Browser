@@ -45,12 +45,27 @@
         <label class="settings-label" for="settings-allow-input">Local addresses allowed in Offline mode</label>
         <p class="settings-help network-allowlist-warning" id="settings-allowlist-warning">Only add a local service you trust. Some local services (for example a search engine like SearXNG, a proxy or an AI server) forward what you send to the internet, and Offline mode can't see past them.</p>
         <ul class="network-allowlist" id="settings-allowlist" aria-label="Allowed local addresses"></ul>
+        <div id="knowledge-allowlist" hidden>
+          <strong>Kiwix local knowledge – 127.0.0.1:8090</strong> (built in)
+          <p>Allowed so Ask AI can search the .zim files on this computer. Kiwix only reads those files, and Sovereign's traffic test found no internet requests from Kiwix 3.8.2. To remove this entry, turn off Use local knowledge in Settings.</p>
+        </div>
         <div class="endpoint-row">
           <input id="settings-allow-input" class="endpoint-input" type="text" spellcheck="false" autocomplete="off" placeholder="127.0.0.1:3000">
           <button class="secondary-action" id="settings-allow-add" type="button">Add</button>
         </div>
       </section>
 
+      <section class="settings-section" aria-label="Local knowledge (Kiwix)">
+        <h2>Local knowledge (Kiwix)</h2>
+        <label class="settings-check"><input id="knowledge-enabled" type="checkbox"> Use local knowledge</label>
+        <label for="knowledge-endpoint">Endpoint</label>
+        <input id="knowledge-endpoint" type="url" value="http://127.0.0.1:8090">
+        <button id="knowledge-save" type="button" class="secondary-action">Save</button>
+        <button id="knowledge-check" type="button" class="secondary-action">Check</button>
+        <p class="settings-help">New chats use local knowledge when it is enabled and reachable.</p>
+        <p id="knowledge-status" role="status"></p><ul id="knowledge-books" class="knowledge-books"></ul>
+        <a id="knowledge-guide" href="../../docs/local-knowledge-setup.md">Local knowledge setup guide</a>
+      </section>
       <section class="settings-section" aria-label="Startup">
         <h2>Startup</h2>
         <label class="settings-check">
