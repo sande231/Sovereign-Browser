@@ -77,6 +77,13 @@ contextBridge.exposeInMainWorld('sovereign', {
     updateTabState: (tabId, patch) => ipcRenderer.send('ai:update-tab-state', tabId, patch),
     getNetworkLog: () => ipcRenderer.invoke('ai:get-network-log')
   },
+  knowledge: {
+    status: () => ipcRenderer.invoke('knowledge:status'),
+    updateSettings: patch => ipcRenderer.invoke('knowledge:update-settings', patch),
+    search: request => ipcRenderer.invoke('knowledge:search', request),
+    readSources: request => ipcRenderer.invoke('knowledge:read-sources', request),
+    media: request => ipcRenderer.invoke('knowledge:media', request)
+  },
   search: {
     getSettings: () => ipcRenderer.invoke('search:get-settings'),
     updateSettings: patch => ipcRenderer.invoke('search:update-settings', patch),

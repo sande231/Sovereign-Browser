@@ -48,7 +48,7 @@ function blockedEntryList(blockedHostPorts) {
   )).filter(item => item.entry);
 }
 
-function parseAllowlistEntry(text, { blockedHostPorts = [] } = {}) {
+function parseAllowlistEntry(text, { blockedHostPorts = [], namedAllowlist = [] } = {}) {
   const value = String(text || '').trim();
   const match = /^(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9.-]+):(\d{1,5})$/.exec(value);
   if (!match) {
@@ -62,6 +62,7 @@ function parseAllowlistEntry(text, { blockedHostPorts = [] } = {}) {
     return { ok: false, error: 'Only addresses on this computer can be allowed.' };
   }
   const entry = `${normalizeHost(match[1])}:${port}`;
+  if (namedAllowlist.some(item => item.hostPort === entry)) return { ok: false, error: 'This address already has a built-in entry.' };
   const blocked = blockedEntryList(blockedHostPorts).find(item => item.entry === entry);
   if (blocked) return { ok: false, error: blocked.error };
   return { ok: true, entry };
@@ -89,7 +90,7 @@ function offlineConnectSrc(pageUrl, allowlist = []) {
 
 // blockedOrigins: origins or host:port strings of local services that forward to the internet
 // (SearXNG, the audit proxy). They stay blocked even if the allowlist names them.
-function offlineDecision(value, { allowlist = [], blockedOrigins = [] } = {}) {
+function offlineDecision(value, { allowlist = [], blockedOrigins = [], namedAllowlist = [] } = {}) {
   let url;
   try { url = new URL(String(value)); } catch { return { allow: false, reason: 'external' }; }
   if (ALWAYS_ALLOWED_SCHEMES.has(url.protocol)) return { allow: true, reason: 'internal' };
@@ -104,6 +105,7 @@ function offlineDecision(value, { allowlist = [], blockedOrigins = [] } = {}) {
     .map(origin => (/^[a-z][a-z0-9+.-]*:\/\//i.test(origin) ? hostPortOf(origin) : String(origin)))
     .filter(Boolean);
   if (blocked.includes(hostPort)) return { allow: false, reason: 'blocked-local-service' };
+  if (namedAllowlist.some(item => item.id === 'kiwix' && item.hostPort === hostPort)) return { allow: true, reason: 'named-kiwix' };
   if (!(Array.isArray(allowlist) ? allowlist : []).includes(hostPort)) {
     return { allow: false, reason: 'local-not-allowed' };
   }

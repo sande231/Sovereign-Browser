@@ -1,3 +1,5 @@
+const knowledgeBackend = require('./knowledge-backend');
+let knowledgeSettings = { enabled: false, endpoint: knowledgeBackend.DEFAULT_ENDPOINT };
 const sensitiveGuard = require('./sensitive-guard');
 let privacySettings = { sensitiveTopics: 'strict' };
 const path = require('node:path');
@@ -31,7 +33,7 @@ const {
   searchSearxngMedia
 } = require('./search-backend');
 const {
-  readSourcePages
+  readSourcePages, extractReadableText, selectRelevantPassages
 } = require('./source-reader');
 const privacyReceipts = require('./privacy-receipt');
 const { createPermissionController } = require('./permission-policy');
@@ -552,7 +554,7 @@ function getPageWidth(state, totalWidth) {
 function getChromeHeight(state, totalWidth) {
   const baseHeight = totalWidth <= 860 ? UI_HEIGHT_COMPACT : UI_HEIGHT;
   return baseHeight +
-    (!networkSettings.choiceMade || state?.networkConfirmVisible ? NETWORK_INTRO_HEIGHT : 0) +
+    ((!networkSettings.choiceMade && !networkMode.isOffline()) || state?.networkConfirmVisible ? NETWORK_INTRO_HEIGHT : 0) +
     (state?.findBarVisible ? FIND_BAR_HEIGHT : 0) +
     (state?.downloadsPanelVisible ? DOWNLOADS_PANEL_HEIGHT : 0);
 }
@@ -981,6 +983,8 @@ function assignPrivacyReceiptToSender(sender, receiptId) {
     activePrivacyReceiptsByWebContentsId.delete(sender.id);
     for (const [id, grant] of allowedSearchRequests) if (grant.senderId === sender.id) allowedSearchRequests.delete(id);
     for (const [key, grant] of allowedMediaUrls) if (grant.senderId === sender.id) allowedMediaUrls.delete(key);
+    for (const [id, grant] of allowedKnowledgeRequests) if (grant.senderId === sender.id) allowedKnowledgeRequests.delete(id);
+    for (const [key, grant] of allowedKnowledgeMedia) if (grant.senderId === sender.id) allowedKnowledgeMedia.delete(key);
   });
 }
 
@@ -1077,6 +1081,13 @@ function contextForPrivacyRequest(details) {
 }
 
 function recordPrivacyWebRequest(details) {
+  if (isKnowledgeUrl(details.url)) {
+    const entry = { category: 'local-knowledge', url: details.url, method: details.method, whatWasSent: 'article read on this computer – nothing left this device' };
+    const sender = webContents.fromId(details.webContentsId);
+    const receiptId = sender ? privacyReceiptIdForSender(sender) : '';
+    if (receiptId) privacyReceipts.addEntry(receiptId, entry); else privacyReceipts.addBackgroundEntry(entry);
+    return;
+  }
   const context = contextForPrivacyRequest(details);
   const target = classifyPrivacyRequest(details, context);
   if (target.action === 'debug-skip') {
@@ -1340,6 +1351,8 @@ function loadPreferences() {
         : DEFAULT_AI_MODEL_ID
     };
     savedSession = sanitizeSavedSession(sessionPrefs);
+    try { knowledgeSettings = { enabled: parsed?.knowledge?.enabled === true, endpoint: knowledgeBackend.normalizeKiwixEndpoint(parsed?.knowledge?.endpoint, { blockedHostPorts: blockedLocalHostPorts(), namedAllowlist: namedKnowledgeAllowlist() }) }; } catch { knowledgeSettings.enabled = false; }
+    privacyReceipts.setKnowledgeEndpoint(knowledgeSettings.endpoint);
     applyLoadedNetworkState(initialNetworkState({ prefsFileExisted: true, parsed }), parsed?.network?.offlineAllowlist);
   } catch (error) {
     // No file: a new install starts Offline. An unreadable file also starts Offline (fail closed).
@@ -1385,6 +1398,7 @@ function savePreferences() {
       choiceMade: Boolean(networkSettings.choiceMade),
       offlineAllowlist: [...networkSettings.offlineAllowlist]
     },
+    knowledge: { ...knowledgeSettings },
     privacy: { ...privacySettings },
     session: savedSession
   };
@@ -4112,6 +4126,12 @@ function recordAiNetwork(details) {
 // Layer 1 of Offline mode: every request is checked here before anything else.
 function setupNetworkMonitorForSession(ses) {
   ses.webRequest.onHeadersReceived((details, callback) => {
+    if (isKnowledgeUrl(details.url)) {
+      const responseHeaders = { ...details.responseHeaders };
+      const key = Object.keys(responseHeaders).find(name => name.toLowerCase() === 'content-security-policy') || 'Content-Security-Policy';
+      responseHeaders[key] = [...(responseHeaders[key] || []), "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-src 'self'"];
+      callback({ responseHeaders }); return;
+    }
     if (!networkMode.isOffline() || !offlineLayerOn('webrequest') || !/^https?:/i.test(details.url)) {
       callback({});
       return;
@@ -4121,10 +4141,16 @@ function setupNetworkMonitorForSession(ses) {
     responseHeaders[key] = [...(responseHeaders[key] || []), offlineConnectSrc(details.url, networkSettings.offlineAllowlist)];
     callback({ responseHeaders });
   });
-  ses.webRequest.onCompleted(details => guardedDownloadRequests.delete(details.id));
-  ses.webRequest.onErrorOccurred(details => guardedDownloadRequests.delete(details.id));
-  ses.webRequest.onBeforeRedirect(details => recordPrivacyRedirect(details));
+  ses.webRequest.onCompleted(details => { guardedDownloadRequests.delete(details.id); localKnowledgeRedirects.delete(details.id); });
+  ses.webRequest.onErrorOccurred(details => { guardedDownloadRequests.delete(details.id); localKnowledgeRedirects.delete(details.id); });
+  ses.webRequest.onBeforeRedirect(details => {
+    if (isKnowledgeUrl(details.url) && !isKnowledgeUrl(details.redirectURL) && details.resourceType !== 'mainFrame') {
+      localKnowledgeRedirects.add(details.id);
+    }
+    recordPrivacyRedirect(details);
+  });
   ses.webRequest.onBeforeRequest((details, callback) => {
+    if (localKnowledgeRedirects.has(details.id)) { callback({ cancel: true }); return; }
     if (networkMode.isOffline() && offlineLayerOn('webrequest') && !networkDecision(details.url).allow) {
       recordOfflineBlocked(details);
       callback({ cancel: true });
@@ -4192,6 +4218,7 @@ function blockedLocalHostPorts() {
 function networkDecision(url) {
   return offlineDecision(url, {
     allowlist: networkSettings.offlineAllowlist,
+    namedAllowlist: namedKnowledgeAllowlist(),
     blockedOrigins: blockedLocalHostPorts().map(item => item.entry)
   });
 }
@@ -4213,6 +4240,7 @@ function networkStateSnapshot() {
     offline: networkMode.isOffline(),
     choiceMade: Boolean(networkSettings.choiceMade),
     offlineAllowlist: [...networkSettings.offlineAllowlist],
+    namedAllowlist: namedKnowledgeAllowlist(),
     maxAllowlist: MAX_ALLOWLIST,
     auditProxy: Boolean(AUDIT_PROXY)
   };
@@ -4222,7 +4250,7 @@ function applyLoadedNetworkState(initial, allowlist) {
   const testMode = ['offline', 'online'].includes(TEST_NETWORK_MODE) ? TEST_NETWORK_MODE : '';
   networkSettings = {
     choiceMade: Boolean(initial.choiceMade) || Boolean(testMode),
-    offlineAllowlist: normalizeAllowlist(allowlist, { blockedHostPorts: blockedLocalHostPorts() })
+    offlineAllowlist: normalizeAllowlist(allowlist, { blockedHostPorts: blockedLocalHostPorts(), namedAllowlist: namedKnowledgeAllowlist() })
   };
   networkMode.set(testMode || initial.mode);
 }
@@ -4440,7 +4468,7 @@ ipcMain.handle('network:set-mode', (_event, mode, options) => setNetworkMode(mod
 ipcMain.handle('network:dismiss-intro', (_event, choice, options) => setNetworkMode(choice === 'offline' ? 'offline' : 'online', { requireConfirm: true, confirmed: options?.confirmed === true }));
 
 ipcMain.handle('network:add-allowed', (_event, text) => {
-  const parsed = parseAllowlistEntry(text, { blockedHostPorts: blockedLocalHostPorts() });
+  const parsed = parseAllowlistEntry(text, { blockedHostPorts: blockedLocalHostPorts(), namedAllowlist: namedKnowledgeAllowlist() });
   if (!parsed.ok) return { ok: false, error: parsed.error, state: networkStateSnapshot() };
   if (networkSettings.offlineAllowlist.includes(parsed.entry)) {
     return { ok: false, error: 'That address is already on the list.', state: networkStateSnapshot() };
@@ -5009,6 +5037,7 @@ ipcMain.handle('search:get-settings', () => ({
 ipcMain.handle('search:update-settings', (_event, patch) => {
   const input = patch && typeof patch === 'object' ? patch : {};
   if (typeof input.endpoint === 'string') {
+    if (hostPortOf(normalizeSearxngEndpoint(input.endpoint)) === hostPortOf(knowledgeSettings.endpoint)) throw new Error('SearXNG and Kiwix must use separate endpoints.');
     searchSettings = {
       ...searchSettings,
       endpoint: normalizeSearxngEndpoint(input.endpoint)
@@ -5040,6 +5069,357 @@ function recordSearxngForwardingSafely(receiptId, result) {
     console.warn('Could not record SearXNG forwarding in the privacy receipt:', error?.message || error);
   }
 }
+
+// Local knowledge has separate grants: a web grant can never authorize a loopback read.
+const KNOWLEDGE_CHECK_RECEIPT_ID = 'local-knowledge-check';
+const localKnowledgeRedirects = new Set();
+const allowedKnowledgeRequests = new Map();
+const allowedKnowledgeMedia = new Map();
+function namedKnowledgeAllowlist() {
+  if (!knowledgeSettings.enabled) return [];
+  return [{
+    id: 'kiwix',
+    hostPort: hostPortOf(knowledgeSettings.endpoint),
+    label: 'Kiwix local knowledge'
+  }];
+}
+function isKnowledgeUrl(url) {
+  try {
+    return knowledgeSettings.enabled && new URL(url).origin === knowledgeSettings.endpoint;
+  } catch {
+    return false;
+  }
+}
+function knowledgeGate(event, input, question) {
+  if (findTabBySender(event.sender).tab?.kind !== 'ask' ||
+      !input.chatId ||
+      typeof input.chatId !== 'string') throw new Error('Local knowledge requires an Ask chat.');
+  // Crisis classification precedes service availability and every local request.
+  const crisis = sensitiveGate(event.sender, question, {
+    ...input,
+    crisisOnly: true
+  });
+  if (!crisis.ok) return crisis;
+  const classification = sensitiveGuard.classifyQuestion(question, {
+    strictness: privacySettings.sensitiveTopics
+  });
+  if (chatIsLocked(input.chatId) && classification.level !== 'none') return {
+    ok: false,
+    locked: true,
+    sensitive: classification
+  };
+  if (!knowledgeSettings.enabled) throw new Error('Local knowledge is disabled.');
+  knowledgeBackend.normalizeKiwixEndpoint(knowledgeSettings.endpoint, {
+    blockedHostPorts: blockedLocalHostPorts(),
+    namedAllowlist: namedKnowledgeAllowlist()
+  });
+  return {
+    ok: true,
+    classification
+  };
+}
+async function kiwixFetch(url, {
+  signal,
+  receiptId,
+  purpose = 'article',
+  method = 'GET'
+} = {}) {
+  if (!isKnowledgeUrl(url)) throw new Error('Local knowledge URL refused.');
+  knowledgeBackend.normalizeKiwixEndpoint(knowledgeSettings.endpoint, {
+    blockedHostPorts: blockedLocalHostPorts(),
+    namedAllowlist: namedKnowledgeAllowlist()
+  });
+  return privacyReceipts.fetchWithReceipt((value, options) => knowledgeBackend.fetchKiwix(value, {
+    ...options,
+    endpoint: knowledgeSettings.endpoint
+  }), receiptId, url, {
+    signal,
+    method
+  }, {
+    category: 'local-knowledge',
+    whatWasSent: purpose === 'search' ? 'search on this computer – nothing left this device' : purpose === 'catalog' ? 'local book catalogue check – nothing left this device' : purpose === 'image' ? 'local article image – nothing left this device' : 'article read on this computer – nothing left this device'
+  });
+}
+// `local` is internal only (the IPC handler never passes it): the media path searches for the
+// image subject and keeps only articles whose title matches it.
+async function handleKnowledgeSearch(event, input = {}, local = {}) {
+  const gate = knowledgeGate(event, input, input.query);
+  if (!gate.ok) return gate;
+  const requestId = String(input.requestId || '').slice(0, 80);
+  if (!requestId || activeSearchRequests.has(requestId)) throw new Error('Invalid local knowledge request id.');
+  allowedKnowledgeRequests.delete(requestId);
+  const receipt = privacyReceipts.createReceipt({
+    id: requestId,
+    type: 'ask',
+    label: 'Local knowledge',
+    chatId: input.chatId,
+    query: gate.classification.level === 'none' ? input.query : '',
+    localOnly: true
+  });
+  assignPrivacyReceiptToSender(event.sender, receipt.id);
+  const controller = new AbortController();
+  activeSearchRequests.set(requestId, controller);
+  try {
+    const response = await kiwixFetch(knowledgeBackend.buildSearchUrl(knowledgeSettings.endpoint, {
+      pattern: local.pattern || input.query
+    }), {
+      signal: controller.signal,
+      receiptId: receipt.id,
+      purpose: 'search'
+    });
+    const candidates = knowledgeBackend.parseSearchXml(await response.text()).map((item, i) => knowledgeBackend.normalizeKiwixResult(item, knowledgeSettings.endpoint, i)).filter(Boolean);
+    const safe = candidates.filter(item => sensitiveGuard.classifyQuestion(item.title + ' ' + item.snippet).level !== 'crisis');
+    const withheld = candidates.length - safe.length;
+    if (withheld) privacyReceipts.addEntry(receipt.id, {
+      category: 'local-knowledge',
+      method: 'FILTER',
+      url: knowledgeSettings.endpoint + '/search',
+      whatWasSent: `${withheld} local result${withheld === 1 ? '' : 's'} withheld`
+    });
+    const matching = local.titleTerms ? safe.filter(item => knowledgeBackend.titleMatchesSubject(item.title, local.titleTerms)) : safe;
+    const results = matching.slice(0, 5).map((item, i) => ({
+      ...item,
+      id: i + 1
+    }));
+    if (!knowledgeGate(event, input, input.query).ok) return {
+      ok: false,
+      locked: true
+    };
+    for (const [key, grant] of allowedKnowledgeRequests) if (grant.expires <= Date.now()) allowedKnowledgeRequests.delete(key);
+    allowedKnowledgeRequests.set(requestId, {
+      senderId: event.sender.id,
+      chatId: input.chatId,
+      endpoint: knowledgeSettings.endpoint,
+      question: input.query,
+      expires: Date.now() + 300000,
+      results,
+      urls: new Set(results.map(item => item.url))
+    });
+    while (allowedKnowledgeRequests.size > 100) allowedKnowledgeRequests.delete(allowedKnowledgeRequests.keys().next().value);
+    return {
+      ok: true,
+      results,
+      sensitive: gate.classification,
+      receiptId: receipt.id
+    };
+  } finally {
+    activeSearchRequests.delete(requestId);
+  }
+}
+async function handleKnowledgeReadSources(event, input = {}) {
+  const gate = knowledgeGate(event, input, input.question);
+  if (!gate.ok) return gate;
+  // Bind reads to the sender, chat, question, endpoint and exact granted URLs.
+  const grant = allowedKnowledgeRequests.get(input.requestId);
+  if (!grant ||
+      grant.senderId !== event.sender.id ||
+      grant.chatId !== input.chatId ||
+      grant.endpoint !== knowledgeSettings.endpoint ||
+      grant.question !== input.question ||
+      grant.expires <= Date.now() ||
+      !Array.isArray(input.results) ||
+      input.results.some(item => !grant.urls.has(item.url))) throw new Error('Local source reading requires its search grant.');
+  allowedKnowledgeRequests.delete(input.requestId);
+  const sources = [];
+  const controller = new AbortController();
+  activeSearchRequests.set(input.requestId, controller);
+  try {
+    for (const result of grant.results.filter(item => input.results.some(wanted => wanted.url === item.url))) {
+      if (!knowledgeGate(event, input, input.question).ok) return {
+        ok: false,
+        locked: true
+      };
+      const response = await kiwixFetch(knowledgeBackend.articleRawUrl(result.url), {
+        signal: controller.signal,
+        receiptId: input.requestId
+      });
+      const extracted = extractReadableText(await response.text());
+      // Drop Wikipedia's "[144]"-style markers before passages reach the model.
+      extracted.text = knowledgeBackend.stripReferenceMarkers(extracted.text);
+      const selectedPassages = selectRelevantPassages(input.question, extracted.text, {
+        maxChars: 2400
+      });
+      sources.push({
+        ...result,
+        selectedPassages,
+        evidenceText: selectedPassages.join('\n\n') || result.snippet,
+        text: extracted.text,
+        status: 'read',
+        evidenceMode: selectedPassages.length ? 'page' : 'snippet',
+        partial: extracted.partial
+      });
+    }
+    return {
+      ok: true,
+      sources
+    };
+  } finally {
+    activeSearchRequests.delete(input.requestId);
+  }
+}
+async function handleKnowledgeMedia(event, input = {}) {
+  const gate = knowledgeGate(event, input, input.query);
+  if (!gate.ok) return gate;
+  // Images only from articles whose title names the subject ("the earth" → "Earth").
+  const subject = knowledgeBackend.mediaSubject(input.query);
+  const titleTerms = knowledgeBackend.mediaSubjectTerms(subject);
+  if (!titleTerms.length) return {
+    ok: true,
+    results: [],
+    sensitive: gate.classification
+  };
+  const subjectGate = knowledgeGate(event, input, subject);
+  if (!subjectGate.ok) return subjectGate;
+  const found = await handleKnowledgeSearch(event, input, {
+    pattern: subject,
+    titleTerms
+  });
+  if (!found.ok) return found;
+  allowedKnowledgeRequests.delete(input.requestId);
+  const results = [];
+  const controller = new AbortController();
+  activeSearchRequests.set(input.requestId, controller);
+  try {
+    for (const article of found.results) {
+      if (!knowledgeGate(event, input, input.query).ok) return {
+        ok: false,
+        locked: true
+      };
+      const response = await kiwixFetch(knowledgeBackend.articleRawUrl(article.url), {
+        signal: controller.signal,
+        receiptId: input.requestId
+      });
+      for (const url of knowledgeBackend.articleImages(await response.text(), article.url, knowledgeSettings.endpoint)) {
+        const item = {
+          ...article,
+          id: results.length + 1,
+          type: 'images',
+          pageUrl: article.url,
+          sourceUrl: article.url,
+          hasSourcePage: true,
+          mediaUrl: url,
+          originalMediaUrl: url,
+          thumbnailUrl: url,
+          downloadUrl: url
+        };
+        results.push(item);
+        allowedKnowledgeMedia.set(urlKey(url, String(event.sender.id)), {
+          senderId: event.sender.id,
+          chatId: input.chatId,
+          question: input.query,
+          endpoint: knowledgeSettings.endpoint,
+          expires: Date.now() + 300000
+        });
+        thumbnailReceipts.remember(urlKey(url, String(event.sender.id)), input.requestId);
+        if (results.length >= 5) break;
+      }
+      if (results.length >= 5) break;
+    }
+    while (allowedKnowledgeMedia.size > 1000) allowedKnowledgeMedia.delete(allowedKnowledgeMedia.keys().next().value);
+    return {
+      ok: true,
+      results,
+      sensitive: gate.classification
+    };
+  } finally {
+    activeSearchRequests.delete(input.requestId);
+  }
+}
+function requireKnowledgeMedia(event, url) {
+  const grant = allowedKnowledgeMedia.get(urlKey(url, String(event.sender.id)));
+  if (!grant ||
+      grant.expires <= Date.now() ||
+      grant.endpoint !== knowledgeSettings.endpoint ||
+      !knowledgeGate(event, grant, grant.question).ok) throw new Error('Local image requires a current grant.');
+  return grant;
+}
+async function localMediaRequest(event, input, download = false) {
+  requireKnowledgeMedia(event, input.url);
+  const response = await kiwixFetch(input.url, {
+    receiptId: privacyReceiptIdForSender(event.sender),
+    purpose: 'image',
+    method: download ? 'GET' : 'HEAD'
+  });
+  const contentType = response.headers.get('content-type');
+  if (!/^image\/(?:png|jpeg|gif|webp|avif|bmp)(?:;|$)/i.test(contentType)) throw new Error('Local image type refused.');
+  if (download) {
+    const choice = await dialog.showSaveDialog({
+      title: 'Save Image',
+      defaultPath: filenameFromUrl(input.url, 'image', contentType)
+    });
+    if (choice.canceled || !choice.filePath) return {
+      ok: false,
+      canceled: true
+    };
+    fs.writeFileSync(choice.filePath, Buffer.from(await response.arrayBuffer()));
+  }
+  return {
+    ok: true,
+    url: input.url,
+    downloadable: true,
+    contentType,
+    length: response.headers.get('content-length')
+  };
+}
+ipcMain.handle('knowledge:search', (event, input) => handleKnowledgeSearch(event, input));
+ipcMain.handle('knowledge:read-sources', handleKnowledgeReadSources);
+ipcMain.handle('knowledge:media', handleKnowledgeMedia);
+ipcMain.handle('knowledge:status', async event => {
+  const tab = findTabBySender(event.sender).tab;
+  if (!['ask', 'settings'].includes(tab?.kind)) throw new Error('Local knowledge status requires Settings or Ask.');
+  if (!knowledgeSettings.enabled) return {
+    ...knowledgeSettings,
+    reachable: false,
+    books: []
+  };
+  // Startup checks share one receipt and must not replace the active search receipt.
+  const receipt = privacyReceipts.createReceipt({
+    id: KNOWLEDGE_CHECK_RECEIPT_ID,
+    type: 'activity',
+    label: 'Local knowledge check',
+    query: ''
+  });
+  try {
+    const response = await kiwixFetch(knowledgeSettings.endpoint + '/catalog/v2/entries', {
+      receiptId: receipt.id,
+      purpose: 'catalog'
+    });
+    return {
+      ...knowledgeSettings,
+      reachable: true,
+      books: knowledgeBackend.listBooks(await response.text())
+    };
+  } catch {
+    return {
+      ...knowledgeSettings,
+      reachable: false,
+      books: []
+    };
+  }
+});
+ipcMain.handle('knowledge:update-settings', (event, patch = {}) => {
+  if (findTabBySender(event.sender).tab?.kind !== 'settings') throw new Error('Local knowledge settings require Settings.');
+  const endpoint = knowledgeBackend.normalizeKiwixEndpoint(patch.endpoint ?? knowledgeSettings.endpoint, {
+    blockedHostPorts: blockedLocalHostPorts(),
+    namedAllowlist: namedKnowledgeAllowlist()
+  });
+  knowledgeSettings = {
+    enabled: patch.enabled === undefined ? knowledgeSettings.enabled : patch.enabled === true,
+    endpoint
+  };
+  allowedKnowledgeRequests.clear();
+  allowedKnowledgeMedia.clear();
+  networkSettings.offlineAllowlist = normalizeAllowlist(networkSettings.offlineAllowlist, {
+    blockedHostPorts: blockedLocalHostPorts(),
+    namedAllowlist: namedKnowledgeAllowlist()
+  });
+  privacyReceipts.setKnowledgeEndpoint(endpoint);
+  savePreferences();
+  broadcastNetworkState();
+  return {
+    ...knowledgeSettings
+  };
+});
 
 // Grants are scoped to the sender, bounded and expire; reading consumes a grant.
 const allowedSearchRequests = new Map();
@@ -5145,6 +5525,7 @@ async function handleSearchQuery(event, request) {
   }
 
   const endpoint = normalizeSearxngEndpoint(input.endpoint || searchSettings.endpoint);
+  if (hostPortOf(endpoint) === hostPortOf(knowledgeSettings.endpoint)) throw new Error('SearXNG and Kiwix must use separate endpoints.');
   refuseWebWhileOffline(event.sender, endpoint);
   allowedSearchRequests.delete(requestId);
   const gate = sensitiveGate(event.sender, input.query, input);
@@ -5298,6 +5679,7 @@ ipcMain.handle('media:preflight', async (event, request) => {
     throw new Error('Media validation is only available from Sovereign internal pages.');
   }
   const input = request && typeof request === 'object' ? request : {};
+  if (isKnowledgeUrl(input.url)) return localMediaRequest(event, input, false);
   refuseWebWhileOffline(event.sender, input.url);
   requireAllowedMedia(event.sender, input.url);
   const mediaType = input.type === 'videos' ? 'videos' : 'images';
@@ -5319,6 +5701,7 @@ ipcMain.handle('media:download', async (event, request) => {
     throw new Error('Media downloads are only available from Sovereign internal pages.');
   }
   const input = request && typeof request === 'object' ? request : {};
+  if (isKnowledgeUrl(input.url)) return localMediaRequest(event, input, true);
   refuseWebWhileOffline(event.sender, input.url);
   requireAllowedMedia(event.sender, input.url);
   const mediaType = input.type === 'videos' ? 'videos' : 'images';
@@ -5442,10 +5825,13 @@ ipcMain.handle('search:read-sources', handleReadSources);
 ipcMain.on('search:cancel', (event, requestId) => {
   const id = String(requestId || '').slice(0, 80);
   if (allowedSearchRequests.get(id)?.senderId === event.sender.id) allowedSearchRequests.delete(id);
+  if (allowedKnowledgeRequests.get(id)?.senderId === event.sender.id) allowedKnowledgeRequests.delete(id);
   activeSearchRequests.get(id)?.abort();
 });
 
 ipcMain.handle('settings:get', () => ({
+  knowledge: { ...knowledgeSettings },
+  knowledgeGuide: pathToFileURL(path.join(__dirname, '..', 'docs', 'local-knowledge-setup.md')).href,
   search: searchSettingsSnapshot(),
   model: activeAiModel(),
   models: AI_MODELS,

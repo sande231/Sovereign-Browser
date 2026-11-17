@@ -2846,3 +2846,7 @@ button:disabled {
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .web-crisis-note { color: #f2e7c9; }
 }
+
+.local-note { font-size: 0.8rem; color: var(--text-muted); }
+.local-toggle { white-space: nowrap; }
+.knowledge-books { margin: 0.5rem 0; }

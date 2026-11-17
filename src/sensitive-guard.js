@@ -117,6 +117,22 @@
     const crisisText = normalizeCrisisText(original);
     const crisisForms = [crisisText, crisisText.replace(/'/g, '')];
     const crisisPattern = /\b(?:i want to (?:die|kill myself|commit suicide)|i(?:'m|m| am| feel)(?: feeling)? (?:suicidal|sucidal|suicidle)|feeling (?:suicidal|sucidal|suicidle)|(?:i(?:'m|m| am)? )?thinking about (?:killing myself|suicide)|end it all|no reason to live|want to disappear forever|kill myself|end my life|don'?t want to (?:live|be here anymore)|better off dead|hurt(?:ing)? myself|cut(?:ting)? myself|how many pills.{0,30}overdose|how much [^.!?]{0,60}overdose and die|lethal dose|painless way to die|how to hang (?:myself|yourself|oneself|(?:a )?noose)|how to commit suicide)\b/;
+    // Task 2a: method-seeking cues use the existing crisis-normalised copy.
+    const methodCue = /\b(?:how to|how do i|ways? to|(?:best|easiest|quickest|surest) way|painless|methods?|dose|how much|how many|lethal|fatal)\b/;
+    const methodTarget = /\b(?:kill myself|end my life|to die(?! (?:my|your|the|her|his) (?:hair|clothes|fabric|shirt)\b)|overdose|to od(?! green\b)|od (?:on|with)|od$|cut (?:myself|my wrists?|my arms?|deep(?:er)?)(?! tissue\b)|hang myself)\b/;
+    const suicideHelp = /\b(?:prevent(?:ion)?|reduce|risk|support|help|talk|after|awareness|survivor|hotline|statistics|rates)\b/;
+    const suicideMethod = /\b(?:suicide methods?|methods? (?:of|for) suicide|(?:how|ways?|(?:best|easiest|quickest|surest|painless) way) to commit suicide|how (?:much|many) [^.!?;]*?(?:for|to commit) suicide)\b/;
+    // Task 2a extra round: fixed method phrases. A bare "how to end it" (breakups, emails), "die in
+    // <a game>" and distance "kms" are deliberately not matched.
+    const methodPhrase = /\b(?:(?:painless|easiest|quickest|surest|best) ways? to end it|end it (?:now|tonight|forever)|(?:ways?|how) to kms|how (?:can|could|would|should|do) i die (?:quickly|fast|painlessly|peacefully|easily|tonight|now|without pain)|slit (?:my|your) (?:wrists?|throat))\b/;
+    const methodSeeking = crisisText.split(/[.!?;\n]+/).some(sentence => {
+      // Rescue/treatment questions are not instructions for causing an overdose.
+      const candidate = sentence.replace(/\bhow to (?:treat|prevent|reverse|recognize|recognise|respond to|help (?:with|someone with)) (?:an? )?overdose\b/g, '');
+      const cues = [...candidate.matchAll(new RegExp(methodCue.source, 'g'))];
+      const targets = [...candidate.matchAll(new RegExp(methodTarget.source, 'g'))];
+      return (!suicideHelp.test(candidate) && suicideMethod.test(candidate)) || cues.some(c => targets.some(t => Math.abs(c.index - t.index) <= 80)) || /\bfatal dose\b/.test(candidate) || methodPhrase.test(candidate);
+    });
+    if (methodSeeking) return { level: 'crisis', categories: ['self-harm'] };
     const crisisKms = [...crisisText.matchAll(/\bkms\b/g)].some(match => {
       // In the explicitly requested "want to kms", "to" is not a distance word.
       const before = crisisText.slice(0, match.index).replace(/\bwant to\s*$/, 'want ');
@@ -127,6 +143,7 @@
     });
     if (crisisForms.some(candidate => crisisPattern.test(candidate)) || crisisKms) return { level: 'crisis', categories: ['self-harm'] };
     // Self-harm above always wins. Remove only entertainment phrases, not the whole question.
+    if (/\bpoison\b/.test(crisisText) && /\b(?:untraceable|undetectable|won'?t show up (?:in an autopsy|on a test))\b/.test(crisisText)) return { level: 'crisis', categories: ['harm-to-others'] };
     const injectionSentences = text.split(/[.!?;\n]+/).filter(isInjectionSentence);
     const harmText = crisisForms[1].split(/([.!?;\n]+)/).map(sentence => isInjectionSentence(sentence) ? sentence.replace(/\b(?:shoot|shot) up\b/g, 'inject') : sentence).join('').replace(/\bhow to get away with murder\s+(?:cast|season|episode|show)\b/g, '').replace(/\bmurder mystery\b/g, '');
     const target = '(?:someone|somebody|a person|him|her|them|people|my (?:boss|ex|partner|husband|wife|boyfriend|girlfriend|parent|mother|father|mom|dad|brother|sister|son|daughter|friend|neighbor|neighbour|coworker))';

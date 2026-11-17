@@ -9,3 +9,6 @@ mitm-hosts.txt
 searxng/.env
 .env
 searxng/.env
+
+kiwix/zim/*.zim
+kiwix/zim/*.sha256

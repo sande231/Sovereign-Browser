@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:dc="http://purl.org/dc/terms/"
+      xmlns:opds="https://specs.opds.io/opds-1.2"
+      xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+  <id>3d53d6bb-bb12-9844-611e-c2ee5b3fb29f</id>
+
+  <link rel="self"
+        href="/catalog/v2/entries"
+        type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  <link rel="start"
+        href="/catalog/v2/root.xml"
+        type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="up"
+        href="/catalog/v2/root.xml"
+        type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+
+  <title>All Entries</title>
+  <updated>2026-11-17T17:11:59Z</updated>
+
+  <entry>
+    <id>urn:uuid:dd8a2bd2-c05b-ac6c-8074-6c30e14803fb</id>
+    <title>Wikipedia 100</title>
+    <updated>2026-08-20T00:00:00Z</updated>
+    <summary>Top one hundred Wikipedia articles</summary>
+    <language>eng</language>
+    <name>wikipedia_en_100</name>
+    <flavour></flavour>
+    <category>wikipedia</category>
+    <tags>wikipedia;_category:wikipedia;_details:yes;_ftindex:yes;_pictures:yes;_videos:yes</tags>
+    <articleCount>5056</articleCount>
+    <mediaCount>4122</mediaCount>
+    <link rel="http://opds-spec.org/image/thumbnail"
+          href="/catalog/v2/illustration/dd8a2bd2-c05b-ac6c-8074-6c30e14803fb/?size=48"
+          type="image/png;width=48;height=48;scale=1"/>
+    <link type="text/html" href="/content/wikipedia_en_100_2026-08" />
+    <author>
+      <name>Wikipedia</name>
+    </author>
+    <publisher>
+      <name>openZIM</name>
+    </publisher>
+    <dc:issued>2026-08-20T00:00:00Z</dc:issued>
+    
+  </entry>
+</feed>

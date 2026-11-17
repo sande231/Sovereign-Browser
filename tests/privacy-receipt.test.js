@@ -256,6 +256,25 @@ console.log('privacy-receipt tests passed');
  if (JSON.stringify([receipts.getReceipts(),receipts.exportPayload()]).includes('SECRETQ-7731')) { console.error('P2'); process.exit(1); }
 }
 
+
+{
+ receipts.resetForTests(); receipts.setOffline(true); receipts.setKnowledgeEndpoint('http://127.0.0.1:8090');
+ const r=receipts.createReceipt({type:'ask'});
+ receipts.addEntry(r.id,{category:'local-knowledge',url:'http://127.0.0.1:8090/search?pattern=PRIVATE',whatWasSent:'search on this computer – nothing left this device'});
+ let snapshot=receipts.getReceipt(r.id);
+ assert.ok(snapshot.summary==='Offline: 0 external requests · local knowledge (Kiwix, 127.0.0.1) · AI generated locally','KP1');
+ assert.ok(snapshot.entries[0].host==='local (Kiwix, 127.0.0.1)' && !snapshot.entries[0].url.includes('?'),'KP2');
+ receipts.addEntry(r.id,{category:'local-knowledge',url:'http://127.0.0.1:8091/search?pattern=PRIVATE'});
+ assert.ok(receipts.getReceipt(r.id).summary.startsWith('Offline: 1 external request'),'KP3');
+ receipts.setOffline(false);
+ receipts.addEntry(r.id,{category:'search',url:'http://127.0.0.1:8080/search'});
+ assert.ok(receipts.getReceipt(r.id).summary.includes('SearXNG') && receipts.getReceipt(r.id).summary.includes('local knowledge'),'KP4');
+ receipts.setKnowledgeEndpoint('https://external.test'); receipts.setOffline(true);
+ const e=receipts.createReceipt({type:'ask'});receipts.addEntry(e.id,{category:'local-knowledge',url:'https://external.test/search'});
+ assert.ok(receipts.getReceipt(e.id).summary.startsWith('Offline: 1 external request'),'KP5');
+ receipts.resetForTests();
+}
+
 // Task 1c Round 6: failed attempts and locked refusals are recorded; no question text kept.
 (async () => {
  const store = require('../src/privacy-receipt');
@@ -272,6 +291,13 @@ console.log('privacy-receipt tests passed');
  const ok = store.createReceipt({ id: 'attempt-ok', type: 'search' });
  await store.fetchWithReceipt(async () => ({ ok: true }), ok.id, 'http://127.0.0.1:8080/search', {}, { category: 'search' });
  if (store.getReceipt(ok.id).entries.at(-1).outcome !== 'sent') { console.error('R4'); process.exit(1); }
+ // Local knowledge rows say "done", never "sent" (it would contradict "nothing left this device").
+ store.setKnowledgeEndpoint('http://127.0.0.1:8090');
+ const localOk = store.createReceipt({ id: 'attempt-local', type: 'ask' });
+ await store.fetchWithReceipt(async () => ({ ok: true }), localOk.id, 'http://127.0.0.1:8090/search?pattern=x', {}, { category: 'local-knowledge', whatWasSent: 'search on this computer – nothing left this device' });
+ if (store.getReceipt(localOk.id).entries.at(-1).outcome !== 'done') { console.error('R4-local'); process.exit(1); }
+ await assert.rejects(() => store.fetchWithReceipt(async () => { throw refused; }, localOk.id, 'http://127.0.0.1:8090/search', {}, { category: 'local-knowledge' }));
+ if (store.getReceipt(localOk.id).entries.at(-1).outcome !== 'attempted, failed: connection refused') { console.error('R4-local-fail'); process.exit(1); }
  const locked = store.createReceipt({ id: 'locked', type: 'ask', query: '', chatId: 'chat-x' });
  store.addEntry(locked.id, { category: 'locked', url: 'http://127.0.0.1:8080/search?q=' + marker, whatWasSent: marker });
  const entry = store.getReceipt(locked.id).entries[0];

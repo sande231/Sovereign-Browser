@@ -169,3 +169,15 @@ for (const [input, expected] of modeCases) {
 }
 
 console.log('network-mode tests passed');
+
+// Task 2a: named entries are separate from the user's capped list.
+{
+ const n = require('../src/network-mode');
+ const namedAllowlist=[{id:'kiwix',hostPort:'127.0.0.1:8090',label:'Kiwix'}];
+ assert.ok(n.offlineDecision('http://127.0.0.1:8090/content/a/b',{namedAllowlist}).reason==='named-kiwix','KN1');
+ assert.ok(!n.offlineDecision('http://127.0.0.1:8090/content/a/b').allow,'KN2');
+ assert.ok(!n.parseAllowlistEntry('127.0.0.1:8090',{namedAllowlist}).ok,'KN3');
+ const allowlist=Array.from({length:20},(_,i)=>'127.0.0.1:'+(3000+i));
+ assert.ok(n.normalizeAllowlist(allowlist,{namedAllowlist}).length===20 && n.offlineDecision('http://127.0.0.1:8090',{allowlist,namedAllowlist}).allow,'KN4');
+ assert.ok(!n.offlineDecision('http://127.0.0.1:8090',{namedAllowlist,blockedOrigins:['127.0.0.1:8090']}).allow,'KN5');
+}
