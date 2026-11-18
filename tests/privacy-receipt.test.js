@@ -309,4 +309,13 @@ console.log('privacy-receipt tests passed');
  store.addEntry(offline.id, { category: 'locked', url: 'http://127.0.0.1:8080/' });
  if (!store.getReceipt(offline.id).summary.startsWith('Not sent: web search is off')) { console.error('R8'); process.exit(1); }
  store.setOffline(false);
+// R3 sensitive summary retains the local-knowledge disclosure.
+try {
+ const r=require('../src/privacy-receipt');r.resetForTests();r.setKnowledgeEndpoint('http://127.0.0.1:8090');
+ const receipt=r.createReceipt({id:'PR1',type:'ask'});
+ r.addEntry(receipt.id,{category:'local-knowledge',url:'http://127.0.0.1:8090',whatWasSent:'local search'});
+ r.addEntry(receipt.id,{category:'sensitive',topic:'medical',url:'http://127.0.0.1:8080'});
+ if(!r.getReceipt(receipt.id).summary.includes('local knowledge (Kiwix, 127.0.0.1)'))throw Error('PR1');
+} catch {console.error('PR1');process.exitCode=1;}
+
 })().catch(() => { console.error('R0'); process.exit(1); });

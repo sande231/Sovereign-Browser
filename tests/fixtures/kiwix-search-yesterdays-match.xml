@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+     xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/"
+     xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Search: Who won yesterday&apos;s match?</title>
+    <link>/search?pattern=Who%20won%20yesterday&apos;s%20match%3F&amp;&amp;format=xml&amp;start=0&amp;pageLength=10</link>
+    <description>Search result for Who won yesterday&apos;s match?</description>
+    <opensearch:totalResults>3</opensearch:totalResults>
+    <opensearch:startIndex>0</opensearch:startIndex>
+    <opensearch:itemsPerPage>10</opensearch:itemsPerPage>
+    <atom:link rel="search" type="application/opensearchdescription+xml" href="/search/searchdescription.xml"/>
+    <opensearch:Query role="request"
+      searchTerms="Who won yesterday&apos;s match?"
+      startIndex="0"
+      count="10"
+    />
+    <item>
+      <title>Michael Jackson</title>
+      <link>/content/wikipedia_en_100_2026-08/Michael_Jackson</link>
+        <description>...<b>who</b> also played guitar for the local rhythm and blues group the Falcons.[17][18] Through his father, Michael had Native American (Choctaw) ancestry; his great-grandfather, Israel Nero Jackson, utilized and sold traditional Indigenous herbal medicine, a practice passed down from his father,[19] July "Jack" Gale, an US Army scout <b>who</b> had married a Black slave named Gina before the Civil War.[20] Michael had three sisters—Rebbie, La Toya, and Janet—and five brothers Jackie, Tito, Jermaine......</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>40,696</wordCount>
+    </item>
+    <item>
+      <title>Charlie Chaplin</title>
+      <link>/content/wikipedia_en_100_2026-08/Charlie_Chaplin</link>
+        <description>...<b>who</b> rose to fame in the era of silent film. He became a worldwide icon through his screen persona, the Tramp, and is considered one of the film industry's most important figures. His career spanned more than 75 years, from his childhood in the Victorian era until a year before his death in 1977. Chaplin's childhood in London was one of poverty and hardship. His father was absent and his mother struggled financially – he was sent to a workhouse twice before the age of nine. When he was 14, his......</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>24,509</wordCount>
+    </item>
+    <item>
+      <title>Martin Luther King Jr.</title>
+      <link>/content/wikipedia_en_100_2026-08/Martin_Luther_King_Jr.</link>
+        <description>...<b>who</b> was a prominent leader of the civil rights movement from 1955 until his assassination in 1968. He advanced civil rights for people of color in the United States through the use of nonviolent resistance and civil disobedience against Jim Crow laws and other forms of legalized discrimination, which most commonly affected African Americans. A Black church leader, King participated in and led marches for the right to vote, desegregation, labor rights, and other civil rights.[1] He oversaw the......</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>38,119</wordCount>
+    </item>
+  </channel>
+</rss>

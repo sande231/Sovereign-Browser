@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+     xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/"
+     xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Search: red pandas</title>
+    <link>/search?pattern=red%20pandas&amp;&amp;format=xml&amp;start=0&amp;pageLength=10</link>
+    <description>Search result for red pandas</description>
+    <opensearch:totalResults>9</opensearch:totalResults>
+    <opensearch:startIndex>0</opensearch:startIndex>
+    <opensearch:itemsPerPage>10</opensearch:itemsPerPage>
+    <atom:link rel="search" type="application/opensearchdescription+xml" href="/search/searchdescription.xml"/>
+    <opensearch:Query role="request"
+      searchTerms="red pandas"
+      startIndex="0"
+      count="10"
+    />
+    <item>
+      <title>Red panda</title>
+      <link>/content/wikipedia_en_100_2026-08/Red_panda</link>
+        <description>Red panda is the subject of this synthetic article.</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>12,671</wordCount>
+    </item>
+    <item>
+      <title>Leopard</title>
+      <link>/content/wikipedia_en_100_2026-08/Leopard</link>
+        <description>...<b>Red</b> List, leopard populations are currently threatened by habitat loss and fragmentation, and are declining in large parts of the global range. Leopards have had cultural roles in Ancient Greece, West Africa and modern Western culture. Leopard skins are popular in fashion. Etymology The English name "leopard" comes from Old French leupart or Middle French liepart, which derives from Latin leopardus and ancient Greek λεόπαρδος (leopardos); Leopardos could be a compound of λέων (leōn)......</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>12,671</wordCount>
+    </item>
+    <item>
+      <title>Raccoon</title>
+      <link>/content/wikipedia_en_100_2026-08/Raccoon</link>
+        <description>...in <b>red</b>, introduced range in blue Synonyms Ursus lotor Linnaeus, 1758 The raccoon (/rəˈkuːn/ or US: /ræˈkuːn/ ⓘ, Procyon lotor), sometimes called the North American, northern or common raccoon (also spelled racoon)[3] to distinguish it from other species of raccoon, is a mammal native to North America. It is the largest of the procyonid family, having a body length of 40 to 70 cm (16 to 28 in), and a body weight of 5 to 26 kg (11 to 57 lb). Its grayish coat mostly consists of dense......</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>16,389</wordCount>
+    </item>
+    <item>
+      <title>Red fox</title>
+      <link>/content/wikipedia_en_100_2026-08/Red_fox</link>
+        <description><b>Red</b> fox <b>Red</b> fox Temporal range: Middle Pleistocene – present In Rautas Fjällurskog Nature Reserve, Sweden Conservation status Least Concern (IUCN 3.1)[1] Secure (NatureServe)[2] Scientific classification Kingdom: Animalia Phylum: Chordata Class: Mammalia Infraclass: Placentalia Order: Carnivora Family: Canidae Genus: Vulpes Species: V. vulpes Binomial name Vulpes vulpes (Linnaeus, 1758)[3] Subspecies 45 subspecies Distribution of the <b>red</b> fox   native   introduced   presence uncertain......</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>17,514</wordCount>
+    </item>
+    <item>
+      <title>Bobcat</title>
+      <link>/content/wikipedia_en_100_2026-08/Bobcat</link>
+        <description>...or <b>red</b> lynx,[4] is one of the four extant species within the medium-sized wild cat genus Lynx. Native to North America, it ranges from southern Canada through most of the contiguous United States to Oaxaca in Mexico. It is listed as Least Concern on the IUCN <b>Red</b> List since 2002, due to its wide distribution and large population. Although it has been hunted extensively both for sport and fur, populations have proven stable, though declining in some areas.[1] It has distinctive black bars on its......</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>9,555</wordCount>
+    </item>
+    <item>
+      <title>Jaguar</title>
+      <link>/content/wikipedia_en_100_2026-08/Jaguar</link>
+        <description>...<b>Red</b> List since 2002. The wild population is thought to have declined since the late 1990s. Priority areas for jaguar conservation comprise 51 large areas inhabited by at least 50 breeding individuals, called Jaguar Conservation Units. They are located in 36 geographic regions from Mexico to Argentina. The jaguar has featured prominently in the mythology of indigenous peoples of the Americas, including those of the Aztec and Maya civilizations. Etymology The word "jaguar" is possibly derived from......</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>13,050</wordCount>
+    </item>
+    <item>
+      <title>Lion</title>
+      <link>/content/wikipedia_en_100_2026-08/Lion</link>
+        <description>...<b>Red</b> List since 1996 because populations in African countries have declined by about 43% since the early 1990s. Lion populations are untenable outside designated protected areas. Although the cause of the decline is not fully understood, habitat loss and conflicts with humans are the greatest causes for concern. The lion has been extensively depicted in sculptures and paintings, on national flags, and in literature and films. It is one of the most widely recognised animal symbols in human culture....</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>17,376</wordCount>
+    </item>
+    <item>
+      <title>Tiger</title>
+      <link>/content/wikipedia_en_100_2026-08/Tiger</link>
+        <description>...<b>Red</b> List of Threatened Species, as its range is thought to have declined by 53% to 68% since the late 1990s. Major threats to tigers are habitat destruction and fragmentation due to deforestation, poaching for fur and the illegal trade of body parts for medicinal purposes. Tigers are also victims of human–wildlife conflict as they attack and prey on livestock in areas where natural prey is scarce. The tiger is legally protected in all range countries. National conservation measures consist of......</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>18,154</wordCount>
+    </item>
+    <item>
+      <title>YouTube</title>
+      <link>/content/wikipedia_en_100_2026-08/YouTube</link>
+        <description>...<b>red</b>.[53][54] A subsequent interface change, designed to unify the experience across desktop, TV, and mobile, was rolled out in 2013.[55] By that point, more than 100 hours were being uploaded every minute, increasing to 300 hours by November 2014.[56][57] YouTube's headquarters in San Bruno, California, April 2017 During that time, the company also went through some organizational changes. In October 2006, YouTube moved to a new office in San Bruno, California.[58] Hurley announced that he would......</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>23,113</wordCount>
+    </item>
+  </channel>
+</rss>

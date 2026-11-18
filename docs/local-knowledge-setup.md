@@ -119,3 +119,9 @@ Wikipedia text: [CC BY-SA 4.0 and GFDL](https://en.wikipedia.org/wiki/Wikipedia:
 Downloading a collection reveals your IP address and collection choice to Kiwix's download server and the mirror it redirects to. **Downloads never include questions.** Afterwards questions go only to your loopback kiwix-serve. Sovereign never downloads ZIM files itself and never sends AI generation to a cloud service. The app cannot observe independent container egress, which is why the traffic test is required. Its receipt covers requests made by Sovereign, with local query strings removed.
 
 Quality depends on the local 1B model and collection coverage; top Wikipedia is not all Wikipedia. The provisional XML parser must be checked against 3.8.2 and fails closed on malformed feeds. Even an ordinary query in a flagged chat can retrieve sensitive material; crisis-classified results are withheld.
+
+## Answer trust signals
+
+Sourced text answers show citation coverage and the dates of their local books. Web answers retain the time their sources were read. These labels are calculated from the displayed answer; they do not establish that its claims are true. Removed unsupported model sentences are counted only when model text survives validation.
+
+The disagreement check compares recognised numeric quantities in cited evidence, using English units and years. It skips spelled-out numbers, ranges, approximations, currencies, speeds and dates other than years. It uses shared words to match facts, so it can confuse different facts or miss paraphrases. It checks only the evidence supplied to the model, not whole pages. Unit conversion and precision rounding can hide small real differences. A truncated snippet may omit the words needed to match a fact.

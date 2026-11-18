@@ -758,6 +758,53 @@ function renderMediaCards(container, message) {
   container.append(wrap);
 }
 
+function isFixedTrustReply(content) {
+  const g = window.SovereignSensitiveGuard;
+  return [g.CRISIS_REPLY, g.HARM_REPLY, g.FOLLOWUP_REPLY, g.ABUSE_RESOURCES, g.CRISIS_SHORT_LINE].includes(content);
+}
+
+function canOfferTrustWeb(message) {
+  return message.action?.type === 'search-web' && message.trust?.label === 'not-found' && message.trust.localOnly === true &&
+    !networkOffline && !crisisConversation && !isFixedTrustReply(message.content) &&
+    !window.SovereignMediaIntent.isMediaRequest(message.action.question) &&
+    window.SovereignSensitiveGuard.classifyQuestion(message.action.question, { strictness: privacySettings.sensitiveTopics }).level === 'none';
+}
+
+function finishAnswerTrust(assistantId, question, options) {
+  const message = messages.find(m => m.id === assistantId);
+  if (!message) return;
+  const trust = window.SovereignAnswerTrust.decideTrust({ ...options, question, answer: message.content, sources: message.sources || [],
+    fixed: isFixedTrustReply(message.content), crisisConversation: options.crisisAtStart || crisisConversation });
+  if (trust) trust.localOnly = options.path === 'local' && !options.usedWeb;
+  message.trust = trust;
+  if (options.retrievedAt) message.retrievedAt = options.retrievedAt;
+  if (trust?.label === 'not-found' && trust.localOnly) {
+    message.action = { type: 'search-web', question };
+    if (!canOfferTrustWeb(message)) message.action = null;
+  }
+  renderThread();
+}
+
+function renderAnswerTrust(body, message) {
+  if (isFixedTrustReply(message.content)) return;
+  const api = window.SovereignAnswerTrust, trust = api.validateTrust(message.trust);
+  if (!trust) return;
+  const appendLine = (text, className, bold = false) => {
+    const line = document.createElement('div'); line.className = className;
+    if (bold) {
+      const split = text.indexOf(':') + 1, label = document.createElement('strong');
+      label.textContent = text.slice(0, split); line.append(label, document.createTextNode(text.slice(split)));
+    } else line.textContent = text;
+    body.append(line); return line;
+  };
+  const line = appendLine(api.TRUST_TEXTS[trust.label], 'answer-trust', true);
+  if (trust.removed) line.append(document.createTextNode(' ' + api.removedText(trust.removed)));
+  if (trust.label !== 'not-found') for (const values of trust.disagreements) {
+    appendLine('Sources disagree: ' + values.map(v => `${v.raw} [${v.citation}]`).join(' · ') + '. Check the sources.', 'answer-trust-disagree', true);
+  }
+  for (const date of trust.dates) appendLine(date, 'answer-dates');
+}
+
 function renderMessage(message) {
   const article = document.createElement('article');
   article.className = `chat-message ${message.role}`;
@@ -776,6 +823,7 @@ function renderMessage(message) {
     attachmentNote.textContent = attachmentConversationLabel(message.attachments);
     body.append(attachmentNote);
   }
+  renderAnswerTrust(body, message);
   renderSources(body, message.sources || []);
   renderMediaCards(body, message);
   if (message.sensitive && crisisConversation) {
@@ -814,6 +862,26 @@ function renderMessage(message) {
     const paragraph = body.querySelector('.sensitive-notice p');
     if (paragraph) { paragraph.textContent += ' I answered from local knowledge on this computer instead.'; body.prepend(paragraph.parentElement); }
   }
+  if (message.action?.type === 'search-web') {
+    if (!canOfferTrustWeb(message)) message.action = null;
+    else {
+      const offer = document.createElement('p'); offer.textContent = window.SovereignAnswerTrust.TRUST_TEXTS.offer;
+      const button = document.createElement('button'); button.type = 'button'; button.dataset.trustWeb = '1'; button.dataset.needsWeb = '1';
+      button.className = 'primary-action compact-action chat-inline-action'; button.textContent = window.SovereignAnswerTrust.TRUST_TEXTS.button; button.disabled = running;
+      button.addEventListener('click', async () => {
+        if (running) return;
+        button.disabled = true;
+        try { privacySettings = await window.sovereign.privacy.getSettings(); }
+        catch { message.action = null; renderThread(); return; }
+        if (!canOfferTrustWeb(message)) { message.action = null; renderThread(); return; }
+        const question = message.action.question;
+        message.action = null;
+        setRunning(true);
+        await answerQuestion(question, { webEnabled: true, forceText: true, appendUser: false, skipLocal: true });
+      });
+      body.append(offer, button);
+    }
+  }
   if (message.action?.type === 'answer-without-sources') {
     const button = document.createElement('button'); button.type = 'button';
     button.className = 'primary-action compact-action'; button.textContent = 'Answer without sources'; button.disabled = running;
@@ -839,7 +907,7 @@ function renderMessage(message) {
     body.append(action);
   }
 
-  if (message.note) {
+  if (message.note && !(window.SovereignAnswerTrust.validateTrust(message.trust) && /^(?:Source excerpts|Search snippet excerpts):/.test(message.note))) {
     const note = document.createElement('div');
     note.className = 'answer-outcome';
     // Resource notes are multi-line lists (same as sensitive-ui.js), so keep their line breaks.
@@ -1725,7 +1793,10 @@ function savedMessage(message) {
     })),
     note: message.note || ''
   };
-  if (['answer-text', 'search-media', 'answer-without-sources'].includes(message.action?.type)) {
+  const trust = !isFixedTrustReply(message.content) && window.SovereignAnswerTrust.validateTrust(message.trust);
+  if (trust) clean.trust = trust;
+  if (typeof message.retrievedAt === 'string' && Number.isFinite(Date.parse(message.retrievedAt))) clean.retrievedAt = message.retrievedAt;
+  if (['answer-text', 'search-media', 'answer-without-sources', 'search-web'].includes(message.action?.type)) {
     clean.action = {
       type: message.action.type,
       question: String(message.action.question || ''),
@@ -2093,6 +2164,7 @@ function safeStreamingReply(text) {
 }
 
 async function streamLocalAnswer(question, assistantId) {
+  const crisisAtStart = crisisConversation;
   let output = '';
   const attachmentSources = selectedAttachmentSources(question);
   if (attachmentSources.length > 0) {
@@ -2120,6 +2192,7 @@ async function streamLocalAnswer(question, assistantId) {
   if (window.SovereignSensitiveGuard.classifyQuestion(question).categories.includes('self-harm') && !messages.find(message => message.id === assistantId)?.sensitive) {
     updateAssistant(assistantId, { note: window.SovereignSensitiveGuard.CRISIS_SHORT_LINE });
   }
+  if (output.trim()) finishAnswerTrust(assistantId, question, { path: 'ai', attachments: attachmentSources.length > 0, crisisAtStart });
   setStatus('Answer generated locally.');
 }
 
@@ -2159,6 +2232,7 @@ async function streamWebAnswer(question, assistantId, options = {}) {
       content: 'I could not find search results for that question.',
       sources: []
     });
+    finishAnswerTrust(assistantId, question, { path: 'web' });
     setStatus('Search returned no results.');
     return;
   }
@@ -2171,6 +2245,7 @@ async function streamWebAnswer(question, assistantId, options = {}) {
     question,
     results: response.results
   });
+  const retrievedAt = new Date().toISOString();
   if (sourceBundle?.locked) { applyMainLock(); await streamLocalAnswer(question, assistantId); return; }
   const evidenceResults = evidenceResultsForSources(response.results, sourceBundle.sources);
   updateAssistant(assistantId, { sources: evidenceResults });
@@ -2204,6 +2279,7 @@ async function streamWebAnswer(question, assistantId, options = {}) {
       ? ''
       : `${finalResult.label || 'Source excerpts'}: ${finalResult.explanation || ''}`.trim()
   });
+  finishAnswerTrust(assistantId, question, { path: 'web', ...finalResult, retrievedAt });
   setStatus('Answer generated locally from retrieved sources.');
 }
 
@@ -2433,10 +2509,34 @@ const localToggle = document.querySelector('#local-toggle');
 const localNote = document.querySelector('#local-note');
 let kiwixReady = false;
 const KIWIX_DOWN_TEXT = 'Couldn\'t reach local knowledge (Kiwix). Start it with "docker compose up -d" in the kiwix folder, or turn off Use local knowledge.';
+const LOCAL_ANSWER_ERROR_TEXT = "I couldn't finish this answer. Try again, or start a new chat.";
+function isKiwixConnectionError(error) {
+  return /ECONNREFUSED|ECONNRESET|ETIMEDOUT/.test(error?.code || '') || /ECONNREFUSED|ECONNRESET|ETIMEDOUT|Local knowledge (?:timeout|response refused|response too large)/.test(error?.message || '');
+}
+function localAnswerFailure(error, assistantId, question, useWeb) {
+  const interrupted = offlineInterrupted || /Offline mode is on/.test(error?.message || '');
+  const stopped = error?.name === 'AbortError' || /canceled|cancelled|aborted|interrupt/i.test(error?.message || '');
+  const down = isKiwixConnectionError(error);
+  updateAssistant(assistantId, { content: interrupted ? OFFLINE_STOP_TEXT : stopped ? 'Stopped.' : down ? KIWIX_DOWN_TEXT : LOCAL_ANSWER_ERROR_TEXT,
+    note: '', trust: null, action: down && !useWeb && !interrupted && !stopped ? { type: 'answer-without-sources', question } : null });
+  setStatus(interrupted ? OFFLINE_STOP_TEXT : stopped ? 'Stopped.' : String(error?.name || 'Error').replace(/[^A-Za-z0-9_$]/g, '').slice(0, 80) || 'Error', !stopped);
+}
+// R3.14 (approved): New chat's background check must not undo the user's own choice.
+// localToggleChanges counts the user's clicks; statusCheckNumber lets only the newest check apply.
+let localToggleChanges = 0, statusCheckNumber = 0;
+// Only the user's click fires 'change'; setting .checked in code does not.
+localToggle.addEventListener('change', () => { localToggleChanges += 1; });
 async function refreshKnowledgeStatus() {
-  try { const status = await window.sovereign.knowledge.status(); kiwixReady = status.enabled && status.reachable; }
-  catch { kiwixReady = false; }
-  localToggle.checked = Boolean(kiwixReady); localToggle.disabled = !kiwixReady;
+  const check = ++statusCheckNumber;
+  const changesAtStart = localToggleChanges;
+  let ready = false;
+  try { const status = await window.sovereign.knowledge.status(); ready = status.enabled && status.reachable; }
+  catch { ready = false; }
+  if (check !== statusCheckNumber) return; // A newer check started; its result wins.
+  kiwixReady = ready;
+  // Keep the user's choice if they changed the box during the check, unless Kiwix can't be used.
+  if (!kiwixReady || localToggleChanges === changesAtStart) localToggle.checked = Boolean(kiwixReady);
+  localToggle.disabled = !kiwixReady;
   localNote.textContent = kiwixReady ? '' : "Local knowledge isn't running. Set it up in Settings.";
 }
 function localAllowedNow(question) {
@@ -2444,6 +2544,8 @@ function localAllowedNow(question) {
   return localToggle.checked && kiwixReady && classification.level !== 'crisis' && (!crisisConversation || classification.level === 'none');
 }
 async function streamKnowledgeAnswer(question, assistantId, options = {}) {
+  const crisisAtStart = crisisConversation;
+  let retrievedAt = '', usedWeb = false;
   const guard = window.SovereignSensitiveGuard;
   let classification = guard.classifyQuestion(question, {
     strictness: privacySettings.sensitiveTopics
@@ -2495,7 +2597,9 @@ async function streamKnowledgeAnswer(question, assistantId, options = {}) {
       }
       localSources = bundle.sources || [];
     }
-  } catch {
+  } catch (error) {
+    if (!isKiwixConnectionError(error)) throw error;
+    setStatus(String(error?.name || 'Error').replace(/[^A-Za-z0-9_$]/g, '').slice(0, 80) || 'Error', true);
     unavailable = true;
     if (!webAllowedNow(options.useWeb)) {
       updateAssistant(assistantId, {
@@ -2540,6 +2644,7 @@ async function streamKnowledgeAnswer(question, assistantId, options = {}) {
           localSensitive: localResults.length > 0
         });
       } else {
+        usedWeb = true;
         webResults = (response.results || []).slice(0, 5 - localResults.length).map(item => ({
           ...item,
           origin: 'web'
@@ -2551,6 +2656,7 @@ async function streamKnowledgeAnswer(question, assistantId, options = {}) {
             question,
             results: webResults
           });
+          retrievedAt = new Date().toISOString();
           webSources = bundle.sources || [];
         }
       }
@@ -2582,6 +2688,7 @@ async function streamKnowledgeAnswer(question, assistantId, options = {}) {
       sources: [],
       note: resourceNote
     });
+    if (!unavailable) finishAnswerTrust(assistantId, question, { path: 'local', usedWeb, crisisAtStart });
     return;
   }
   const evidence = evidenceResultsForSources(results, sources);
@@ -2591,7 +2698,7 @@ async function streamKnowledgeAnswer(question, assistantId, options = {}) {
   });
   if (!(await ensureModelReady(question, {
     webEnabled: false
-  }))) return;
+  }))) throw new Error('Model readiness failed.');
   const utils = getSearchUtils();
   const modelMessages = utils.buildSourceAnswerMessages(webContextQuestion(question), sources);
   lastModelMessages = modelMessages;
@@ -2608,8 +2715,9 @@ async function streamKnowledgeAnswer(question, assistantId, options = {}) {
   updateAssistant(assistantId, {
     content: guard.sanitizeModelReply(final.answer).text,
     sources: evidence,
-    note: unavailable ? "Local knowledge wasn't reachable, so these sources are from the web only." : resourceNote
+    note: unavailable ? "Local knowledge wasn't reachable, so these sources are from the web only." : resourceNote || (final.outcome && final.outcome !== 'ai-generated' ? `${final.label}: ${final.explanation}` : '')
   });
+  finishAnswerTrust(assistantId, question, { path: 'local', ...final, usedWeb, retrievedAt, crisisAtStart });
 }
 
 async function answerQuestion(question, options = {}) {
@@ -2640,7 +2748,7 @@ async function answerQuestion(question, options = {}) {
     await startLocalAskReceipt('', true);
     setRunning(false); persistCurrentChat(); renderThread(); return;
   }
-  if (options.withoutSources || (typeof localAllowedNow === 'function' && localAllowedNow(question))) {
+  if (options.withoutSources || (!options.skipLocal && typeof localAllowedNow === 'function' && localAllowedNow(question))) {
     const id = messageId(); messages.push({ id, role: 'assistant', content: '', sources: [] });
     renderThread();
     try {
@@ -2648,11 +2756,10 @@ async function answerQuestion(question, options = {}) {
         await startLocalAskReceipt(classification.level === 'none' ? question : '');
         if (await ensureModelReady(question, { webEnabled: false })) {
           await streamLocalAnswer(question, id);
-          updateAssistant(id, { note: 'Answer from the AI alone, with no sources.' });
         }
       } else await streamKnowledgeAnswer(question, id, { ...options, useWeb, useMedia });
-    } catch {
-      updateAssistant(id, { content: KIWIX_DOWN_TEXT, note: '', action: useWeb ? null : { type: 'answer-without-sources', question } });
+    } catch (error) {
+      localAnswerFailure(error, id, question, useWeb);
     } finally { currentRequestId = null; setRunning(false); persistCurrentChat(); renderThread(); }
     return;
   }

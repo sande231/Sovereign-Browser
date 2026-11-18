@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+     xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/"
+     xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Search: What causes a solar eclipse?</title>
+    <link>/search?pattern=What%20causes%20a%20solar%20eclipse%3F&amp;&amp;format=xml&amp;start=0&amp;pageLength=10</link>
+    <description>Search result for What causes a solar eclipse?</description>
+    <opensearch:totalResults>5</opensearch:totalResults>
+    <opensearch:startIndex>0</opensearch:startIndex>
+    <opensearch:itemsPerPage>10</opensearch:itemsPerPage>
+    <atom:link rel="search" type="application/opensearchdescription+xml" href="/search/searchdescription.xml"/>
+    <opensearch:Query role="request"
+      searchTerms="What causes a solar eclipse?"
+      startIndex="0"
+      count="10"
+    />
+    <item>
+      <title>Solar eclipse</title>
+      <link>/content/wikipedia_en_100_2026-08/Solar_eclipse</link>
+        <description><b>Solar</b> eclipse <b>A</b> total <b>solar</b> eclipse occurs when the Moon completely covers the Sun's disk. <b>Solar</b> prominences can be seen along the limb (in red) as well as extensively the coronal and partly the radiating coronal streamers. (August 11, 1999) An annular <b>solar</b> eclipse occurs when the Moon is too far away to completely cover the Sun's disk (October 14, 2023). During <b>a</b> partial <b>solar</b> eclipse, the Moon blocks only part of the Sun's disk (October 25, 2022). <b>A</b> <b>solar</b> eclipse occurs when the Moon passes......</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>12,094</wordCount>
+    </item>
+    <item>
+      <title>Maya civilization</title>
+      <link>/content/wikipedia_en_100_2026-08/Maya_civilization</link>
+        <description>...<b>a</b> series on the Maya civilization People Society Languages Writing Religion Mythology Sacrifice Cities Architecture Astronomy Calendar Stelae Art Textiles Ceramics Trade Maritime trade Music Dance Medicine Use of entheogens Cuisine Warfare History Preclassic Maya Classic Maya collapse Spanish conquest of the Maya Yucatán Chiapas Guatemala Petén Mesoamerica portal El Castillo, at Chichen Itza Temple of the Great Jaguar, at Tikal The Maya civilization (/ˈmaɪə/) was <b>a</b> Mesoamerican civilization......</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>24,326</wordCount>
+    </item>
+    <item>
+      <title>Amazon (company)</title>
+      <link>/content/wikipedia_en_100_2026-08/Amazon_(company)</link>
+        <description>...<b>a</b> self-driving car division; satellite Internet provider Kuiper Systems; and Amazon Lab126, <b>a</b> computer hardware R&amp;D provider. Other subsidiaries include Ring, Twitch, IMDb, and grocer Whole Foods Market. Amazon distributes downloadable and streaming content through its Amazon Prime Video, MGM+, Amazon Music, Twitch, Audible, and Wondery[9] units. It publishes books through its publishing arm, Amazon Publishing; produces and distributes film and television content through Amazon MGM Studios......</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>19,695</wordCount>
+    </item>
+    <item>
+      <title>YouTube</title>
+      <link>/content/wikipedia_en_100_2026-08/YouTube</link>
+        <description>...<b>a</b> paid subscription option for watching videos without ads. YouTube incorporated the Google AdSense program, generating more revenue for both YouTube and approved users. In 2023, YouTube's advertising revenue totaled $31.7 billion, <b>a</b> 2% increase from the $31.1 billion reported in 2022.[13] From Q4 2023 to Q3 2024, YouTube's combined revenue from advertising and subscriptions exceeded $50 billion.[14] Since its purchase by Google, YouTube has expanded beyond the core website, creating mobile......</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>23,113</wordCount>
+    </item>
+    <item>
+      <title>President of the United States</title>
+      <link>/content/wikipedia_en_100_2026-08/President_of_the_United_States</link>
+        <description>...[<b>a</b>] Website whitehouse.gov This article is part of <b>a</b> series on the Politics of the United States Federal government Constitution of the United States Laws Treaties Legislature United States Congress House of Representatives Speaker Mike Johnson (R) Majority Leader Steve Scalise (R) Minority Leader Hakeem Jeffries (D) Majority Whip Tom Emmer (R) Minority Whip Katherine Clark (D) Congressional districts (list) Non-voting members Senate President JD Vance (R) President Pro Tempore Chuck Grassley (R)......</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>21,435</wordCount>
+    </item>
+  </channel>
+</rss>

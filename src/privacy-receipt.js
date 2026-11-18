@@ -128,7 +128,7 @@ function originOnly(value) {
 function buildSummary(receipt) {
   if (receipt.crisis) return 'Nothing left this device: support information shown';
   const sensitive = receipt.entries.filter(entry => entry.category === 'sensitive');
-  if (sensitive.length) return `Not sent: sensitive topic (${[...new Set(sensitive.map(entry => entry.topic))].join(', ')})` + (receipt.type === 'ask' ? ' · AI generated locally' : '');
+  if (sensitive.length) return `Not sent: sensitive topic (${[...new Set(sensitive.map(entry => entry.topic))].join(', ')})` + (receipt.entries.some(entry => entry.category === 'local-knowledge') ? ' · local knowledge (Kiwix, 127.0.0.1)' : '') + (receipt.type === 'ask' ? ' · AI generated locally' : '');
   if (receipt.entries.some(entry => entry.category === 'locked')) return 'Not sent: web search is off for this conversation' + (receipt.type === 'ask' ? ' · AI generated locally' : '');
   const allEntries = Array.isArray(receipt.entries) ? receipt.entries : [];
   const blockedEntries = allEntries.filter(entry => entry.category === 'blocked');

@@ -98,14 +98,17 @@ function xmlTree(value) {
         if (!tag) throw Error('XML');
         let attrs = tag[2];
         const names = new Set();
+        const attributes = {};
         while (attrs.trim()) {
           const a = /^\s+([\w:.-]+)\s*=\s*("[^"<]*"|'[^'<]*')/.exec(attrs);
           if (!a || names.has(a[1]) || /&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-f]+);)/i.test(a[2])) throw Error('XML');
           names.add(a[1]);
+          attributes[a[1]] = decode(a[2].slice(1, -1));
           attrs = attrs.slice(a[0].length);
         }
         const node = {
           name: tag[1],
+          attributes,
           children: [],
           parts: []
         };
@@ -231,14 +234,89 @@ function titleMatchesSubject(title, terms) {
   const titleForms = new Set(subjectWords(title).flatMap(word => [...singularForms(word)]));
   return terms.every(term => [...singularForms(String(term).toLowerCase())].some(form => titleForms.has(form)));
 }
+const QUESTION_STOP_WORDS = new Set([...SUBJECT_STOP_WORDS, ...(
+  'who whom whose what when where which why how did does do is are was were be been can could should would will tell explain describe define meaning mean have has had i me my you your it its this that these those there their they yesterday today tomorrow tonight now currently current latest recent recently s ' +
+  'work works working happen happens cause causes caused make makes made use used called mean means matter matters get gets become became'
+).split(' ')]);
+function questionKeyTerms(question) {
+  return [...new Set(String(question || '').toLowerCase().normalize('NFKD').replace(/\p{M}/gu, '').split(/[^\p{L}]+/u).filter(word => word && !QUESTION_STOP_WORDS.has(word)))].slice(0, 8);
+}
+const sameWord = (a, b) => [...singularForms(a)].some(form => singularForms(b).has(form));
+const hasWord = (words, term) => words.some(word => sameWord(word, term));
+// Key terms that sit next to each other in the question ("world cup", "red pandas").
+function keyTermRuns(question, keyTerms) {
+  const runs = [];
+  let run = [];
+  for (const word of String(question || '').toLowerCase().normalize('NFKD').replace(/\p{M}/gu, '').split(/[^\p{L}]+/u).filter(Boolean)) {
+    if (keyTerms.includes(word)) run.push(word);
+    else {
+      if (run.length) runs.push(run);
+      run = [];
+    }
+  }
+  if (run.length) runs.push(run);
+  return runs;
+}
+function hasPair(words, first, second) {
+  return words.some((word, i) => i + 1 < words.length && sameWord(word, first) && sameWord(words[i + 1], second));
+}
+// R3.15 (approved): one rule for local text sources.
+// 1. One key term: the title must contain it.
+// 2. Two or more: the title contains at least one key term, and title + snippet together cover
+//    at least 2/3 of them. An article whose title shares nothing with the question is never used.
+// 3. A title word from an adjacent run ("world cup") counts only next to its neighbour from the
+//    run, so "World War I" does not count for "world cup" and "Red fox" not for "red pandas".
+// Known limits (HANDOFF): "sky blue"-style subjects; answers only in unrelated-title articles.
+function localRelevance(result, keyTerms, question = '') {
+  if (!Array.isArray(keyTerms) || !keyTerms.length) return { relevant: false, titleHits: 0, covered: 0 };
+  const titleWords = subjectWords(result.title);
+  const snippetWords = subjectWords(stripReferenceMarkers(result.snippet));
+  const runs = keyTermRuns(question, keyTerms);
+  const titleHit = term => {
+    if (!hasWord(titleWords, term)) return false;
+    const run = runs.find(r => r.includes(term));
+    if (!run || run.length < 2) return true;
+    // A title made only of key terms ("Tokyo" for "tokyo population") is on topic; the guard is
+    // for titles that add other words ("Red fox" for "red pandas", "World War I" for "world cup").
+    if (titleWords.filter(word => !SUBJECT_STOP_WORDS.has(word)).every(word => keyTerms.some(t => sameWord(word, t)))) return true;
+    const i = run.indexOf(term);
+    return (i > 0 && hasPair(titleWords, run[i - 1], term)) ||
+      (i < run.length - 1 && hasPair(titleWords, term, run[i + 1]));
+  };
+  const titleHits = keyTerms.filter(titleHit).length;
+  const covered = keyTerms.filter(term => titleHit(term) || hasWord(snippetWords, term)).length;
+  const relevant = keyTerms.length === 1 ? titleHits === 1 : titleHits >= 1 && covered >= Math.ceil(2 * keyTerms.length / 3);
+  return { relevant, titleHits, covered };
+}
+function isRelevantLocalResult(result, keyTerms, question = '') {
+  return localRelevance(result, keyTerms, question).relevant;
+}
+// Sandeep (2026-11-17): sources are ordered by how many key terms the title covers, then by
+// title + snippet coverage, then Kiwix's own order (stable).
+function orderLocalResults(results, keyTerms, question = '') {
+  return results
+    .map((result, index) => ({ result, index, score: localRelevance(result, keyTerms, question) }))
+    .sort((a, b) => b.score.titleHits - a.score.titleHits || b.score.covered - a.score.covered || a.index - b.index)
+    .map(entry => entry.result);
+}
 function listBooks(xml) {
   const root = xmlTree(xml);
   if (root?.name.split(':').pop() !== 'feed') return [];
   return children(root, 'entry').map(n => ({
     name: field(n, 'name') || field(n, 'id'),
     title: field(n, 'title'),
+    path: children(n, 'link').find(link => link.attributes.type === 'text/html')?.attributes.href || '',
+    date: (field(n, 'issued') || field(n, 'updated')).split('T')[0],
     fullTextIndex: /(?:^|;)_ftindex:yes(?:;|$)/.test(field(n, 'tags'))
   }));
+}
+function bookInfoForUrl(value, books = []) {
+  try {
+    const path = new URL(value, DEFAULT_ENDPOINT).pathname;
+    const book = books.filter(b => b.path && path.startsWith(b.path.replace(/\/$/, '') + '/')).sort((a,b) => b.path.length-a.path.length)[0];
+    const fallback = /^\/content\/([^/]+)\//.exec(path)?.[1] || '';
+    return { bookDate: book ? book.date || '' : /_(\d{4}-(?:0[1-9]|1[0-2]))$/.exec(fallback)?.[1] || '', bookTitle: book?.title || '' };
+  } catch { return { bookDate: '', bookTitle: '' }; }
 }
 // Node HTTP only; no DNS for localhost, redirects, proxy, cookies or implicit downloads.
 function fetchKiwix(value, {
@@ -300,6 +378,9 @@ function fetchKiwix(value, {
   });
 }
 module.exports = {
+  questionKeyTerms,
+  isRelevantLocalResult,
+  orderLocalResults,
   DEFAULT_ENDPOINT,
   normalizeKiwixEndpoint,
   buildSearchUrl,
@@ -312,5 +393,6 @@ module.exports = {
   mediaSubjectTerms,
   titleMatchesSubject,
   listBooks,
+  bookInfoForUrl,
   fetchKiwix
 };
