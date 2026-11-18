@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+     xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/"
+     xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Search: albert einstein</title>
+    <link>/search?pattern=albert%20einstein&amp;&amp;format=xml&amp;start=0&amp;pageLength=10</link>
+    <description>Search result for albert einstein</description>
+    <opensearch:totalResults>5</opensearch:totalResults>
+    <opensearch:startIndex>0</opensearch:startIndex>
+    <opensearch:itemsPerPage>10</opensearch:itemsPerPage>
+    <atom:link rel="search" type="application/opensearchdescription+xml" href="/search/searchdescription.xml"/>
+    <opensearch:Query role="request"
+      searchTerms="albert einstein"
+      startIndex="0"
+      count="10"
+    />
+    <item>
+      <title>Albert Einstein</title>
+      <link>/content/wikipedia_en_100_2026-08/Albert_Einstein</link>
+        <description>Albert Einstein is the subject of this synthetic article.</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>38,119</wordCount>
+    </item>
+    <item>
+      <title>Martin Luther King Jr.</title>
+      <link>/content/wikipedia_en_100_2026-08/Martin_Luther_King_Jr.</link>
+        <description>...<b>Albert</b> and Delia King of Stockbridge, Georgia;[5][6] he was likely of Mende (Sierra Leone) descent.[9][10][11] He enrolled in Morehouse College to study for entry to the ministry.[12] Michael Sr. and Alberta began dating in 1920, and married on November 25, 1926.[13][14] Until Jennie's death in 1941, their home was on the second floor of Alberta's parents' home, where King was born.[15][13][14][16] Michael Jr. had an older sister, Christine King Farris, and a younger brother, Alfred Daniel King......</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>38,119</wordCount>
+    </item>
+    <item>
+      <title>Virus</title>
+      <link>/content/wikipedia_en_100_2026-08/Virus</link>
+        <description><b>Einstein</b> MH, Schiller JT, Viscidi RP, Strickler HD, Coursaget P, Tan T, et al. (June 2009). "Clinician's guide to human papillomavirus immunology: knowns and unknowns". The Lancet. Infectious Diseases. 9 (6): 347–56. doi:10.1016/S1473-3099(09)70108-2. PMID 19467474. ↑ Shuda M, Feng H, Kwun HJ, Rosen ST, Gjoerup O, Moore PS, et al. (October 2008). "T antigen mutations are a human tumor-specific signature for Merkel cell polyomavirus". Proceedings of the National Academy of Sciences of......</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>17,551</wordCount>
+    </item>
+    <item>
+      <title>The New York Times</title>
+      <link>/content/wikipedia_en_100_2026-08/The_New_York_Times</link>
+        <description>...<b>Albert</b> Einstein's then-obscure theory of general relativity and becoming involved in the discovery of the tomb of Tutankhamun.[27] In April 1935, Ochs died, leaving his son-in-law Arthur Hays Sulzberger as publisher.[28] The Great Depression forced Sulzberger to reduce The New York Times's operations,[29] and developments in the New York newspaper landscape resulted in the formation of larger newspapers, such as the New York Herald Tribune and the New York World-Telegram.[30] In contrast to Ochs......</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>25,720</wordCount>
+    </item>
+    <item>
+      <title>Washington, D.C.</title>
+      <link>/content/wikipedia_en_100_2026-08/Washington%2C_D.C.</link>
+        <description>...War <b>Albert</b> <b>Einstein</b> Emancipation Dwight D. Eisenhower John Ericsson David Farragut First Division Thomas Gallaudet James A. Garfield Kahlil Gibran Samuel Gompers Ulysses S. Grant Holocaust Museum Holodomor Genocide Andrew Jackson Japanese American Patriotism During World War II Jefferson Memorial Lyndon Baines Johnson Grove John Paul Jones Marquis de Lafayette Law Enforcement Officers Lincoln Memorial statue Henry Wadsworth Longfellow Martin Luther King, Jr. Korean War Veterans Guglielmo Marconi......</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>28,926</wordCount>
+    </item>
+  </channel>
+</rss>

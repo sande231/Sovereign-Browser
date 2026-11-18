@@ -400,6 +400,16 @@ async function main() {
  check('22-down', await ask.executeJavaScript("messages.at(-1).content === \"Couldn't reach the search service.\" && !document.body.textContent.includes('search:query') && !document.body.textContent.includes('ERR_CONNECTION_REFUSED')"));
  check('22-down-receipt', (await invoke('privacy.getReceipts')).some(r => r.entries.some(e => e.outcome === 'attempted, failed: connection refused')));
  await invoke('search.updateSettings', { endpoint });
+ // Task 2b fixed replies never acquire trust UI, even if a saved object carried trust.
+ check('23-fixed', await ask.executeJavaScript(`(()=>{
+   const g=SovereignSensitiveGuard;
+   for(const content of [g.CRISIS_REPLY,g.HARM_REPLY,g.FOLLOWUP_REPLY,g.ABUSE_RESOURCES,g.CRISIS_SHORT_LINE]) {
+     const article=renderMessage({id:'fixed',role:'assistant',content,trust:{label:'supported',removed:0,disagreements:[],dates:[]}});
+     if(article.querySelector('.answer-trust')) return false;
+   }
+   const article=renderMessage({id:'resources',role:'assistant',content:'A reply.',note:g.ABUSE_RESOURCES});
+   return article.querySelector('.answer-outcome').textContent===g.ABUSE_RESOURCES;
+ })()`));
  // Case 9 is run by the orchestrator after these checks.
  console.log('1–22'); server.close(); app.exit(0);
 }

@@ -1,6 +1,7 @@
 (function attachSearchUtils(global) {
   const SEARCH_ANSWER_VERSION = 'search-answer-v2-synthesized-snippet-citations';
   const MAX_ANSWER_CHARS = 3000;
+  const LIMITED_DETAIL_SENTENCE = 'The retrieved snippets repeat this point but do not provide much additional detail.';
   const MAX_FINAL_SENTENCES = 4;
   const MAX_CITATIONS_PER_CLAIM = 2;
   const SOURCE_EXCERPT_EXPLANATION = 'We couldn’t produce a reliable AI synthesis, so we’re showing supporting source text.';
@@ -255,7 +256,7 @@
     const resultCount = Array.isArray(results) ? results.length : 0;
     const hasPageEvidence = (Array.isArray(results) ? results : []).some(result => result?.evidenceMode === 'page');
     if (!hasPageEvidence && (asksForComparison(question) || asksForCause(question)) && distinctCount === 1 && resultCount > 1) {
-      return 'The retrieved snippets repeat this point but do not provide much additional detail.';
+      return LIMITED_DETAIL_SENTENCE;
     }
     return '';
   }
@@ -573,8 +574,20 @@
         left.sourceNumber - right.sourceNumber ||
         left.blockIndex - right.blockIndex);
 
+    // A page can repeat a sentence (headline + body). Keep only its first copy.
+    const seenSentences = new Set();
     return ordered
-      .map(item => composeEvidenceSentence(item.text, item.citations))
+      .map(item => {
+        const kept = splitSentences(item.text).filter(sentence => {
+          const key = withoutCitations(sentence).toLowerCase().replace(/[.!?]+$/, '').trim();
+          if (!key || seenSentences.has(key)) {
+            return false;
+          }
+          seenSentences.add(key);
+          return true;
+        });
+        return composeEvidenceSentence(kept.join(' '), item.citations);
+      })
       .filter(Boolean)
       .join(' ')
       .slice(0, MAX_ANSWER_CHARS)
@@ -693,7 +706,7 @@
     return `${clean}. ${suffix}`.trim();
   }
 
-  function synthesizeDistinctCitedSentences(sentences, results, question = '') {
+  function synthesizeDistinctCitedSentences(sentences, results, question = '', stats = null) {
     const selected = [];
     for (const sentence of sentences) {
       if (!sentenceLooksComplete(sentence)) {
@@ -702,6 +715,7 @@
 
       const citations = supportedCitationNumbers(sentence, results, question);
       if (citations.length === 0) {
+        if (stats) stats.removedUnsupported++;
         continue;
       }
 
@@ -816,7 +830,8 @@
       label,
       explanation,
       fallback,
-      reason
+      reason,
+      removedUnsupported: 0
     };
   }
 
@@ -867,7 +882,8 @@
       return fallbackSearchAnswerWithMeta(question, results, !stripped ? 'model-output-empty' : 'model-output-insufficient');
     }
 
-    const distinct = synthesizeDistinctCitedSentences(splitSentences(stripped), results, question);
+    const stats = { removedUnsupported: 0 };
+    const distinct = synthesizeDistinctCitedSentences(splitSentences(stripped), results, question, stats);
     if (distinct.length === 0) {
       const reason = invalidCitations > 0
         ? 'model-output-had-invalid-citations'
@@ -892,22 +908,22 @@
       const explanation = invalidCitations > 0
         ? 'Generated locally; unsupported citation numbers were removed before display.'
         : 'Generated locally; process text was removed before display.';
-      return answerOutcome(finalAnswer, {
+      return { ...answerOutcome(finalAnswer, {
         outcome: 'checked-ai-answer',
         label: 'Checked AI answer',
         explanation,
         fallback: false,
         reason: invalidCitations > 0 ? 'model-output-used-after-removing-invalid-citations' : 'model-output-used-after-removing-process-text'
-      });
+      }), ...stats };
     }
 
-    return answerOutcome(finalAnswer, {
+    return { ...answerOutcome(finalAnswer, {
       outcome: 'ai-generated',
       label: 'AI-generated answer',
       explanation: 'Generated locally from retrieved source text. Citations link to retrieved results.',
       fallback: false,
       reason: 'model-output-passed-checks'
-    });
+    }), ...stats };
   }
 
   function finalizeSearchAnswer(text, results, question = '') {
@@ -922,6 +938,7 @@
   }
 
   const api = {
+    splitSentences, contentTerms, LIMITED_DETAIL_SENTENCE,
     buildSourceAnswerMessages,
     SEARCH_ANSWER_VERSION,
     SEARCH_SYSTEM_PROMPT,

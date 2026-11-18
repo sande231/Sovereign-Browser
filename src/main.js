@@ -1,4 +1,5 @@
 const knowledgeBackend = require('./knowledge-backend');
+let knowledgeBooks = [];
 let knowledgeSettings = { enabled: false, endpoint: knowledgeBackend.DEFAULT_ENDPOINT };
 const sensitiveGuard = require('./sensitive-guard');
 let privacySettings = { sensitiveTopics: 'strict' };
@@ -5075,6 +5076,21 @@ const KNOWLEDGE_CHECK_RECEIPT_ID = 'local-knowledge-check';
 const localKnowledgeRedirects = new Set();
 const allowedKnowledgeRequests = new Map();
 const allowedKnowledgeMedia = new Map();
+const sensitiveKnowledgeChatIds = new Set();
+const knowledgeReceiptOwners = new Map();
+function knowledgeChatIsSensitive(chatId, question = '') {
+  const id = String(chatId || '');
+  const sensitive = text => ['strict', privacySettings.sensitiveTopics].some(strictness => sensitiveGuard.classifyQuestion(text, { strictness }).level !== 'none');
+  let flagged = sensitive(question) || sensitiveKnowledgeChatIds.has(id) || chatIsLocked(id);
+  if (!flagged && id) {
+    try {
+      const saved = chatStore().list().find(chat => chat.id === id);
+      flagged = !!saved?.messages.some(message => message.role === 'user' && sensitive(message.content));
+    } catch { /* Preserve the in-memory decision when storage is unavailable. */ }
+  }
+  if (flagged && id) sensitiveKnowledgeChatIds.add(id);
+  return flagged;
+}
 function namedKnowledgeAllowlist() {
   if (!knowledgeSettings.enabled) return [];
   return [{
@@ -5095,6 +5111,7 @@ function knowledgeGate(event, input, question) {
       !input.chatId ||
       typeof input.chatId !== 'string') throw new Error('Local knowledge requires an Ask chat.');
   // Crisis classification precedes service availability and every local request.
+  knowledgeChatIsSensitive(input.chatId, question);
   const crisis = sensitiveGate(event.sender, question, {
     ...input,
     crisisOnly: true
@@ -5122,22 +5139,26 @@ async function kiwixFetch(url, {
   signal,
   receiptId,
   purpose = 'article',
-  method = 'GET'
+  method = 'GET',
+  chatId
 } = {}) {
   if (!isKnowledgeUrl(url)) throw new Error('Local knowledge URL refused.');
   knowledgeBackend.normalizeKiwixEndpoint(knowledgeSettings.endpoint, {
     blockedHostPorts: blockedLocalHostPorts(),
     namedAllowlist: namedKnowledgeAllowlist()
   });
-  return privacyReceipts.fetchWithReceipt((value, options) => knowledgeBackend.fetchKiwix(value, {
+  // Either the request's own chat (e.g. an image grant) or the receipt's chat makes the row private.
+  const sensitive = (chatId !== undefined && knowledgeChatIsSensitive(chatId)) ||
+    knowledgeChatIsSensitive(privacyReceipts.getReceipt(receiptId)?.chatId);
+  return privacyReceipts.fetchWithReceipt((_value, options) => knowledgeBackend.fetchKiwix(url, {
     ...options,
     endpoint: knowledgeSettings.endpoint
-  }), receiptId, url, {
+  }), receiptId, sensitive ? knowledgeSettings.endpoint : url, {
     signal,
     method
   }, {
     category: 'local-knowledge',
-    whatWasSent: purpose === 'search' ? 'search on this computer – nothing left this device' : purpose === 'catalog' ? 'local book catalogue check – nothing left this device' : purpose === 'image' ? 'local article image – nothing left this device' : 'article read on this computer – nothing left this device'
+    whatWasSent: sensitive ? 'local search' : purpose === 'search' ? 'search on this computer – nothing left this device' : purpose === 'catalog' ? 'local book catalogue check – nothing left this device' : purpose === 'image' ? 'local article image – nothing left this device' : 'article read on this computer – nothing left this device'
   });
 }
 // `local` is internal only (the IPC handler never passes it): the media path searches for the
@@ -5153,15 +5174,18 @@ async function handleKnowledgeSearch(event, input = {}, local = {}) {
     type: 'ask',
     label: 'Local knowledge',
     chatId: input.chatId,
-    query: gate.classification.level === 'none' ? input.query : '',
+    query: knowledgeChatIsSensitive(input.chatId, input.query) ? '' : input.query,
     localOnly: true
   });
+  for (const id of knowledgeReceiptOwners.keys()) if (!privacyReceipts.getReceipt(id)) knowledgeReceiptOwners.delete(id);
+  knowledgeReceiptOwners.set(receipt.id, { senderId: event.sender.id, chatId: input.chatId });
   assignPrivacyReceiptToSender(event.sender, receipt.id);
+  const keyTerms = knowledgeBackend.questionKeyTerms(input.query);
   const controller = new AbortController();
   activeSearchRequests.set(requestId, controller);
   try {
-    const response = await kiwixFetch(knowledgeBackend.buildSearchUrl(knowledgeSettings.endpoint, {
-      pattern: local.pattern || input.query
+    const response = !local.titleTerms && !keyTerms.length ? { text: async () => '<rss><channel/></rss>' } : await kiwixFetch(knowledgeBackend.buildSearchUrl(knowledgeSettings.endpoint, {
+      pattern: local.pattern || keyTerms.join(' ')
     }), {
       signal: controller.signal,
       receiptId: receipt.id,
@@ -5173,12 +5197,13 @@ async function handleKnowledgeSearch(event, input = {}, local = {}) {
     if (withheld) privacyReceipts.addEntry(receipt.id, {
       category: 'local-knowledge',
       method: 'FILTER',
-      url: knowledgeSettings.endpoint + '/search',
-      whatWasSent: `${withheld} local result${withheld === 1 ? '' : 's'} withheld`
+      url: knowledgeChatIsSensitive(input.chatId) ? knowledgeSettings.endpoint : knowledgeSettings.endpoint + '/search',
+      whatWasSent: knowledgeChatIsSensitive(input.chatId) ? 'local search' : `${withheld} local result${withheld === 1 ? '' : 's'} withheld`
     });
-    const matching = local.titleTerms ? safe.filter(item => knowledgeBackend.titleMatchesSubject(item.title, local.titleTerms)) : safe;
+    const matching = local.titleTerms ? safe.filter(item => knowledgeBackend.titleMatchesSubject(item.title, local.titleTerms)) : knowledgeBackend.orderLocalResults(safe.filter(item => knowledgeBackend.isRelevantLocalResult(item, keyTerms, input.query)), keyTerms, input.query);
     const results = matching.slice(0, 5).map((item, i) => ({
       ...item,
+      ...knowledgeBackend.bookInfoForUrl(item.url, knowledgeBooks),
       id: i + 1
     }));
     if (!knowledgeGate(event, input, input.query).ok) return {
@@ -5334,9 +5359,10 @@ function requireKnowledgeMedia(event, url) {
   return grant;
 }
 async function localMediaRequest(event, input, download = false) {
-  requireKnowledgeMedia(event, input.url);
+  const grant = requireKnowledgeMedia(event, input.url);
   const response = await kiwixFetch(input.url, {
     receiptId: privacyReceiptIdForSender(event.sender),
+    chatId: grant.chatId,
     purpose: 'image',
     method: download ? 'GET' : 'HEAD'
   });
@@ -5367,11 +5393,14 @@ ipcMain.handle('knowledge:media', handleKnowledgeMedia);
 ipcMain.handle('knowledge:status', async event => {
   const tab = findTabBySender(event.sender).tab;
   if (!['ask', 'settings'].includes(tab?.kind)) throw new Error('Local knowledge status requires Settings or Ask.');
-  if (!knowledgeSettings.enabled) return {
-    ...knowledgeSettings,
-    reachable: false,
-    books: []
-  };
+  if (!knowledgeSettings.enabled) {
+    knowledgeBooks = [];
+    return {
+      ...knowledgeSettings,
+      reachable: false,
+      books: []
+    };
+  }
   // Startup checks share one receipt and must not replace the active search receipt.
   const receipt = privacyReceipts.createReceipt({
     id: KNOWLEDGE_CHECK_RECEIPT_ID,
@@ -5384,12 +5413,14 @@ ipcMain.handle('knowledge:status', async event => {
       receiptId: receipt.id,
       purpose: 'catalog'
     });
+    knowledgeBooks = knowledgeBackend.listBooks(await response.text());
     return {
       ...knowledgeSettings,
       reachable: true,
-      books: knowledgeBackend.listBooks(await response.text())
+      books: knowledgeBooks
     };
   } catch {
+    knowledgeBooks = [];
     return {
       ...knowledgeSettings,
       reachable: false,
@@ -5407,6 +5438,7 @@ ipcMain.handle('knowledge:update-settings', (event, patch = {}) => {
     enabled: patch.enabled === undefined ? knowledgeSettings.enabled : patch.enabled === true,
     endpoint
   };
+  knowledgeBooks = [];
   allowedKnowledgeRequests.clear();
   allowedKnowledgeMedia.clear();
   networkSettings.offlineAllowlist = normalizeAllowlist(networkSettings.offlineAllowlist, {
@@ -5481,6 +5513,7 @@ function refuseLockedChat(sender, tab, input, url) {
 }
 
 function sensitiveGate(sender, text, options = {}) {
+  knowledgeChatIsSensitive(options.chatId, text);
   const result = sensitiveGuard.classifyQuestion(text, { strictness: privacySettings.sensitiveTopics });
   if (options.crisisOnly && result.level !== 'crisis') return { ok: true };
   const modelFlag = Object.hasOwn(sensitiveGuard.LABELS, options.modelFlag) && !['self-harm', 'harm-to-others', 'abuse'].includes(options.modelFlag) ? options.modelFlag : '';
@@ -5491,8 +5524,11 @@ function sensitiveGate(sender, text, options = {}) {
   const query = options.override === true ? sensitiveGuard.removeIdentifiers(text).text : String(text || '').replace(/\s+/g, ' ').trim();
   if (result.level === 'crisis') lockChat(options.chatId);
   if (result.level === 'crisis' || (result.level === 'sensitive' && options.override !== true)) {
-    // Do not reuse caller ids: an earlier receipt may already contain query text.
-    const receipt = privacyReceipts.createReceipt({ type: findTabBySender(sender).tab?.kind === 'search' ? 'search' : 'ask', label: 'Sensitive topic', query: '', chatId: options.chatId, crisis: result.level === 'crisis', localOnly: true });
+    // Join only the sender's query-free local receipt for this exact chat.
+    const owner = knowledgeReceiptOwners.get(options.requestId);
+    const previous = privacyReceipts.getReceipt(options.requestId);
+    const reusable = previous && previous.query === '' && previous.chatId === options.chatId && owner?.senderId === sender.id && owner.chatId === options.chatId;
+    const receipt = reusable ? previous : privacyReceipts.createReceipt({ type: findTabBySender(sender).tab?.kind === 'search' ? 'search' : 'ask', label: 'Sensitive topic', query: '', chatId: options.chatId, crisis: result.level === 'crisis', localOnly: true });
     if (result.level !== 'crisis') privacyReceipts.addEntry(receipt.id, {
       category: 'sensitive', topic: sensitiveGuard.categoryLabels(result.categories),
       url: options.endpoint || searchSettings.endpoint

@@ -2850,3 +2850,10 @@ button:disabled {
 .local-note { font-size: 0.8rem; color: var(--text-muted); }
 .local-toggle { white-space: nowrap; }
 .knowledge-books { margin: 0.5rem 0; }
+
+.answer-trust, .answer-trust-disagree, .answer-dates {
+  margin-top: 0.65rem;
+  font-size: 0.9em;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}

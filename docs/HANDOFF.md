@@ -4941,3 +4941,1138 @@ The approval covers the banner change to the PLAN row for corrupt preferences. S
 6. **Minor:** the Settings text B heading should show the configured host:port, not a hard-coded `127.0.0.1:8090`. The approved wording is unchanged when the endpoint is the default.
 
 
+
+## Task: Answer trust signals (Phase 2, Task 2b)
+**Status: DONE (approved by Sandeep, 2026-11-17).** Manual retest passed on Wikipedia 100. **Deferred:** the Set A collection tests (§13 item 1 and the MDWiki part of item 3) wait until the Set A downloads are done. Not committed; Sandeep commits. Earlier status: R3.15 built, source ordering and decoy test added, all tests passing (2026-11-17). Earlier still: built and passing (2026-11-17). APPROVED for build (2026-11-17). Decisions: D1 approved with T1 changed; D2 changed; D2 consequence declined (no T4 in crisis/harm chats); D3 approved with T11; D4–D7 approved as recommended.** Suggested branch: `phase-2/answer-trust`.
+
+Approval gates touched:
+- the PLAN itself;
+- new user-facing text (§9);
+- one change to network behaviour: the "Search the web" offer starts a user-initiated web search from a local answer (§7, decision D5).
+
+No new dependency, download, Docker image or external service. No new network request: knowledge dates come from the catalogue check that already runs. No change to the sensitive-topic guard, the Offline allowlist or the Privacy Receipt.
+
+### PLAN (Claude)
+
+#### 1. Goal
+Every sourced answer shows, at a glance, how far to trust it. Labels are **computed by code from the displayed answer and the numbered sources**. The model is never asked for a label, never told about labels, and nothing it writes can set one.
+
+#### 2. What exists today (verified in code)
+**Answers are checked against their sources** by `finalizeSearchAnswerWithMeta` (`search-utils.js`), which both `streamWebAnswer` and `streamKnowledgeAnswer` (`ask.js`) use:
+- it strips citation numbers outside 1..n;
+- it keeps only sentences whose citation passes `citationSupportsSentence` (word overlap with that source's evidence);
+- if no sentence survives, or the model says "insufficient", it falls back to source excerpts or to the refusal sentence **"The search snippets are insufficient to answer that."** (outcome `insufficient-evidence`);
+- it may append one system sentence: "The retrieved snippets repeat this point but do not provide much additional detail."
+- **Consequence:** displayed answers today almost never contain uncited sentences (see D3).
+- **It does not report how many sentences it removed.** D3 needs that count (§4a).
+
+**Other "no answer" texts:**
+- local search with no results: "No local results found.";
+- web search with no results: "I could not find search results for that question.";
+- Kiwix down: text C (`KIWIX_DOWN_TEXT`) plus the "Answer without sources" button.
+
+**AI-alone answers:**
+- `streamLocalAnswer` (web off, local knowledge off or not ready);
+- the "Answer without sources" button, whose 2a note is "Answer from the AI alone, with no sources."
+
+**Evidence:**
+- each numbered source carries `snippet` = `evidenceText` (selected page passages, up to 2,400 characters), from `evidenceResultsForSources`;
+- local sources also carry `book` (the book title from Kiwix search).
+
+**Knowledge dates:**
+- `knowledge:status` already fetches `/catalog/v2/entries`, at Ask start and on each New chat, with a receipt ("Local knowledge check").
+- The real 3.8.2 catalogue (`tests/fixtures/kiwix-catalog.xml`) has `<dc:issued>2026-08-20T00:00:00Z</dc:issued>`, `<updated>`, and `<link type="text/html" href="/content/wikipedia_en_100_2026-08"/>`. That path is the prefix of every result URL from that book (real search fixture: `/content/wikipedia_en_100_2026-08/Solar_eclipse`).
+- `listBooks` ignores the date and path today.
+
+**Rendering and saving:**
+- `renderMessage` draws content, sources, media, sensitive notices, actions, then `note`;
+- `savedMessage` persists only `id, role, content, sources, note, action (3 types), mediaResults`.
+
+**Electron harness:** `tests/electron/local-knowledge.test.js` stubs only generation (`getEngineApi().summarize`), so each case can set the model's exact output.
+
+#### 3. Which answers get what
+| Answer | Trust line |
+|---|---|
+| Web answer with sources | Computed label (§4), disagreement (§5), "Web sources retrieved …" (§6) |
+| Local-knowledge answer (Local or Both) | Computed label, disagreement, "Local knowledge as of …" (plus the web line for Both) |
+| Local search: no results; or local answer labelled Not found | **Not found**, plus the "Search the web?" offer when allowed (§7) |
+| Web search: no results | **Not found** |
+| AI alone (web off and local off/not ready, or "Answer without sources") | **No sources: answer from the AI alone; verify it.** |
+| Kiwix down (text C) | Nothing new; text C and "Answer without sources" stay as they are |
+| Image/video answers | No trust label (images are not claims). Local "No matching images in local knowledge." keeps the existing approved "Search web for images" action, under the same conditions as §7 |
+| Answers using uploaded files | No trust label in this task (D6) |
+| Sensitive questions (medical, abuse, self-harm below crisis, etc.) answered from local knowledge or the web | **Computed label, disagreement and date lines, as for any sourced answer (D2).** Never the "Search the web?" offer. Existing resource notes (`ABUSE_RESOURCES`, `CRISIS_SHORT_LINE`) and notice A stay exactly as they are |
+| Sensitive questions answered by the AI alone (web and local off), **outside** crisis/harm chats | T4, below the unchanged sensitive notice |
+| AI-alone answers **inside** a crisis or harm-to-others chat | **Nothing** (no T4) |
+| Sourced (local) follow-ups inside a crisis or harm-to-others chat | Computed label + T6 (no offer) |
+| The fixed texts: crisis reply, harm-to-others reply, follow-up reply, abuse resources, crisis short line | **Nothing**: fixed texts unchanged, no label, date, disagreement or offer (§8) |
+| Crisis, harm or locked chats; any question above `none` | Never the "Search the web?" offer |
+| Errors (Offline stop, search unreachable, model not ready) | Nothing |
+
+#### 4. Label computation (new `src/answer-trust.js`, pure functions, browser + Node like `search-utils.js`)
+`computeTrustLabel({ answer, sources, outcome })` runs on the **final displayed text** (after `finalizeSearchAnswerWithMeta` and `sanitizeModelReply`) and on the numbered sources that were given to the model.
+
+1. **Provided sources:** P = the numbers n where `sources[n-1]` exists and its evidence text (`snippet`, else `evidenceText`) is non-empty after trimming. The label never trusts `finalize`: it checks citations against P again.
+2. **Not found** if any of these hold:
+   - P is empty;
+   - `outcome === 'insufficient-evidence'`;
+   - the answer, with citations removed, is one of "The search snippets are insufficient to answer that.", "No local results found." or "I could not find search results for that question.";
+   - the answer contains the word "insufficient" (the same rule `finalize` uses).
+3. **Sentences:** split the answer with `searchUtils.splitSentences`, which moves a leading "[2]" onto the previous sentence. Drop the known system sentence ("The retrieved snippets repeat this point…"); it is not a claim. Every remaining sentence is a claim.
+4. **Cited:** a claim is cited if it contains at least one `[n]` with n in P.
+5. **Result:**
+   - 0 claims, or 0 cited claims → **Not found**;
+   - every claim cited → **Supported**;
+   - at least one cited and at least one uncited → **Partly supported**.
+
+Source-excerpt fallbacks (`source-excerpts`, `snippet-excerpts`) are verbatim source sentences with citations, so they label as Supported. The existing outcome note ("Source excerpts: …", "Checked AI answer: …") stays below the label.
+
+Labels are set once the answer is final, never while streaming. They are stored on the message as `trust`.
+
+#### 4a. Removed-sentence note (D3)
+`finalizeSearchAnswerWithMeta` keeps its behaviour and also returns `removedUnsupported`: the number of sentences in the model's output that were dropped because they had **no citation, or only citations their source did not support**.
+
+Not counted:
+- fragments dropped as incomplete (`sentenceLooksComplete`);
+- duplicates merged into an earlier sentence;
+- sentences cut by the 4-sentence limit.
+
+The note is shown only when **model text is displayed** (outcome `ai-generated` or `checked-ai-answer`) and the count is above 0. When the whole model output is replaced by source excerpts or the refusal, the existing outcome note already explains it and T11 is not added.
+
+`removedUnsupported` is stored in `trust.removed` and shown on the trust line after T1–T3 (§9 T11). It is not part of `note`, so existing notes and resource lines are untouched.
+
+#### 5. "Sources disagree" detection (`findDisagreements({ answer, sources, question })`)
+**Cited sources:** C = all numbers in P that are cited anywhere in the displayed answer. Fewer than two → no check.
+
+**Quantities.** `extractQuantities(text)` finds a number (digits, "," thousands separators, decimals, leading "−"/"-"), with an optional "thousand/million/billion", followed by a known unit. Each quantity gets a **kind** and a value in base units:
+
+| Kind | Units | Base |
+|---|---|---|
+| length | mm, cm, m, metre(s), meter(s), km, kilometre(s), ft, feet, foot, mi, mile(s), in, inch(es) | m |
+| mass | g, kg, t, tonne(s), lb, pound(s) | kg |
+| area | km², km2, square kilometres, sq mi, square miles | m² |
+| temperature | °C, °F | °C |
+| percent | %, per cent, percent | % |
+| count | number then people, inhabitants, residents; or population of N | count |
+| year | a 4-digit 1000–2100 after in/since/from/until/by/of/year or a month name | year |
+
+Rules:
+- a conversion in brackets right after a value ("33.6 m (110 ft)", "−89.2 °C (−128.6 °F)") is the same quantity, not a second one;
+- ranges ("360 to 410", "5–10") and bare numbers with no unit or kind are skipped;
+- citation brackets are never numbers.
+
+**Same fact:**
+1. For each answer sentence S with a quantity of kind K, the fact terms are `contentTerms(S)` minus numbers and unit words.
+2. In each cited source's evidence, a sentence matches the fact if it has a quantity of kind K and shares **at least 2** fact terms with S.
+
+**Different:**
+- Two values agree if they are equal after converting to base units and rounding both to the **coarser stated precision** (8,848.86 m and 8,849 m agree; 29,032 ft and 8,849 m agree; 1.4 billion and 1,412,000,000 agree). Years must be equal.
+- A disagreement needs values that differ **between two different cited sources**. Two different values inside one source are ignored, because they are usually different facts.
+
+**Output:**
+- at most 2 disagreements, each listing up to 3 distinct values with their citation numbers;
+- values are shown as written in the source (e.g. "−89.2 °C [1] · −89.6 °C [2]");
+- shown with any label except Not found.
+
+**Limits (stated in REVIEW and the setup doc, not in the UI):**
+- only numbers with a recognised unit, kind or year;
+- spelled-out numbers ("five million"), ranges, approximations ("about"), dates other than years, currencies and speeds are skipped;
+- "same fact" is word overlap, so it can pair different facts that share words (e.g. height vs prominence of a mountain) and raise a false alarm, or miss a paraphrased fact;
+- only the evidence given to the model is checked, not the whole page, and only sources the answer cites;
+- English unit words only;
+- rounding-based agreement can hide very small real differences.
+
+#### 6. Knowledge dates
+**Local:**
+- `listBooks` also returns `path` (the `<link type="text/html" href>`, e.g. `/content/wikipedia_en_100_2026-08`) and `date` (`dc:issued` date part, else `<updated>` date part).
+- Main keeps the book list from the latest successful `knowledge:status` (no new request).
+- `handleKnowledgeSearch` adds `bookDate` and `bookTitle` to each local result by matching its URL path prefix. If no catalogue entry matches, it falls back to a trailing `_YYYY-MM` in the book path (month precision), else empty.
+- The renderer shows one line for the distinct books among the local sources shown with the answer:
+  - "Local knowledge as of 20 August 2026 (Wikipedia 100).";
+  - several books joined with "; ";
+  - month precision shows "August 2026";
+  - no date shows T7.
+
+**Web:** `retrievedAt` is the time `search.readSources` returned, taken from the page clock and stored on the message: "Web sources retrieved 17 November 2026 at 14:05."
+
+**Format:** dates use a fixed English format, so tests are stable (D7). Answers in Both mode show both lines. Saved chats keep the original dates.
+
+#### 7. "Search the web?" offer (local had no answer)
+**Shown only when all of these hold:**
+- the answer came from the local-knowledge path and did not use the web;
+- its label is Not found (no local results, or insufficient), not Kiwix down;
+- not Offline;
+- the question's classification is `none` at the user's strictness;
+- not a crisis conversation, and the chat is not locked;
+- not an image or video request.
+
+**What the user sees:** note T9 and button T10.
+
+**Click:**
+- re-check all conditions live; if any fails, do nothing and remove the button;
+- otherwise run `answerQuestion(question, { webEnabled: true, forceText: true, appendUser: false, skipLocal: true })`, so the web path runs once for this question;
+- the "Search the web" checkbox is **not** changed;
+- main still enforces `sensitiveGate` (including the strict model flag), the chat lock and Offline, and the receipt is the normal web receipt.
+
+**Never automatic.** The button is disabled while running and removed when Offline turns on or the chat locks. Saved as action type `search-web` and re-checked live when a saved chat is reopened.
+
+#### 8. Safety replies keep their fixed texts (rule 6, as changed by D2)
+**No trust element is added to these fixed texts:**
+- the crisis reply (`crisisReply`);
+- `HARM_REPLY` (harm-to-others);
+- `FOLLOWUP_REPLY`;
+- `ABUSE_RESOURCES`;
+- `CRISIS_SHORT_LINE`.
+
+When the message **content** is one of these texts (the existing `FIXED_CRISIS_REPLIES` list plus `FOLLOWUP_REPLY`), `computeTrustLabel` is not called, and nothing is added.
+
+**Resource lines are a separate `note` field.** They render last and unchanged. The trust line is computed only from `content` and `sources`, so resource text can never be counted as a claim or a source.
+
+**Sensitive questions** (including medical, abuse and self-harm below crisis level) answered from local knowledge or the web get the normal computed label, disagreement and date lines.
+- Notice A, "I answered from local knowledge on this computer instead.", and the resource lines keep their existing text and position.
+- The trust line is inserted after the content and before the sources, so the notice stays at the top and the resources at the bottom.
+
+**The "Search the web?" offer is never shown** when:
+- the question is classified above `none`;
+- the chat is in a crisis conversation, or is locked;
+- the reply is a fixed text.
+
+**Crisis and harm-to-others chats (D2 consequence declined by Sandeep):**
+- A chat is in this state when `crisisConversation` is true when the answer starts or ends. This covers both crisis-level self-harm and crisis-level harm-to-others, which set the same flag.
+- In these chats, **T4 is never shown**: AI-alone follow-ups get no trust element at all.
+- **A trust line appears only when the answer actually used sources.** In practice that means an ordinary local-knowledge follow-up allowed by the 2a rules: P is non-empty and the answer came from `streamKnowledgeAnswer` with local sources. It then gets T1–T3, T11, T5 and T6.
+- Not-found results in these chats get T3 only if the local search ran. They never get T9/T10.
+- The crisis reply, `HARM_REPLY` and `FOLLOWUP_REPLY` get nothing.
+
+The guard, its texts and their order are not touched.
+
+#### 9. User-facing texts (for approval)
+| Id | Text |
+|---|---|
+| T1 | **Supported:** every sentence cites a source. Open the sources to check. |
+| T2 | **Partly supported:** some sentences have no source. Check them before relying on them. |
+| T3 | **Not found:** the sources didn't contain an answer. |
+| T4 | **No sources:** answer from the AI alone; verify it. |
+| T5 | **Sources disagree:** {value} [n] · {value} [m]. Check the sources. *(one line per disagreement; up to 3 values)* |
+| T6 | Local knowledge as of {20 August 2026} ({Wikipedia 100}). *(several books joined with "; ")* |
+| T7 | Local knowledge as of an unknown date ({book title}). |
+| T8 | Web sources retrieved {17 November 2026} at {14:05}. |
+| T9 | Local knowledge didn't have an answer. Search the web? |
+| T10 | Button: **Search the web** |
+| T11 | 1 sentence without a source was removed. *(N > 1: "{N} sentences without a source were removed.")* |
+
+Order inside an answer: (existing sensitive notice at top, unchanged) → content → trust line (T1–T4, then T11 when it applies) → disagreements (T5) → date lines (T6–T8) → sources → T9/T10 → existing note.
+
+The label word is bold. Plain text only, no colours that carry meaning on their own.
+
+T4 replaces the 2a note "Answer from the AI alone, with no sources." (D4).
+
+#### 10. Files to change
+| File | Change |
+|---|---|
+| `src/answer-trust.js` (**new**) | `computeTrustLabel`, `findDisagreements`, `extractQuantities`, `formatKnowledgeDate`, `formatRetrievedAt`, `TRUST_TEXTS`. Pure, no I/O. |
+| `src/search-utils.js` | Export `splitSentences`, `contentTerms` and the system-sentence constant. `finalizeSearchAnswerWithMeta` also returns `removedUnsupported` (§4a). **No change to which sentences are kept or to any output text.** |
+| `src/ask.html` | `<script src="./answer-trust.js">` before `ask.js`. |
+| `src/ask.js` | Compute `trust` at the end of `streamWebAnswer`, `streamKnowledgeAnswer`, the "no results" branches and AI-alone `streamLocalAnswer` (no attachments, not a fixed text), with the §8 exclusions. Sensitive answers are included (D2). Show T11 from `removedUnsupported` (§4a). Store `retrievedAt`. Render §9. `savedMessage` keeps a validated `trust` object and the `search-web` action. `skipLocal` option and the T9/T10 action (§7). T4 replaces the 2a note. |
+| `src/knowledge-backend.js` | `listBooks` adds `path` and `date`; new `bookInfoForUrl(url, books)`. |
+| `src/main.js` | Cache the book list from `knowledge:status`; add `bookDate`/`bookTitle` to local results in `handleKnowledgeSearch`. No new request. |
+| `src/styles.css` | `.answer-trust`, `.answer-trust-disagree`, `.answer-dates`. |
+| `package.json` | `check`: `node --check src/answer-trust.js && node tests/answer-trust.test.js`. |
+| Tests | §12. |
+
+**Not changed:** `sensitive-guard.js`, `sensitive-ui.js`, `privacy-receipt.js`, `network-mode.js`, prompts, `finalizeSearchAnswerWithMeta`, Kiwix/SearXNG transport.
+
+#### 11. Example answers and expected labels
+Sources [1]… are the **real** 3.8.2 search fixture items, in fixture order unless stated. "Displayed" means after `finalize`.
+
+| # | Question / model output (or path) | Expected |
+|---|---|---|
+| E1 | "How often are total solar eclipses?" Model: "Total solar eclipses occur somewhere on Earth every 18 months on average [1]. They recur at any given place only once every 360 to 410 years [1]." | **Supported**; T6 "Local knowledge as of 20 August 2026 (Wikipedia 100)."; no disagreement (range skipped) |
+| E2 | Same sources. Model: "Total solar eclipses occur somewhere on Earth every 18 months on average [1]. They are the most beautiful sight in nature." | Through the app: `finalize` removes the 2nd sentence → **Supported** + **T11 "1 sentence without a source was removed."** Given directly to `computeTrustLabel` without `finalize`: **Partly supported** (unit test) |
+| E2b | Same sources. Model: "Solar eclipses are rare [7]. Total solar eclipses occur somewhere on Earth every 18 months on average [1]. People once feared them." | `[7]` is out of range and is stripped. The 1st and 3rd sentences are removed → **Supported** + T11 "2 sentences without a source were removed."; also the existing note "Checked AI answer: …" |
+| E2c | Same sources. Model: "Eclipses are caused by dragons." (no citation) | No sentence survives → source excerpts → **Supported**; existing note "Source excerpts: …"; **no** T11 (§4a) |
+| E3 | "Who won the 2026 World Cup?" Model: "The search snippets are insufficient to answer that." | **Not found**; Online + not sensitive → T9/T10; Offline → no offer |
+| E4 | Local search returns 0 items → "No local results found." | **Not found** + offer when Online |
+| E5 | Web off, local off: "What is photosynthesis?" | **No sources** (T4); no date line |
+| E6 | Sources: [1] real Antarctica item; [2] test item "The lowest temperature on Earth, −89.6 °C, was recorded at Vostok Station in Antarctica." Model: "The lowest temperature recorded in Antarctica was −89.2 °C [1] [2]." | **Supported**; **Sources disagree: −89.2 °C [1] · −89.6 °C [2]. Check the sources.** |
+| E7 | Real Antarctica [1] and Animal [2]. Model: "Antarctica reached −89.2 °C [1]. The largest animals reach 33.6 m [2]." | **Supported**; **no** disagreement (bracketed conversions are one quantity; different facts) |
+| E8 | Test items: [1] "Mount Everest is 8,849 m high." [2] "Mount Everest is 29,032 ft high." Model cites both | no disagreement. With [2] "8,848 m" → disagreement |
+| E9 | Real Antarctica [1] ("first seen in 1820") and test item [2] "Antarctica's ice shelves were first sighted in 1821." Model cites both | **Sources disagree: 1820 [1] · 1821 [2]** |
+| E10 | "how to slit my wrists" | Fixed crisis reply; **no** label, date or offer |
+| E10b | "best way to poison a person" | Fixed harm-to-others reply; **no** label, date or offer |
+| E11 | Offline, local on: "my husband hits me" (row 90), model cites a local source | Local answer with **computed label + T6** (D2); `ABUSE_RESOURCES` note **unchanged, last**; no offer |
+| E11b | Same question, web off, local off | Sensitive AI-alone path: existing notice and resources unchanged; T4 on the AI text |
+| E12 | Online, local on (MDWiki), web off: "I have a fever" (sensitive, medical), model cites [1] | **Computed label + T6** (D2); existing sensitive handling unchanged; **no** T10 even if Not found |
+| E15 | Crisis chat (after "how to slit my wrists"), web locked, local off: "what should I eat tonight" | AI-alone follow-up; **no** T4, no trust element |
+| E15b | Crisis chat, local on: "capital of France" (ordinary follow-up, local allowed), model cites [1] | Computed label + T6; **no** T10 |
+| E15c | Harm-to-others chat (after "best way to poison a person"): "what is photosynthesis" with local off | **No** T4 |
+| E12b | Online, web on, sensitive medical question sent with the user's override | Web answer with **computed label + T8** (D2) |
+| E13 | "Earth" with web results only (Online, web on, local off) | Computed label + T8 |
+
+#### 12. Tests (written first; failures print ids only)
+**`tests/answer-trust.test.js` (new):**
+- **AT1–AT6 labels:** E1–E5 rows on the real fixture snippets. Also: citation to a source not in P (empty evidence) is uncited; `[9]` with 5 sources is uncited; the system sentence is ignored; a leading "[2]" attaches to the previous sentence; model text "Supported:" does not change the label.
+- **AT7–AT12 quantities:** units and conversions, brackets, ranges skipped, thousands/decimals/minus, "1.4 billion", years with context only, citations never numbers. The real fixture's numbers ("8.5 μm", "33.6 m (110 ft)", "−89.2 °C (−128.6 °F)", "1820", "[17]" already stripped) parse as specified.
+- **AT13–AT18 disagreement:** E6–E9; same-source different values ignored; uncited sources ignored; precision rounding (8,848.86 vs 8,849 agree); max 2 disagreements, 3 values. **The real fixture alone produces no disagreement for any pair** (negative control).
+- **AT19–AT21 dates:** formatting; month-only fallback; unknown date → T7; retrieved time format.
+
+**`tests/knowledge-backend.test.js`:** the real catalogue gives `path: '/content/wikipedia_en_100_2026-08'` and `date: '2026-08-20'`; `bookInfoForUrl` matches every real search URL; a non-matching URL falls back to `_YYYY-MM`.
+
+**`tests/sensitive-gate.test.js` (VM, production `handleKnowledgeSearch`):** results carry `bookDate`/`bookTitle` from the cached book list. The number of Kiwix calls is unchanged (no catalogue fetch per search).
+
+**`tests/electron/local-knowledge.test.js`:** the fake Kiwix also serves the **real search fixture** for pattern "solar eclipse" and the **real catalogue entry** in addition to the existing two entries. Articles return HTML built from the fixture snippet.
+- **trust-supported:** Offline, model stub E1 → T1 visible, T6 with "20 August 2026 (Wikipedia 100)", 0 SearXNG.
+- **trust-notfound-offline:** stub E3 → T3, no T10.
+- **trust-offer:** Online, local only, stub E3 → T9/T10.
+  - Clicking runs exactly one SearXNG search and then a web answer with T8.
+  - The web checkbox stays unticked.
+- **trust-sensitive:** Offline, local on, the medical question "I have a fever" with the model citing [1] → label and T6 shown; existing notice/resources unchanged; Online and Not found → **no** T10.
+- **trust-removed:** model stub E2 → T1 and T11 "1 sentence without a source was removed."; stub E2c → no T11.
+- **trust-no-offer:**
+  - sensitive question (row from 1c) → no T10;
+  - locked chat → no T10;
+  - Offline → no T10;
+  - image request → no T10.
+- **trust-ai-alone:** "Answer without sources" → T4 (updates case g's expected note).
+- **trust-disagree:** two-item feed (real Antarctica + E6 test item), stub cites both → T5 exact text.
+- **trust-saved:** reopen the saved chat → same label and date lines.
+- **trust-crisis-chat:** after a crisis row (233) and after a harm row (203): an AI-alone follow-up has **no** `.answer-trust` and its message has no `trust` (no T4); with local on, an ordinary follow-up citing [1] has the computed label + T6 and no T10.
+- **trust-fixed:** E10 and E10b → fixed replies unchanged, no `.answer-trust` element. E11 → `.answer-trust` present, `note === ABUSE_RESOURCES` exactly (the existing `resources-abuse` assertion stays as it is), rendered after the trust and source elements.
+
+**`tests/electron/sensitive-guard.test.js`:** after its existing cases, assert no `.answer-trust` element on any crisis, harm-to-others or follow-up fixed reply, and that the abuse resource text is unchanged.
+
+**`tests/answer-trust.test.js` additions (crisis chats):** AT26: the trust decision helper returns null for AI-alone answers when `crisisConversation` is true, and a computed label when P is non-empty.
+
+**`tests/answer-trust.test.js` additions (D3):** AT22–AT25: `removedUnsupported` from `finalize` on E2 (1), E2b (2), E2c (0, excerpts), and an answer with a merged duplicate (0). T11 singular and plural wording. `finalize`'s `answer`, `outcome` and `note` are identical with and without the new field (existing `search-utils` tests unchanged).
+
+All existing suites must still pass: `npm run check`, plus Electron `local-knowledge`, `sensitive-guard`, `offline-mode`, `safe-redirects`, `media-chat`.
+
+#### 13. Manual tests (Sandeep)
+1. **Offline, local on, Set A loaded:**
+   - "How tall is Mount Everest?" → label, "Local knowledge as of <issued date of wikipedia_en_top_maxi_2026-09> (…)", citations open the local article;
+   - a question the ZIMs can't answer ("Who won yesterday's match?") → T3, no offer.
+2. **Online, local on, web off:** the same unanswerable question → T3 + T9/T10.
+   - Click → web answer with T8 and its own label; receipt shows the SearXNG request.
+   - The web checkbox is still off.
+3. Online, sensitive question ("I have a fever") with local on and MDWiki loaded → label and "Local knowledge as of …" shown, existing notice unchanged, **no** "Search the web?" even when Not found.
+3b. Ask something the model tends to pad (e.g. "Tell me about solar eclipses and why they matter") → if any sentence was removed, T11 appears under the label.
+4. Crisis question → fixed reply only. Harm-to-others question → fixed reply only. Abuse question Offline with local on → label on the local answer, resources unchanged at the bottom.
+5. Web off, local off: "What is photosynthesis?" → T4.
+6. Web on: "population of Tokyo" → look for a T5 line if sources differ; open both citations to check the values. (Real disagreements depend on live results; not guaranteed.)
+7. Save the chat, reopen it → same labels and dates.
+
+#### 14. Decisions for Sandeep
+**Decided (2026-11-17):**
+- **D2: CHANGED.** Labels, dates and disagreement apply to sensitive answers from local knowledge or the web; only the fixed crisis, harm-to-others and abuse-resource texts are excluded; no "Search the web?" for sensitive, crisis, harm or locked chats (§3, §8).
+- **D3: approved with a note.** Keep removing uncited sentences; show T11 when it happens (§4a).
+- **D4, D5, D6, D7:** approved as recommended.
+
+- **D1: approved** with T1 changed to "Supported: every sentence cites a source. Open the sources to check."; T2–T11 approved as written.
+- **D2 consequence: declined.** In crisis and harm-to-others chats, no T4; trust lines only when the answer used sources (§8).
+- **Build approved.** Codex builds (tests first). Claude reviews (max 2 rounds), then stops before DONE.
+
+#### Round 3 PLAN (2026-11-17, after Sandeep's manual test failed); overrides earlier sections where they differ
+**Sandeep's findings** (Kiwix running, Wikipedia 100):
+1. off-topic local sources;
+2. "Not found" and the "Search the web?" offer never appeared;
+3. all answers fell back to source excerpts;
+4. excerpts labelled "Partly supported";
+5. the sensitive medical answer's receipt showed only "127.0.0.1:8080 blocked";
+6. a later question said "Couldn't reach local knowledge (Kiwix)" while Kiwix was up.
+
+##### R3.1 Investigation (what Claude verified)
+**Off-topic sources (findings 1 and 2).** Claude queried Sandeep's running kiwix-serve with each question, exactly as the app does (`/search?pattern=<whole question>&format=xml&pageLength=10`).
+
+| Question | Kiwix results (title) | Why |
+|---|---|---|
+| What causes a solar eclipse? | Solar eclipse, Maya civilization, Amazon (company), YouTube, President of the United States | Full-text search also matches "what"/"a"; snippets start "...a series on…", "...a self-driving…" |
+| Who won yesterday's match? | Michael Jackson, Charlie Chaplin, Martin Luther King Jr. | Matches "who": "...who also played guitar…" |
+| I have a fever | Virus, HIV/AIDS, Carl Linnaeus, Bob Dylan, List of Roman emperors, … | Matches "a"/"have"; no article about fever in Wikipedia 100 |
+
+- The app keeps every result that passes the crisis filter.
+- **There is no relevance check for local text sources.** (The image path has the title rule from Task 2a; text does not.)
+- So a local search almost never comes back empty, and "Not found" plus the offer can't appear.
+
+**Excerpt fallback (finding 3). D3 is not the cause.**
+- Claude ran `finalizeSearchAnswerWithMeta` from `HEAD` (before Task 2b) and from the working tree on the three real Kiwix result sets, with two model outputs each ("insufficient" and one cited sentence). **All six results are identical before and after 2b.** 2b only adds the `removedUnsupported` count; sentence selection is unchanged.
+- **The real cause:** with off-topic sources the 1B model correctly says the evidence is insufficient. `finalize` then calls `fallbackSourceAnswer`, which **always** picks the best-scoring passage from any page evidence. It has no relevance floor, so it shows Virus/Bob Dylan/Michael Jackson passages as "Source excerpts" instead of reaching "Not found". This existed before 2b; 2b made it visible.
+- "What causes…" questions also take the excerpt route when the model gives fewer than 2 distinct cited sentences (the existing cause-question rule).
+- **Fixing R3.2 (relevance) fixes most of this:** with no relevant sources there is no evidence, so the answer becomes "No local results found." → Not found.
+
+**"Partly supported" on excerpts (finding 4).**
+- An excerpt is a multi-sentence block with **one** citation at its end. For example, the fever answer is 8 sentences with citations only after sentences 4 and 8.
+- The per-sentence rule therefore counts 6 uncited sentences → Partly supported.
+- Verbatim excerpts are not claims written by the AI, so the per-sentence rule is the wrong test for them (R3.3).
+
+**Receipt (finding 5): the Kiwix request is recorded, but in a receipt the page no longer shows.**
+- In Both mode, `streamKnowledgeAnswer` first runs the local search. Its rows ("127.0.0.1:8090 … – done") go into receipt R1 (id = request id).
+- Then the web step calls `search:query`, and main's `sensitiveGate` refuses it. **By design (Task 1b comment "Do not reuse caller ids") it creates a new receipt R2 "Sensitive topic"** with the blocked 8080 row, and `assignPrivacyReceiptToSender` makes R2 the page's active receipt.
+- The Ask receipt panel shows R2 only. R1 still exists (the Electron case `d-query` passes because it searches all receipts), but the user can't see it next to the answer.
+- So **every request is recorded, but the receipt shown for the answer omits the Kiwix request.** That defeats the purpose of the rule; fixed in R3.4.
+
+**"Couldn't reach local knowledge" while Kiwix was up (finding 6): an error-handling bug; the exact trigger is not reproduced yet.**
+- Kiwix is not slow or oversized. Claude measured the 15 raw articles from these searches: 0.36–1.4 MB each, 2–17 ms each, all far under the 5 MB cap and the 10 s timeout.
+- `answerQuestion`'s local branch ends in `catch { updateAssistant(id, { content: KIWIX_DOWN_TEXT … }) }`. That **turns every error into text C**:
+  - model-generation errors (the WebLLM engine has a 4,096-token context; a typical local prompt here is about 2,300 tokens, so overflow is possible but not proven);
+  - `ensureModelReady` failures;
+  - grant refusals from `knowledge:read-sources`;
+  - a renderer/trust exception;
+  - an Offline interruption.
+- `streamKnowledgeAnswer`'s inner `catch` also marks any search/read error as "unavailable", not only connection errors.
+- The web path, by contrast, shows "I could not complete that answer: …". Fixed in R3.5. The real error then becomes visible, so Sandeep's re-test identifies the trigger.
+
+##### R3.2 Relevance gate for local text sources (main, authoritative)
+**New pure helpers in `src/knowledge-backend.js`: `questionKeyTerms(question)` and `isRelevantLocalResult(result, keyTerms)`.**
+
+**Key terms:**
+- the question's words, lower-cased, accents removed, split on non-letters, with the Task 2a plural handling (`singularForms`);
+- minus the 2a image stop words plus: who, whom, whose, what, when, where, which, why, how, did, does, do, is, are, was, were, be, been, can, could, should, would, will, tell, explain, describe, define, meaning, mean, have, has, had, i, me, my, you, your, it, its, this, that, these, those, there, their, they, yesterday, today, tomorrow, tonight, now, currently, current, latest, recent, recently;
+- at most 8 terms.
+
+| Question | Key terms |
+|---|---|
+| What causes a solar eclipse? | causes, solar, eclipse |
+| Who won yesterday's match? | won, match |
+| I have a fever | fever |
+
+**A result is relevant if either:**
+- **(A) title rule:** at least one key term is a whole word of the result title (plural forms as in 2a; case ignored); or
+- **(B) snippet rule:** there are at least 2 key terms, and the Kiwix snippet (markers stripped) contains at least ⌈2/3⌉ of them as whole words.
+  - Example: "first president of the United States" → George Washington's snippet passes (B) although its title doesn't match.
+
+**Search:**
+- `handleKnowledgeSearch` sends **the key terms** as the Kiwix pattern ("causes solar eclipse") instead of the whole question, as the image path sends the subject.
+- With no key terms there is **no Kiwix call** and the result is empty.
+- The crisis gate still runs on the full question first.
+- After the crisis filter, results that are not relevant are dropped before the top 5 are kept, so irrelevant articles are never read.
+
+**Results with the real Kiwix responses:**
+- solar eclipse → only "Solar eclipse";
+- match → none;
+- fever → none;
+- the original 2a question "What is the Earth?" on the test ZIM → none (the test ZIM has no Earth article; it used to answer from "Solar eclipse").
+
+**No relevant result →** the existing "No local results found." → **Not found (T3)**.
+- Online with web off, and a question classified `none` → the T9/T10 offer, as approved.
+- Offline, or a sensitive question (e.g. "I have a fever") → T3 only.
+
+**Scope and limits:**
+- local text only; web results are unchanged;
+- word matching can drop a good article whose title and snippet use other words (e.g. "WW2" vs "World War II"), and can keep an off-topic article that shares a title word;
+- the snippet is Kiwix's matched passage, not the whole article.
+
+No new request and no receipt change: the dropped results were already part of the one search request.
+
+##### R3.3 Labels for source excerpts
+- For outcomes `source-excerpts` and `snippet-excerpts`, `computeTrustLabel` returns a new label **`excerpts`** when every excerpt block ends with a citation to a provided source, else Not found.
+- The per-sentence rule still applies to AI-written text.
+- **T12 replaces the old outcome note** ("Source excerpts: We couldn't produce a reliable AI synthesis, so we're showing supporting source text.") on answers that have a trust line, so the reader sees one line, not two.
+- The disagreement and date lines still apply. T11 is not shown (as today).
+
+##### R3.4 Receipt: keep the Kiwix rows visible next to a sensitive web refusal
+In `sensitiveGate` (main):
+- **if** the request carries a `requestId` whose receipt already exists, **and** that receipt belongs to this sender and chat, **and** its stored query is empty, the refusal entry is **added to that receipt**, which stays the page's active receipt.
+  - The empty query matters: local-knowledge receipts for sensitive questions are created query-free, so no question text can be exposed.
+- **Otherwise** a new "Sensitive topic" receipt is created exactly as today, so the Task 1b protection is unchanged.
+
+`buildSummary` for a receipt with a sensitive entry also appends the existing "· local knowledge (Kiwix, 127.0.0.1)" part when local-knowledge entries exist. Example: "Not sent: sensitive topic (medical) · local knowledge (Kiwix, 127.0.0.1) · AI generated locally".
+
+**Privacy Receipt gate: decision R-D3.**
+
+##### R3.5 Error handling on the local path (ask.js only)
+- **Text C** (`KIWIX_DOWN_TEXT`) is shown **only** when the failure is a Kiwix connection problem: connection refused or reset, timeout, "Local knowledge response refused", "Local knowledge response too large", or the status check finding Kiwix unreachable.
+- **Every other error** on the local path (model, readiness, grant refusal, rendering) shows **T13**, with no raw error text.
+- The error's **name only** (e.g. `Error`, `AbortError`) goes to the status bar for diagnosis, never the message or the question.
+- Offline interruptions keep the existing `OFFLINE_STOP_TEXT`.
+- **Stop** still gives "Stopped."
+- `streamKnowledgeAnswer`'s inner catch marks `unavailable` only for the connection errors above. Other errors propagate to the outer handler.
+
+##### R3.6 New user-facing texts (for approval)
+| Id | Text |
+|---|---|
+| T12 | **Source excerpts:** the AI couldn't write a reliable answer, so these passages are copied word for word from the sources. Check that they answer your question. |
+| T13 | I couldn't finish this answer. Local knowledge was reached, so this isn't a Kiwix problem. Try again, or start a new chat. |
+
+T1–T11 are unchanged. No new safety, crisis or legal text.
+
+##### R3.7 Files
+| File | Change |
+|---|---|
+| `src/knowledge-backend.js` | `questionKeyTerms`, `isRelevantLocalResult` |
+| `src/main.js` | Key-term pattern, empty-terms short cut and relevance filter in `handleKnowledgeSearch`; receipt join in `sensitiveGate` (R3.4) |
+| `src/privacy-receipt.js` | Summary addition only (R3.4) |
+| `src/answer-trust.js` | `excerpts` label and T12 |
+| `src/ask.js` | T12 replaces the excerpt note when a trust line shows; R3.5 error classification and T13 |
+
+**Not changed:** `search-utils.js` (finalize), the guard, network mode, prompts, web search.
+
+##### R3.8 Tests (written first; ids only on failure)
+**Fixtures:** save the three real responses Claude captured on 2026-11-17 from Sandeep's kiwix-serve 3.8.2 (Wikipedia 100) as:
+- `tests/fixtures/kiwix-search-solar-eclipse.xml`
+- `tests/fixtures/kiwix-search-yesterdays-match.xml`
+- `tests/fixtures/kiwix-search-fever.xml`
+
+If the captures are lost, re-capture them with:
+```
+curl -s "http://127.0.0.1:8090/search?pattern=What%20causes%20a%20solar%20eclipse%3F&format=xml&pageLength=10"
+```
+(and likewise for the other two). The existing `kiwix-search.xml` (pattern Earth) and `kiwix-catalog.xml` stay.
+
+**Unit tests (`tests/knowledge-backend.test.js`):**
+- **KR1:** key terms for the three questions, plus "What is the Earth?" → earth, and "How tall is Mount Everest?" → tall, mount, everest.
+- **KR2:** solar fixture → only "Solar eclipse" relevant.
+- **KR3:** match fixture → none.
+- **KR4:** fever fixture → none.
+- **KR5:** Earth fixture with "What is the Earth?" → none.
+- **KR6:** a synthetic George Washington item passes rule B; a single-key-term question never uses rule B.
+- **KR7:** "red pandas" → "Red panda" (plural forms reused).
+
+**VM tests (`tests/sensitive-gate.test.js`, production `handleKnowledgeSearch` / `sensitiveGate`):**
+- **KV1:** the pattern sent is the key terms.
+- **KV2:** a question with no key terms → 0 Kiwix calls, `results: []`.
+- **KV3:** the match fixture → `results: []` and **0 article reads** afterwards.
+- **KV4:** the crisis gate still runs before any call.
+- **KV5:** receipt join: a query-free local receipt plus a sensitive web refusal → **one** receipt containing the Kiwix row ("– done") and the sensitive 8080 row, still the sender's active receipt, summary includes "local knowledge".
+- **KV6:** a receipt with a stored query → a new receipt, as today.
+- **KV7:** no question text in any receipt or export.
+
+**`tests/answer-trust.test.js`:**
+- **AT34:** the real solar-eclipse excerpt from `finalize` (model "insufficient") → `excerpts`.
+- **AT35:** an excerpt block without a citation → Not found.
+- **AT36:** AI-written text keeps the per-sentence rule (E2 unchanged).
+- **AT37:** `finalize` outputs are identical to `HEAD` for the three fixtures (regression guard for D3).
+
+**Privacy receipt unit test (`tests/privacy-receipt.test.js`):** **PR1** checks the sensitive summary with local entries.
+
+**Electron (`tests/electron/local-knowledge.test.js`):** the fake Kiwix serves the three captured fixtures by key-term pattern, and articles are built from their snippets.
+- **rel-offline-match:** Offline, "Who won yesterday's match?" → T3, no sources, 0 article reads, no T10.
+- **rel-online-match:** Online, web off → T3 + T9/T10.
+- **rel-fever:** "I have a fever" → T3, no T10 (sensitive), in both modes.
+- **rel-solar:** the only source is "Solar eclipse".
+  - Model stub cites it → T1.
+  - Model stub "insufficient" → T12 and **no** old excerpt note.
+- **rcpt-sensitive:** Online, web on, local on, "I have a fever" → the Ask page's active receipt contains a "local (Kiwix, 127.0.0.1)" row ending "– done" **and** the "blocked (sensitive topic…)" 8080 row. Its summary mentions local knowledge; no question text.
+- **err-model:** Kiwix up, model stub throws `Error('Prompt tokens exceed context window size')` → T13, not text C; the receipt shows the Kiwix rows "– done".
+- **err-grant:** a read grant refusal → T13.
+- **err-down:** Kiwix stopped → text C (existing case g still passes).
+
+All existing suites must pass (`npm run check` and the five Electron suites).
+
+##### R3.9 Manual tests (Sandeep, Wikipedia 100 running)
+1. **Offline:**
+   - "What causes a solar eclipse?" → only the Solar eclipse source; T1 or T12.
+   - "Who won yesterday's match?" → Not found, no offer.
+   - "I have a fever" → Not found, no offer.
+2. **Online, web off:** "Who won yesterday's match?" → T3 + "Search the web?". "I have a fever" → T3, no offer.
+3. **Online, web on, local on:** "I have a fever" → the receipt shown with the answer lists the Kiwix row(s) "– done" and the blocked SearXNG row; the summary mentions local knowledge.
+4. **Repeat the multi-question chat that showed "Couldn't reach local knowledge".** If T13 appears instead, note the status-bar error name for Claude. That identifies the real trigger. The receipt shows whether Kiwix answered.
+5. Stop Kiwix → text C as before.
+
+##### R3.10 Decisions for Sandeep
+- **R-D1:** relevance gate as in R3.2, and sending key terms (not the whole question) to Kiwix. Recommend **yes**.
+- **R-D2:** approve T12 and T13; T12 replaces the old excerpt note on answers with a trust line. Recommend **yes**.
+- **R-D3 (Privacy Receipt gate):** join a sensitive web refusal into the answer's existing **query-free** receipt (else a new receipt as today), and add "local knowledge" to that summary. Recommend **yes**.
+- **R-D4:** text C only for Kiwix connection errors; T13 for other local-path errors, with only the error name in the status bar. Recommend **yes**.
+
+##### R3.11 Sandeep's review of Round 3 (2026-11-17)
+**Round 3 authorised:** Sandeep explicitly authorised a third build-review round for Task 2b, as an exception to the 2-round limit, because the manual test found new bugs.
+
+- **R-D1: approved.** Add tests that the gate **keeps** relevant results:
+
+  | Question | Kept |
+  |---|---|
+  | How does photosynthesis work? | Photosynthesis |
+  | Tell me about red pandas | Red panda (plural handling, as in the image rule) |
+  | Earth | Earth |
+  | Who was Albert Einstein? | Albert Einstein |
+
+  Use fixtures, or capture them from Sandeep's running Kiwix with curl. Key terms for "How does photosynthesis work?" are photosynthesis, work; "work" is not in any title, so rule A keeps "Photosynthesis".
+- **R-D2:** T12 approved as written. **T13 changed to: "I couldn't finish this answer. Try again, or start a new chat."** It does not claim local knowledge was reached.
+- **R-D3: approved on one condition.** In a sensitive chat, the Kiwix row's "What was sent" must not contain the question or its key words, and must show **"local search – done"** only. The same applies to Export JSON. A test must check both.
+- **R-D4:** approved.
+
+**Claude's check of today's Kiwix rows (before building), result: the condition is NOT met today.**
+- Search rows store `url` with the query removed (`http://127.0.0.1:8090/search`) and "What was sent" = "search on this computer – nothing left this device – done". No key words.
+- **Article-read rows store the full article path in `url`**, e.g. `http://127.0.0.1:8090/raw/wikipedia_en_100_2026-08/content/HIV/AIDS`.
+  - The receipt panel does not show `url` (it shows category, host, "What was sent"), but **Export JSON includes it**.
+  - With the R3.2 title rule, the article title will usually **be** a key word (e.g. `…/content/Fever`).
+- So today a sensitive question's key words can appear in Export JSON. The panel text also reads "search on this computer – nothing left this device – done", not "local search – done".
+
+**Proposed fix (needs Sandeep's OK before building; Privacy Receipt gate):**
+- In `kiwixFetch` (main), when the **chat is sensitive**, every local-knowledge row (search, article read, local image) is recorded with:
+  - `url` = the Kiwix origin only (`http://127.0.0.1:8090`), with no path;
+  - "What was sent" = **"local search"**, so with the outcome the row reads "local search – done".
+  - Panel and Export JSON use the same stored entry, so both are covered.
+- **"Sensitive chat" (recommended): the whole chat** from the first question classified above `none` (or a crisis-locked chat) onward, tracked in main by chat id in memory. A later ordinary follow-up then cannot reveal its article path either.
+  - The alternative is per question: only rows for questions classified above `none`.
+- **Ordinary chats keep today's rows** (full article path in Export JSON; approved 2a text).
+- **Test RC1:** VM and Electron. A sensitive question with a relevant local article, then an ordinary follow-up in the same chat:
+  - every Kiwix row reads "local search – done" with an origin-only `url`;
+  - `JSON.stringify(getReceipts())` and the export contain neither the question nor any key term ("fever") nor the article path;
+  - an ordinary chat still shows the normal rows.
+
+##### R3.12 R-D3 receipt fix: approved (2026-11-17)
+**Decision:** in a sensitive chat, **every** Kiwix row (search, article read, local image) is stored with `url` = `http://127.0.0.1:8090` (the configured Kiwix origin) only, and "What was sent" = **"local search"**, so it reads **"local search – done"** (or "local search – attempted, failed: …"). Ordinary chats keep today's rows.
+
+**Scope: the whole chat,** from the first sensitive or crisis question onward, consistent with the web-search lock. Main decides this (authoritative). A chat is sensitive for Kiwix rows if any of these hold:
+- (a) the current question is classified above `none` at the user's strictness, **or** strict mode (the stricter of the two);
+- (b) main's in-memory set of sensitive chat ids contains it (added by (a), never removed while the app runs);
+- (c) the chat is locked (crisis/harm);
+- (d) the chat's **stored** messages in the chat store contain a user message classified above `none`. This covers a chat reopened from Saved chats after a restart.
+
+The renderer can't turn this off. Other receipt behaviour is unchanged.
+
+**Test RC1 (VM and Electron):**
+1. Sensitive question ("I have a fever") with a relevant local article (fixture), then an ordinary follow-up in the same chat. Every Kiwix row is "local search – done" with an origin-only `url`.
+2. `JSON.stringify(getReceipts())` and the Export JSON payload contain neither the question, nor any key term ("fever"), nor any article path (`/content/`, `/raw/`).
+3. **Reopen the sensitive chat from Saved chats** (in Electron, with saving turned on through Settings), ask an ordinary follow-up that uses local knowledge, then **export**. Same checks: no question, key words or article paths, and rows read "local search – done".
+4. A fresh ordinary chat still shows today's rows (full path in Export JSON, approved 2a text).
+
+##### R3.13 Claude: real captures for the "keeps" cases, and one refinement of the R3.2 title rule (2026-11-17)
+**Captured from Sandeep's kiwix-serve 3.8.2 (Wikipedia 100) with the key-term patterns the app will send.** Saved unchanged in `tests/fixtures/`:
+
+| Fixture | Pattern | Titles returned |
+|---|---|---|
+| `kiwix-search-solar-eclipse.xml` | What causes a solar eclipse? | (R3.1) |
+| `kiwix-search-yesterdays-match.xml` | Who won yesterday's match? | (R3.1) |
+| `kiwix-search-fever.xml` | I have a fever | (R3.1) |
+| `kiwix-search-photosynthesis.xml` | "photosynthesis work" | Plant, Protein, Fungus, Flowering plant, Evolution, Dinosaur, Animal, Frog, Amphibian |
+| `kiwix-search-red-pandas.xml` | "red pandas" | Leopard, Raccoon, Red fox, Bobcat, Jaguar, Lion, Tiger, YouTube |
+| `kiwix-search-earth-word.xml` | "earth" | Solar eclipse, Animal, Evolution, Plant, Antarctica, Precipitation, Dinosaur, Eukaryote, Turtle, World Heritage Site |
+| `kiwix-search-albert-einstein.xml` | "albert einstein" | Martin Luther King Jr., Virus, The New York Times, Washington, D.C. |
+
+**Wikipedia 100 has no Photosynthesis, Red panda, Earth or Albert Einstein article.**
+- So the four "keeps" tests use **synthetic fixtures in the exact 3.8.2 RSS shape** (`*-synthetic.xml`), with the target article plus the real off-topic items.
+- The four real captures are the negative controls: with Wikipedia 100 every one of these questions must give **Not found**.
+
+**Refinement (stricter than approved; no text, safety, network or receipt change).** The real "red pandas" capture contains **"Red fox"**. R3.2 rule A ("at least one key term in the title") would keep it because of "red". Changed:
+- **Rule A:** the title must contain at least **⌈2/3 × n⌉** of the n key terms (n = 1 → 1, 2 → 2, 3 → 2, 4 → 3).
+- **Generic question verbs are dropped from the key terms:** work, works, working, happen, happens, cause, causes, caused, make, makes, made, use, used, called, mean, means, matter, matters, get, gets, become, became.
+- **Rule B is unchanged:** at least 2 key terms, and at least ⌈2/3⌉ of them in the snippet.
+
+| Question | Key terms | Result |
+|---|---|---|
+| How does photosynthesis work? | photosynthesis | Photosynthesis kept |
+| Tell me about red pandas | red, pandas | Red panda kept (plural); Red fox dropped |
+| Earth | earth | Earth kept |
+| Who was Albert Einstein? | albert, einstein | Albert Einstein kept |
+| What causes a solar eclipse? | solar, eclipse | Solar eclipse kept |
+| How tall is Mount Everest? | tall, mount, everest | Mount Everest kept (2 of 3) |
+| When did World War II end? | world, war, ii, end | World War II kept (3 of 4) |
+
+Limit: a short or differently worded title can fail rule A and is then kept only if its snippet passes rule B.
+
+##### R3.14 Sandeep's two questions before DONE (2026-11-17): answers and proposals
+**1. Relevance rule on longer questions.** Captured from Sandeep's kiwix-serve with the key-term patterns the app sends.
+
+**Wikipedia 100 has none of the four target articles:** Malaria, Mount Everest, Tokyo, Diffuse sky radiation and Rayleigh scattering all give HTTP 404.
+
+| Fixture | Pattern | Titles returned |
+|---|---|---|
+| `kiwix-search-malaria-children.xml` | "symptoms malaria children" | HIV/AIDS, HIV |
+| `kiwix-search-mount-everest.xml` | "tall mount everest" | (none) |
+| `kiwix-search-tokyo-population.xml` | "population tokyo" | London, Human, Native Americans in the United States, Hong Kong, Red fox, Anatomical terms of location, Singapore, Beetle, YouTube, The New York Times |
+| `kiwix-search-sky-blue.xml` | "sky blue" | Solar eclipse, Bob Dylan, Forward (association football), Emu, The Beatles, Anfield, Thierry Henry, World Trade Center (1973–2001), Elizabeth II, Antarctica |
+
+For each case there are also two **synthetic** fixtures (`-synthetic.xml` and `-synthetic-weak.xml`): the real capture plus the target article, with a realistic snippet or a worst-case snippet.
+- **Realistic snippet:** the matched words in bold, as Kiwix produces. In every real capture so far the snippet contained the searched words.
+- **Worst-case snippet:** contains no key word at all.
+
+| Question | Key terms | Real capture | Realistic snippet | Worst-case snippet |
+|---|---|---|---|---|
+| What are the symptoms of malaria in children? | symptoms, malaria, children | Not found ✓ | **Malaria** ✓ (rule B1: 2 of 3 in snippet) | dropped |
+| How tall is Mount Everest? | tall, mount, everest | Not found ✓ | **Mount Everest** ✓ (rule A: 2 of 3 in title) | **Mount Everest** ✓ |
+| What is the population of Tokyo? | population, tokyo | Not found ✓ | **Tokyo** ✓ (rule B2: title has "tokyo", snippet has both) | dropped |
+| Why is the sky blue? | sky, blue | Not found ✓ | **Diffuse sky radiation** ✓ (rule B2) | dropped |
+
+- **All four requested cases pass with realistic snippets,** and all the "drop" captures still give Not found: match, fever, red pandas, Albert Einstein, photosynthesis, "earth", and "What is the Earth?".
+- Tests `KR-long-keeps-*` (realistic) and `KR-long-negative-*` (real captures) are added to `tests/knowledge-backend.test.js` and pass.
+- The worst-case fixtures are saved but **not** used by any test yet; they are for option C below.
+
+**"Why is the sky blue?" and Not found.** The rule keeps "Diffuse sky radiation" when Kiwix's snippet contains "sky" and "blue". It would **not** keep "Rayleigh scattering", the other common article for this question: its title has neither key word and the question has only 2. Not found is acceptable there because the rule prefers a missing source to an off-topic one. Offline, the user sees Not found; Online, the "Search the web?" offer appears (not for sensitive questions).
+
+**Proposed rule C (Sandeep's suggestion; needs approval).** Also keep a result whose title is made **only** of key terms (e.g. "Malaria", "Tokyo").
+- On all 25 fixtures: the worst-case Malaria and Tokyo are kept, every drop case still gives Not found, and "Diffuse sky radiation" (worst case) is still dropped.
+- **Risk:** a generic one-word title that is also a key term is kept. Examples: "Population" for "What is the population of Tokyo?"; "Children" for the malaria question.
+- To limit this, C would skip a title that is one of the question's **attribute** words: population, symptoms, height, size, age, area, capital, history, meaning, definition, temperature, distance, date, price, cost. "Children" would still be kept.
+
+**Recommendation: keep the current rule (no C).**
+- The failure needs Kiwix to return a snippet without the searched words, which no real capture has shown.
+- The current rule fails safe (Not found, plus the web offer when allowed). C trades that for possible off-topic sources, the bug this round fixes.
+
+**2. The "Use local knowledge" re-tick race: yes, a real user can hit it. It's a product bug.**
+- `newChat()` calls `refreshKnowledgeStatus()` without waiting. The checkbox stays **enabled** while the status check runs.
+- When the check returns, `localToggle.checked = Boolean(kiwixReady)` overwrites whatever the user chose.
+- Usually the window is short: one IPC call plus a local catalogue fetch, typically a few tens of milliseconds. It can be up to **10 seconds** when Kiwix is slow to answer (for example just after the container starts), because of the 10-second timeout.
+- If the user unticks the box in that window, it is ticked again. The next question then goes to local knowledge (or Both), against their choice.
+- No data leaves the device (local knowledge is loopback only), but it overrides an explicit user choice.
+- **At start-up this can't happen:** the checkbox is `disabled` in `ask.html` until the first status check finishes.
+
+**Proposed fix (ask.js only; no text, network or receipt change):**
+- A `change` listener on `#local-toggle` records that the user changed it (a counter).
+- `refreshKnowledgeStatus()` remembers the counter and a call number when it starts.
+- When it finishes:
+  - **stale result:** if a newer status check has started, it changes nothing;
+  - **user changed the box meanwhile:** it keeps the user's choice and only updates `disabled` and the note. Exception: if Kiwix is now unreachable, the box is unticked and disabled as today, because local knowledge can't be used;
+  - **otherwise:** it behaves as today (ticked when ready).
+- **Test (Electron):** use a fake Kiwix that delays `/catalog/v2/entries` by 1.5 s. New chat → untick at once → wait for the check → the box is still unticked → a question makes **0** Kiwix search requests. Plus a second check: a newer status check wins over an older, slower one.
+- The test-only wait added to `f-web` in Round 3 stays harmless, and can be removed once this fix is in.
+
+**Decisions for Sandeep:**
+- **Q1:** keep the current relevance rule (recommended), or add rule C with the attribute-word exclusion.
+- **Q2:** approve the re-tick fix above (recommended).
+
+##### R3.15 PLAN after Sandeep's Round 3 manual test (2026-11-17)
+**Passed in Sandeep's manual test:**
+- Not found, Offline and Online;
+- the T9 offer leading to a web answer with T12 and T8;
+- sensitive receipt rows (Export JSON: 0 × "fever"; 13 origin-only "local search" rows, including after reopening from Saved chats);
+- ordinary rows keep full paths.
+
+**Three failures, below.** This replaces the open Q1 and Q2 in R3.14: the new rule covers the longer questions, and the re-tick fix is unchanged and still needs approval.
+
+###### F1. "Who won the World Cup yesterday?" cited football articles
+**Cause (verified against Sandeep's Kiwix):**
+- Key terms are `won, world, cup`; Kiwix (pattern "won world cup") returned Thierry Henry, Old Trafford, Goalkeeper (association football), Anfield, Kit (association football), Germany, Hong Kong, National Football League, Midfielder and Nelson Mandela.
+- Rule **B1** (≥ 3 key terms and ≥ ⌈2/3⌉ of them in the snippet) kept five of them, because their snippets contain "World Cup". None has a key term in its title.
+- Saved as the real fixture `tests/fixtures/kiwix-search-world-cup.xml`.
+
+**Proposed single rule (replaces R3.2/R3.13 rules A, B1 and B2):**
+1. **One key term:** the title must contain it.
+2. **Two or more key terms:** the title must contain at least one key term, **and** title plus snippet together must contain at least ⌈2/3 × n⌉ of the key terms.
+   - There is no longer a snippet-only path: an article whose title shares nothing with the question is never used.
+3. **Adjacent-word guard:** key terms that sit next to each other in the question form a run ("world cup", "red pandas", "mount everest", "solar eclipse", "world war ii", "albert einstein"). A title match on a word from such a run counts only if the title contains that word **next to its neighbour from the run**. So a title sharing just one word of a two-word subject ("World War I" for "world cup", "Red fox" for "red pandas") doesn't count.
+   - Words separated by other words in the question are independent ("symptoms *of* malaria *in* children", "population *of* Tokyo").
+   - Matching ignores case and handles plurals as before.
+
+**Results (all fixtures; "real" = Sandeep's Kiwix, "syn" = synthetic target with a realistic snippet):**
+
+| Question | Kept | Notes |
+|---|---|---|
+| Who won the World Cup yesterday? | real: none → **Not found** (+ T9 when allowed) | the five football articles dropped |
+| What are the symptoms of malaria in children? | syn: **Malaria**; real: none | title has "malaria"; title+snippet have 2–3 of 3 |
+| How tall is Mount Everest? | syn: **Mount Everest**; real: none | |
+| What is the population of Tokyo? | syn: **Tokyo**; real: none | |
+| How does photosynthesis work? / Tell me about red pandas / Earth / Who was Albert Einstein? | syn: **Photosynthesis / Red panda / Earth / Albert Einstein**; real: none | |
+| What causes a solar eclipse? | real: **Solar eclipse** only | |
+| Who won yesterday's match? / I have a fever / What is the Earth? | real: none | |
+| Why is the sky blue? | syn: none (**changed**) | see the cost below |
+
+**Hypothetical checks (synthetic items):**
+- **dropped:**
+  - "World War I" for "Who won the World Cup yesterday?" (both capitalised and lowercase);
+  - "Red fox" whose snippet mentions a red panda;
+  - "Population" for the Tokyo question;
+  - "Match" for "who won yesterday's match".
+- **kept:**
+  - "FIFA World Cup" and "World Cup (men's)" for the World Cup question;
+  - "World War II" for "When did World War II end?";
+  - "France" for "capital of France".
+
+**Costs (please accept or reject):**
+- **"Why is the sky blue?" no longer keeps "Diffuse sky radiation".**
+  - "sky blue" is adjacent in the question, so it's treated as a two-word subject (like "world cup").
+  - The rule can't tell "the sky is blue" from the colour "sky blue" without grammar.
+  - Result: Not found, plus the web offer Online.
+- **An answer found only in an article with an unrelated title is lost.** Example: "first president of the United States" no longer keeps "George Washington" (its title has no key term). Test KR6 is changed to expect "dropped".
+- **The worst-case snippets** (target title without the words in its snippet) are still dropped for Malaria and Tokyo, as in R3.14.
+
+**Tests:**
+- `tests/knowledge-backend.test.js`:
+  - **KR-rule-*:** every row above, with the real World Cup fixture and the existing real and synthetic fixtures;
+  - **KR-hypo-*:** each hypothetical above, as inline items;
+  - **KR6:** changed to expect George Washington dropped.
+- **VM (`sensitive-gate.test.js`):** production `handleKnowledgeSearch` with the World Cup fixture gives `results: []` and **0** article reads.
+- **Electron:** "Who won the World Cup yesterday?" with the fake Kiwix serving the real World Cup fixture:
+  - Online, local on, web off: T3 plus the T9 offer, no sources;
+  - Offline: T3, no offer.
+
+###### F2. "Sources disagree: 1986 [2] · 2002 [3] · 2021 [3]"
+**Cause (code):**
+- `findDisagreements` uses **every** sentence of the answer as a fact. In a source-excerpts answer those sentences are copied source text full of unrelated years.
+- A source sentence matches when it shares 2 words with the answer sentence ("world", "cup").
+- After one cross-source pair is found, more values are added **from any source, including one already listed**, which is how [3] appeared twice.
+
+**Proposed fix (`src/answer-trust.js`):**
+1. **No T5 on source-excerpt answers** (label `excerpts`, outcomes `source-excerpts`/`snippet-excerpts`): they aren't claims written by the AI.
+2. **Only the kind of quantity the question asks for is compared.** The question must contain a cue:
+   - **year:** when, what year, which year, since when, date;
+   - **length:** how tall, how high, how long, how far, how deep, height, length, distance, elevation;
+   - **mass:** how heavy, weight, mass;
+   - **count:** population, how many people, inhabitants;
+   - **temperature:** temperature, how hot, how cold;
+   - **percent:** percent, percentage, what share;
+   - **area:** area, how big (area), square.
+
+   Without a cue there is no T5. "Who won the World Cup yesterday?" has none.
+3. **The fact must be the one asked about:** the answer sentence must contain at least one question key term, and each matching source sentence must share at least 2 fact terms with it **and** contain at least one question key term.
+4. **One value per source:**
+   - A source that gives two different values (after rounding and unit conversion) for the fact is **ambiguous and left out**. It is never shown as disagreeing with itself.
+   - T5 needs **two or more different sources**, each with one value, that disagree.
+   - Each citation appears **once**; up to 3 sources are listed.
+
+T5's wording is unchanged.
+
+**Tests (`tests/answer-trust.test.js`):**
+- **AT40:** the World Cup case (excerpt answer built from the real World Cup fixture snippets, with years 1986/2002/2021) gives no T5.
+- **AT41:** a source with two years for the fact is left out; with only one other source there is no T5.
+- **AT42:** a question without a cue gives no T5, even when the sources differ.
+- **AT43:**
+  - "How tall is Mount Everest?" with [1] 8,849 m and [2] 8,848 m gives T5 "8,849 m [1] · 8,848 m [2]";
+  - with [2] 29,032 ft there is no T5 (agrees after conversion).
+- **AT44:** E6, asked as "What is the lowest temperature recorded in Antarctica?", still gives its exact T5.
+- **AT45:** no citation number appears twice in any T5 line.
+
+**Electron:** `trust-disagree` keeps passing (its questions contain "temperature"). A new case checks that the World Cup excerpt answer has no `.answer-trust-disagree`.
+
+###### F3. "Search the web" checkbox appeared ticked after the T9 button
+**What Claude checked:**
+- **Code:** the T9 handler calls `answerQuestion(question, { webEnabled: true, forceText: true, appendUser: false, skipLocal: true })` and never touches `#web-toggle`. In `ask.js`, `webToggle.checked = true` appears in **one** place only: `runInlineMediaSearch` for the **"Search web for images"** button (Phase 0 media consent, approved then). Everything else sets it to false.
+- **Runtime:** in the Electron harness, Claude sampled `webToggle.checked` every 20 ms from the T9 click until after the answer finished. It was never ticked. The existing assertion `trust-offer-checkbox` also passes.
+- **So the T9 button does not change the checkbox in the tested flow.** Claude **could not reproduce** what Sandeep saw. Possible explanations:
+  - the "Search web for images" button was clicked earlier in that chat (it does tick the box, by design);
+  - the note "Searching the web is enabled for this answer.", shown while a web answer runs, was taken for the checkbox.
+- On reopen the box is always unticked (the chat-restore code sets it to false).
+
+**Proposed:**
+- **(a) Ask Sandeep for the exact steps** (or a screenshot): which buttons, in which order, Online/Offline, and whether an image answer preceded it.
+- **(b) Strengthen the tests:**
+  - **Electron:** sample the checkbox during the whole T9 web answer and after it, and again after reopening the chat. It must be unticked at every sample.
+  - **VM unit:** the T9 click handler never writes `webToggle.checked`.
+- **(c) Only if Sandeep's steps show the media consent path caused it:** that is existing approved behaviour (the image button is an explicit consent to web retrieval), and changing it needs its own decision.
+
+###### Re-tick race (R3.14 Q2): unchanged; fix still awaiting approval.
+
+###### Decisions for Sandeep
+- **D-F1:** approve the single relevance rule (title must share a key term; title plus snippet cover ⌈2/3⌉; adjacent-word guard), including its two costs (sky blue → Not found; George Washington-type cases dropped).
+- **D-F2:** approve the T5 fix (no T5 on excerpts; question cue decides the kind; key term required; one value per source; a source never conflicts with itself).
+- **D-F3:** send the exact steps for the ticked checkbox. Claude adds the stronger tests now and makes no product change unless the steps show a cause.
+- **D-R3.14-Q2:** approve the re-tick fix.
+
+##### R3.16 Decisions on R3.15 (Sandeep, 2026-11-17)
+- **D-F1: approved, including both costs.**
+- **D-F2: approved.**
+- **Re-tick fix (R3.14 Q2): approved.**
+- **D-F3:** Sandeep will retest with exact steps and screenshots. **For now: only the stronger checkbox-sampling tests (R3.15 F3 (b)), no product change.**
+- **Build approved:** Codex builds R3.15 (tests first). Claude reviews and stops before DONE with a manual retest list.
+
+##### Known limits (Task 2b)
+- **Two-word subjects read as a unit.** Key terms that are adjacent in the question count as one subject ("world cup", "red pandas"). So "Why is the sky blue?" doesn't keep "Diffuse sky radiation", whose title contains "sky" but not "sky blue". The rule can't tell "the sky is blue" from the colour "sky blue".
+- **Answers only in articles with an unrelated title are lost.** An article is used only if its title shares at least one key term with the question. So "first president of the United States" doesn't keep "George Washington", even if its snippet answers the question.
+- **Keyword-style questions** (approved 2026-11-17): a title made only of key terms ("Tokyo" for "tokyo population") passes the adjacent-word guard. A generic one-word title that is a key term can then pass too, but only if title plus snippet cover ⌈2/3⌉ of the key terms.
+- **Safe fallback in both cases:** the user sees **Not found (T3)**. Online, with web off and a question that isn't sensitive, the **"Search the web?" offer (T9/T10)** appears. A missing source is preferred to an off-topic one.
+- The disagreement check (T5) compares only the kind of number the question asks for (§5 limits still apply). It is skipped on source-excerpt answers and when the question has no quantity cue.
+- **"Supported" checks citations, not faithfulness** (recorded 2026-11-17). The label means every sentence has a valid citation, not that the cited source says what the sentence claims.
+  - Manual test: "solar eclipse cause" was labelled Supported but contained a made-up sentence ("Earth's crust to flex…" [1]) and a false one ("partial solar eclipse occurs at the full moon phase" [4]).
+  - Mitigation: T1's "Open the sources to check" (no text change).
+  - Future work (Phase 4/5): a claim-level faithfulness check.
+
+### CHANGES (Codex)
+
+Implemented for review on 2026-11-17. Task is **not marked DONE**. Electron runtime validation remains for Claude outside this sandbox.
+
+Files and behavior:
+- `src/answer-trust.js` (new): pure citation-coverage labels, quantity extraction/conversion and precision comparison, disagreements, fixed-English dates, crisis/attachment exclusions, validated saved trust metadata, and the approved wording. T1 is exactly “Supported: every sentence cites a source. Open the sources to check.”
+- `src/search-utils.js`: exports sentence splitting, content terms and the existing system sentence. Adds `removedUnsupported` at the existing unsupported-citation rejection point; incomplete fragments, merged duplicates and sentences beyond the existing limit are not counted. Excerpt/refusal outcomes return zero. Sentence selection, prompts, answer text and existing outcome fields are unchanged.
+- `src/knowledge-backend.js`, `src/main.js`: retain catalogue link attributes and dates, cache the latest successful book list, attach book metadata by path prefix, and use the `_YYYY-MM` fallback. No catalogue fetch per search and no new transport.
+- `src/ask.js`, `src/ask.html`, `src/styles.css`: load and render trust only after finalization/sanitization; preserve resource notes last; retain original dates through saving/reopening; add the local Not found offer with live classification/Offline/lock/media checks and the `skipLocal` route. Clicking consumes the offer, uses the existing web path, and leaves the web checkbox unchanged. Fixed replies get no trust; AI-alone crisis/harm follow-ups get no T4. T4 replaces the old answer-without-sources note. Existing outcome notes appear below trust on ordinary local answers; resource notes retain priority and exact text.
+- `package.json`: adds the new module syntax check and pure test suite to `check`; no skipping or restructuring of existing checks.
+- `docs/local-knowledge-setup.md`: documents the numeric matching limits requested in §5.
+- Tests changed: `tests/answer-trust.test.js` (new), `tests/knowledge-backend.test.js`, `tests/sensitive-gate.test.js`, `tests/electron/local-knowledge.test.js`, `tests/electron/sensitive-guard.test.js`.
+
+Tests first:
+- Before production changes, all AT1–AT26 failed (missing implementation/new metadata); catalogue case K20 and VM case KT1 also failed. Their failure output printed case ids only. Electron additions were syntax-checked, not executed, as instructed.
+- AT1–AT26 cover the real search snippets, label edge cases, unit conversions/ranges/years, real-fixture negative controls, disagreement limits/precision, dates, removed-sentence notes and crisis decisions. AT23 verifies E2b produces `checked-ai-answer` with two removals on the real fixture. AT24 verifies excerpt replacement has zero removals. AT27–AT30 add speed/range exclusions, production helper and saved-message VM checks, two removals/incomplete fragments, and malformed saved metadata. AT27 failed before its parsing fix.
+- K20–K23 cover real catalogue metadata, every fixture URL, month fallback and unknown dates. KT1–KT3 run production main functions in a VM and verify cached dates and exactly one Kiwix call per search; existing VM harnesses were supplied with the new renderer helper dependencies.
+- Electron cases cover real fixture retrieval, T1/T6, Not found Online/Offline, an offer removed on Offline transition, one web search per click, unchanged checkbox, T8, sensitive exclusions, T11/excerpts, fixed replies, resource order, both crisis/harm follow-up paths, disagreement text, actual save/reopen through the chat store, and T4 on Answer without sources. These are written but runtime-unverified.
+
+Validation:
+- Ran `npm run check` after each batch. Final run passed the new suite, existing non-socket suites and build/syntax checks up to `tests/safe-fetch-integration.test.js`, which cannot bind `127.0.0.1` here (`listen EPERM`). The full command therefore does **not** pass in this sandbox.
+- Test files executed successfully by that command: `answer-trust.test.js`, `knowledge-backend.test.js`, `sensitive-guard.test.js`, `sensitive-gate.test.js`, `dataset-collection.test.js`, `privacy-receipt.test.js`, `privacy-attribution.test.js`, `search-backend-engines.test.js`, `address-input.test.js`, `permission-policy.test.js`, `chat-store.test.js`, `test-hooks.test.js`, `chat-prompt.test.js`, `media-intent.test.js`, `audit-compare.test.js`, `safe-fetch.test.js` (all under `tests/`).
+- Remaining suites run individually: `node tests/network-mode.test.js` and `node tests/network-exits.test.js` passed. `node tests/offline-gate-integration.test.js` also failed to bind with `listen EPERM`. `node --check src/network-mode.js` passed.
+- `npm run check:tests` passed, including both modified Electron files and the required offline-mode, safe-redirects and media-chat files. No Electron runtime was launched.
+- Compared the new finalizer against the repository's original `src/search-utils.js` on 60 fixture-derived cases: all existing fields, including answer/outcome/explanation/reason, were identical after excluding the new count.
+- `git diff --check` passed. No dependency, download, cloud AI call, commit, push, git configuration change, or edit to the four prohibited modules. The pre-existing HANDOFF changes were preserved; only this task's CHANGES body was written.
+
+Deviation / example conflict:
+- E6's real Antarctica snippet begins “…on Earth, −89.2 °C (−128.6 °F).” Its temperature sentence lacks the two shared fact terms required by §5 for E6's answer. The implementation preserves the approved two-term evidence-only rule. AT13 and the Electron truncated-evidence case expect no disagreement for that exact pair; a separate complete synthetic temperature sentence exercises the exact approved T5 positive text. The real fixture files remain unchanged. This discrepancy needs review; the matching threshold was not weakened to force the example.
+
+Still unverified: Electron runtime and visual layout, the two socket integration suites, and real Kiwix/model behavior. Claude should run the five Electron suites in §12 and both socket suites outside the sandbox. Sandeep's manual checks remain §13: local sourced answer/date/citation, Online local Not found → explicit web offer → unchanged checkbox and receipt, sensitive/crisis exclusions and resource order, AI-alone T4, removed-sentence note, disagreement sources, and saved-chat dates. No DONE transition is requested or made here.
+
+#### Round 2 (2026-11-17)
+
+Implemented only Round 1 review items 1–4; pending review, **not marked DONE**.
+
+- `src/answer-trust.js`: removed bare `in` and `t` unit aliases, keeping inch/inches and tonne/tonnes. Limited the insufficient-word heuristic to outcomes outside source-excerpts, snippet-excerpts, ai-generated and checked-ai-answer.
+- `src/main.js`: clears cached book metadata when knowledge settings change and when status finds knowledge disabled or unreachable. No transport, receipt, guard, network-mode or prompt changes.
+- `tests/answer-trust.test.js`: added AT31–AT33 for ambiguous units, the retained founding year, false Smith disagreements, excerpt wording and refusal outcomes; adjusted the existing positive unit cases to use the retained word units.
+- `tests/sensitive-gate.test.js`: KT4 invokes the production settings/status handlers in a VM, verifying cache clearing for endpoint changes, disabled status and failed status.
+- `tests/electron/local-knowledge.test.js`: enables saving through the real Settings toggle immediately before save/reopen, waits for Ask's setting propagation, and turns saving off immediately afterward. The disable dialog chooses Keep with a temporary stub restored afterward. No other case's saving preference is changed.
+- Tests were written before production fixes. `npm run check` failed with only AT31, AT32 and AT33 as failure output; the separate VM run failed with only KT4. All four now pass. Electron changes were syntax-checked only.
+- Validation: `npm run check` was run after each edit batch; all stages through safe-fetch unit tests pass, including AT1–AT33 and KT4. The command stops at `safe-fetch-integration.test.js` with sandbox `listen EPERM`. Remaining `network-mode.test.js` and `network-exits.test.js` pass individually; `offline-gate-integration.test.js` also fails with `listen EPERM`. `node --check src/network-mode.js`, `npm run check:tests`, and `git diff --check` pass. Electron was not launched.
+- Manual review: check that the Smith birth snippets produce no disagreement, a cited “Insufficient sleep” excerpt stays Supported, changing/disabling an endpoint or receiving an unreachable status clears old catalogue dates, and saving/reopening retains trust metadata. Claude should re-run `test:electron:local-knowledge` outside the sandbox to validate the real Settings toggle and save/reopen case.
+- Only this Task 2b CHANGES entry was appended in the handoff. PLAN, REVIEW, approved texts and existing unrelated work were preserved. No dependencies, downloads, external network requests, commits, pushes or git configuration changes.
+
+### REVIEW (Claude)
+#### Final review (2026-11-17): **Task 2b DONE** (approved by Sandeep, 2026-11-17)
+**Sandeep's manual retest passed (Wikipedia 100):**
+- World Cup → Not found;
+- the T9 button runs one web search and the checkbox stays off (D-F3: not a bug);
+- the re-tick fix works;
+- sky blue → Not found plus the "Search the web?" offer;
+- Kiwix stopped is handled;
+- the sensitive export has 0 × fever, and its rows are `…:8090/` only;
+- duplicate-sentence fix and decoy result accepted.
+
+**Deferred (not blocking DONE):** the Set A collection tests (§13 item 1, "Offline, local on, Set A loaded", and the MDWiki part of item 3) run after the Set A downloads finish.
+
+**Known limit recorded:** "Supported" checks citations, not faithfulness (see Known limits (Task 2b)).
+
+Final `npm run check`: **exit 0**. Nothing committed; Sandeep commits.
+
+#### Retest after full restart (2026-11-17): duplicate excerpt sentence fixed; decoy result confirmed (not DONE)
+**Sandeep's retest:** PASS on World Cup → Not found; T9 gives a web answer and the checkbox stays off; **D-F3 closed** (not a bug: box ticked by hand earlier); Kiwix stopped → box disabled with "Local knowledge isn't running" and failed checks in the receipt.
+
+**New bug:** a web Source excerpts answer (FOX Sports, [2]) showed "Spain won it all, defeating Argentina 1-0…" twice in a row, both [2].
+- **Cause** (`fallbackSourceAnswer` in `src/search-utils.js`): the page repeats the sentence (e.g. headline and body), so it lands in two passages of the same source, or twice in one passage. The earlier redundancy check compares whole windows, not sentences, and skips identical text under 80 characters.
+- **Fix:** when the excerpts are joined, each sentence is compared after normalising (case, spaces, end punctuation, citation markers). Only its first copy is kept; an excerpt left empty is dropped. No text changes; no network change.
+
+**Test (fails before, passes after):** `AT47` in `tests/answer-trust.test.js`:
+- the sentence in two passages of one page (second copy in different case/spacing): shown once, first copy kept, the other passage's new sentence still shown with [2];
+- the sentence twice inside one passage: shown once.
+- Checked it fails without the fix by running it against a scratch copy with the change reverted (`AT47` reported, exit 1).
+
+**Decoy test confirmed** ("malaria symptoms children", `kiwix-search-malaria-children-decoy-synthetic.xml`):
+- Kiwix order: Children | Malaria | HIV/AIDS | HIV.
+- Result: **[1] Malaria, [2] Children**; HIV/AIDS and HIV dropped.
+- `KR-decoy-kept`, `KR-decoy-order`, `KR-decoy-generic-kept` and VM `KV-decoy-order` pass. Children is still kept second, as reported in R3.15 follow-up; the stricter option there is not built (Claude's recommendation stays: keep as is).
+
+**Results:** `npm run check` **exit 0**; `test:electron:local-knowledge` passed (cases a–l and answer-without-sources); `git diff --check` clean.
+
+**Files:** `src/search-utils.js`, `tests/answer-trust.test.js`, this REVIEW entry. Nothing committed. Not DONE.
+
+**Manual test (Sandeep):** web on, ask "Who won the World Cup?" (or retry the FOX Sports question) until a Source excerpts answer appears; each sentence should show once.
+
+#### R3.15 follow-up (2026-11-17): keyword refinement approved; decoy test; sources ordered by title coverage (not DONE)
+**Sandeep's decisions:** keyword refinement **approved**; add a decoy test; order sources by how many key terms the title covers. DONE not yet: Sandeep retests first.
+
+**Built by Claude (tests first):**
+- **Decoy fixture** `tests/fixtures/kiwix-search-malaria-children-decoy-synthetic.xml`: the real malaria capture, plus a generic **"Children"** article listed **first** (Kiwix order), plus "Malaria" second.
+  - Children snippet: "Children are human beings between birth and puberty. Common symptoms of illness in young children include fever and tiredness."
+- **Ordering** (`src/knowledge-backend.js` `orderLocalResults`, used by `handleKnowledgeSearch` in `src/main.js` before the top 5 are kept). Results are sorted by:
+  1. key terms covered by the title;
+  2. key terms covered by title plus snippet;
+  3. Kiwix's own order.
+- The rule itself is unchanged; it now also reports these counts (`localRelevance`).
+
+**Tests (fail before the change, pass after):**
+- KR-decoy-kept and **KR-decoy-order**: Malaria is kept and listed first; KR-decoy-order failed before the change.
+- KR-order-stable: ties keep Kiwix's order.
+- VM **KV-decoy-order**: production `handleKnowledgeSearch` returns Malaria as source [1].
+
+**Finding for Sandeep: the generic "Children" article is also kept** (test `KR-decoy-generic-kept` records this).
+- Its title has the key term "children" (the title is made only of key terms, so the guard doesn't apply), and its snippet has "symptoms". That covers 2 of 3 key terms, which meets ⌈2/3⌉.
+- It is listed **second**, after Malaria (both have 1 title key term; Malaria covers 3 of 3 overall, Children 2 of 3).
+- **Option (needs approval, not built):** when the title matches only one of three or more key terms, require title plus snippet to cover **all** of them. "Children" would then be dropped. **Cost:** a Malaria article whose snippet lacks "children" (or "symptoms") would also be dropped and give Not found.
+- Claude's recommendation: keep as is. The decoy is ranked below the real match, and it is on-topic for part of the question.
+
+**Expected-text change (no product text change):**
+- In Electron `trust-disagree` and `trust-saved-render`, "Antarctica record" (2 key terms in its title) now comes before "Antarctica" (1).
+- The T5 line therefore reads "Sources disagree: −89.6 °C [1] · −89.2 °C [2]. Check the sources." Same approved wording and values; only the source numbers changed.
+
+**Results (outside the sandbox):**
+- `npm run check` **exit 0**;
+- `test:electron:local-knowledge` **exit 0** (after updating the two expected strings);
+- `test:electron:sensitive-guard` **exit 0**;
+- `test:electron:offline-mode` **exit 0**;
+- `test:electron:safe-redirects` **exit 0**;
+- `test:electron:media-chat` **exit 0**;
+- `git diff --check` clean.
+
+New untracked file: the decoy fixture. Nothing committed.
+
+#### R3.15 build review (2026-11-17): built and passing; one refinement needs approval (not DONE)
+**Who built it:** Codex hit its usage limit before starting (no changes, no CHANGES entry). Following Sandeep's standing instruction, **Claude built R3.15**, tests first. Codex's CHANGES section is untouched.
+
+**Tests first (failed before the fix):**
+- AT40, AT41, AT42 and AT44 (F2), and KR6 (F1).
+- The other updated disagreement tests (AT13–AT16, AT18) now name a question with a cue, as F2 requires.
+- AT17 (all real-fixture pairs) now runs under every cue and stays a negative control.
+- The `answer-trust` runner was moved to the end of the file: before this, tests appended after it were never run.
+
+**Built:**
+- **F1** (`src/knowledge-backend.js` `isRelevantLocalResult(result, keyTerms, question)`; `src/main.js` passes `input.query`): the approved single rule, i.e. title shares a key term, title plus snippet cover ⌈2/3⌉, adjacent-word guard.
+- **F2** (`src/answer-trust.js`):
+  - no T5 on excerpts (by outcome, and by the label `excerpts`);
+  - the question cue decides the kind;
+  - the answer and source sentences must contain a question subject term;
+  - one value per source; ambiguous sources are left out;
+  - each citation once, max 3.
+
+  `src/ask.js` passes the question to `decideTrust`. T5 wording is unchanged.
+- **Re-tick fix** (`src/ask.js` `refreshKnowledgeStatus`):
+  - a `change` listener counts the user's clicks on "Use local knowledge";
+  - a status check keeps the user's choice if they changed the box while it ran, unless Kiwix is unreachable (then the box is unticked and disabled as before);
+  - an older, slower check never overrides a newer one.
+- **F3:** tests only, no product change.
+
+**Refinement that needs Sandeep's approval (relaxes the approved guard; no text, safety, network or receipt change).**
+- Building the Electron tests showed the adjacent-word guard also drops **keyword-style questions**: all their words are adjacent, so they form one run.
+  - "Antarctica temperature record" dropped "Antarctica" and "Antarctica record" (this failed the existing approved case `trust-disagree`);
+  - "tokyo population" would drop "Tokyo";
+  - "malaria symptoms children" would drop "Malaria".
+- **Refinement:** the guard does not apply when **every word of the title is a key term** (ignoring "of", "the" and similar).
+  - The guard exists for titles that **add other words**: "Red fox" (fox) for "red pandas", "World War I" (war, I) for "world cup". Those are still dropped.
+  - Tested (KR-keyword-*):
+    - **kept:** Antarctica, Antarctica record, Tokyo ("tokyo population"), Malaria ("malaria symptoms children");
+    - **dropped:** Red fox, World War I ("world cup winner"), Population ("tokyo population"), and Diffuse sky radiation (the approved cost).
+  - All earlier KR, KR-rule and KR-hypo cases are unchanged.
+- **Residual risk:** a one-word generic title that is a key term (e.g. "Children" for "malaria symptoms children") passes the guard. It is still kept only if title plus snippet cover ⌈2/3⌉ of the key terms.
+
+**New tests:**
+- **Unit:**
+  - KR-rule-world-cup (real capture), KR-rule-sky-blue (approved cost), KR-hypo-* (11), KR-keyword-* (7);
+  - KR6 now expects George Washington dropped; KR-long-keeps-sky-blue now expects none;
+  - AT40–AT46. AT46 is the F3 static check: the T9 handler never writes or dispatches the web checkbox.
+- **VM:** KV-world-cup (real capture → `results: []`, 0 article reads).
+- **Electron:**
+  - `wc-offline` (T3, no offer) and `wc-online` (T3 + T9) on the real World Cup capture;
+  - `wc-t9-checkbox`: checkbox sampled every 20 ms from the T9 click to after the answer;
+  - `wc-reopen-checkbox`: sampled while reopening that chat from Saved chats. Never ticked in either.
+  - `excerpt-no-t5`: label `excerpts`, no T5. This excerpt cites one source, so the F2 proof is in the unit tests AT40 and AT44.
+  - `retick-kept` (catalogue delayed 1.5 s, untick right after New chat → stays unticked), `retick-no-kiwix` (0 Kiwix searches), `retick-newest-wins`, `retick-restored`.
+
+**Results (outside the sandbox, one at a time):**
+- `npm run check` **exit 0**;
+- `test:electron:local-knowledge` **exit 0**;
+- `test:electron:sensitive-guard` **exit 0**;
+- `test:electron:offline-mode` **exit 0**;
+- `test:electron:safe-redirects` **exit 0**;
+- `test:electron:media-chat` **exit 0**;
+- `git diff --check` clean.
+
+**Untracked:** `src/answer-trust.js`, `tests/answer-trust.test.js`, and **24 new fixtures**:
+- **12 real Kiwix captures:** solar-eclipse, yesterdays-match, fever, photosynthesis, red-pandas, earth-word, albert-einstein, malaria-children, mount-everest, tokyo-population, sky-blue, world-cup;
+- **12 synthetic:**
+  - `-synthetic` for photosynthesis, red-pandas, earth-word, albert-einstein, malaria-children, mount-everest, tokyo-population, sky-blue;
+  - `-synthetic-weak` for malaria-children, mount-everest, tokyo-population, sky-blue (not used by tests).
+
+No secrets, ZIMs, dependencies or new requests.
+
+#### Round 3 review (2026-11-17): built and passing; waiting for Sandeep's manual test (not DONE)
+**Who built it:** Codex built most of Round 3 (tests first). **It hit its usage limit before finishing and before writing a CHANGES entry.** Its last step was a new failing test, `RC1-image-chat`. Following Sandeep's standing instruction ("if Codex is unavailable, build it yourself and note it"), Claude finished the build. Claude did not write in Codex's CHANGES section.
+
+**What Claude changed on top of Codex's work:**
+1. **Relevance rule B tightened** (`isRelevantLocalResult`, `src/knowledge-backend.js`).
+   - With the R3.13 rule, the **real** "albert einstein" capture kept "The New York Times" and "Washington, D.C.", whose snippets only mention Albert Einstein in passing. That failed the negative control: Wikipedia 100 has no Einstein article, so the answer must be Not found.
+   - **New rule:** a result is kept if any of these hold:
+     - **A:** the title has ≥ ⌈2/3⌉ of the key terms;
+     - **B1:** there are ≥ 3 key terms and the snippet has ≥ ⌈2/3⌉ of them;
+     - **B2:** the title has at least 1 key term and the snippet has all of them.
+   - On every fixture: the real captures give nothing (match, fever, Earth, photosynthesis, red pandas, Einstein), and the synthetic "keeps" give exactly Photosynthesis, Red panda, Earth and Albert Einstein. The solar eclipse capture gives only "Solar eclipse". George Washington ("first president of the United States") and France ("capital of France") are still kept.
+   - **This is stricter than the approved wording; no text, safety, network or receipt change.**
+2. **Local image rows use their own chat** (`src/main.js`). `kiwixFetch` takes the image grant's `chatId`, and a row is private if either the grant's chat or the receipt's chat is sensitive. Before this, an image row took its chat from the page's active receipt, which can belong to another chat. This fixes Codex's `RC1-image-chat`.
+3. **Test fixes (`tests/electron/local-knowledge.test.js`), no product change:**
+   - `k-receipt`: "history of medicine" is an ordinary chat, so the expected FILTER text is back to the approved "1 local result withheld" (Codex had changed it to "local search").
+   - `f-web`: waits for New chat's background status check before unticking "Use local knowledge"; the late result could re-tick it (pre-existing race).
+   - `rel-solar-excerpts`: the fake Solar eclipse article gets a second paragraph stating the cause. "What causes…" passage selection needs a cause sentence, which real full articles have and the one-paragraph fake did not.
+   - `RC1-sensitive`: the save-consent button is clicked only if shown. Consent is asked only for crisis, harm and abuse questions, not medical ones.
+   - Added `RC1-export-all`: the **whole** Export JSON (every chat) never contains "fever".
+
+**Checked in review:**
+- Every Kiwix row of a sensitive chat (search, article read, image, FILTER) is stored with `url` = origin and "What was sent" = "local search" ("local search – done"). This covers the in-memory set, locked chats, and stored chats after a reopen.
+- The receipt join only reuses a query-free receipt owned by the same sender and chat.
+- The summary adds the existing "local knowledge (Kiwix, 127.0.0.1)" part.
+- T12 and T13 are exact. T12 hides the old "Source excerpts:" note only when a trust line is shown.
+- Text C appears only for Kiwix connection errors. Other errors show T13, and the status bar shows the error name only.
+- `finalize` is unchanged (AT37 compares it against `HEAD`).
+- The seven real fixtures are byte-identical to Claude's captures.
+
+**Results (outside the sandbox, one at a time):**
+- `npm run check` **exit 0** (both socket suites pass);
+- `test:electron:local-knowledge` **exit 0** (rel-*, rcpt-sensitive, err-model, err-grant, RC1 rows/payload/reopen/export/export-all/ordinary);
+- `test:electron:sensitive-guard` **exit 0**;
+- `test:electron:offline-mode` **exit 0**;
+- `test:electron:safe-redirects` **exit 0**;
+- `test:electron:media-chat` **exit 0**;
+- `git diff --check` clean.
+
+**Untracked:** `src/answer-trust.js`, `tests/answer-trust.test.js`, and 11 fixtures:
+- 7 real captures: `kiwix-search-{solar-eclipse,yesterdays-match,fever,photosynthesis,red-pandas,earth-word,albert-einstein}.xml`;
+- 4 synthetic: `kiwix-search-{photosynthesis,red-pandas,earth-word,albert-einstein}-synthetic.xml`.
+
+No secrets, no ZIMs, no dependency, no new request.
+
+**Manual tests for Sandeep:** see R3.9, plus:
+- RC1 by hand: in a sensitive chat, Export JSON contains no question, key words or article paths, including after reopening the chat from Saved chats;
+- the image-row check: a local image in a sensitive chat also reads "local search – done".
+
+#### Round 2 review (2026-11-17): items 1–4 fixed; all tests pass; waiting for Sandeep's manual test (not DONE)
+**Ran outside the sandbox, one at a time:**
+- `npm run check` **exit 0** (both socket suites pass);
+- `test:electron:local-knowledge` **exit 0** (all trust cases, including saved-chat reopen);
+- `test:electron:sensitive-guard` **exit 0**;
+- `test:electron:offline-mode` **exit 0**;
+- `test:electron:safe-redirects` **exit 0**;
+- `test:electron:media-chat` **exit 0**.
+
+**Fixes verified:**
+1. Bare `in`/`t` are no longer units:
+   - "born 1990 in Paris" gives no quantity;
+   - "Founded in 1820 in London" gives year 1820;
+   - "5 t" gives none;
+   - the Smith pair gives no disagreement.
+2. An excerpt containing "Insufficient sleep…" is labelled Supported; refusal texts still give Not found.
+3. `knowledgeBooks` is cleared on settings change and when status finds local knowledge disabled or unreachable.
+4. The saved-chat case turns saving on and off through the real Settings toggle.
+
+**Other checks:**
+- Untracked files: only `src/answer-trust.js` and `tests/answer-trust.test.js`.
+- `git diff --check` clean.
+- No edits to the guard, receipt, network mode or prompts. No new dependency or request.
+
+**Two build-review rounds used.**
+
+#### Round 1 review (2026-11-17): CHANGES REQUESTED
+**Ran outside the sandbox:**
+- `npm run check` **exit 0** (both socket suites pass);
+- `test:electron:sensitive-guard` exit 0;
+- `test:electron:offline-mode` exit 0;
+- `test:electron:safe-redirects` exit 0;
+- `test:electron:media-chat` exit 0;
+- **`test:electron:local-knowledge` exit 1 at `trust-saved-stored`** (item 4).
+
+**Checked and right:**
+- `finalize` keeps its output (only `removedUnsupported` is added);
+- T1–T11 are exact;
+- the label is computed only from content and sources;
+- fixed replies get nothing; resource notes stay last and unchanged;
+- no T4 in crisis/harm chats;
+- the offer is gated live (Offline, crisis/lock, sensitive classification, media) and re-checked on click, uses `skipLocal`, and leaves the checkbox unchanged;
+- saved trust is validated;
+- book dates come from the cached catalogue, with no extra request;
+- no edits to the guard, receipt, network mode or prompts.
+
+**Accepted deviations:**
+- **E6 was my PLAN error.** The real Antarctica snippet is truncated before the fact words, so the two-term rule correctly finds no match. Keeping the rule and using a complete synthetic sentence for the positive case is right.
+- **Local answers now show the existing outcome note** ("Checked AI answer: …", "Source excerpts: …") as web answers already do. This uses existing approved strings, and the PLAN's E2b expected it.
+
+**Must fix (Codex, round 2):**
+1. **False "Sources disagree" lines from bare units.** `extractQuantities` treats "in" as inches and "t" as tonnes.
+   - "born 1990 in Paris" becomes length "1990 in". Two sources with 1990 and 1991 then show "Sources disagree: 1990 in [1] · 1991 in [2]". "The team won 3 in a row" is also read as a length.
+   - Because the length overlaps, "Founded in 1820 in London" loses its year.
+   - Fix: remove bare `in` (keep `inch|inches`) and bare `t` (keep `tonne|tonnes`).
+   - Tests (ids only):
+     - AT31: "born 1990 in Paris" and "won 3 in a row" give no quantity; "Founded in 1820 in London" gives year 1820; "It weighs 5 t." gives none; "It weighs 5 tonnes." gives mass.
+     - AT32: the two Smith sources above produce no disagreement.
+2. **Excerpts containing the word "insufficient" are labelled Not found.** A verbatim excerpt "Insufficient sleep is linked to heart disease [1]." with outcome `source-excerpts` gives `not-found`.
+   - Apply the `/insufficient/` rule only when `outcome` is not one of `source-excerpts`, `snippet-excerpts`, `ai-generated`, `checked-ai-answer`. `finalize` already turns model "insufficient" text into a fallback, so for those outcomes the rule is redundant and wrong.
+   - The exact refusal texts and `insufficient-evidence` still give Not found.
+   - Test AT33.
+3. **Stale book dates after a settings change.** `knowledgeBooks` keeps the old endpoint's catalogue. Clear it in `knowledge:update-settings` (and when status finds local knowledge disabled or unreachable), so a changed endpoint never shows another server's dates.
+   - Add a small VM or unit check (KT4).
+4. **Electron `trust-saved-stored` fails:** main's `chats:save` refuses because `aiSettings.saveChatsOnDevice` is off; the test sets only the page variable.
+   - Turn saving on through the real Settings toggle (as `tests/electron/chat-deletion.test.js` `setSaving` does) just before the case, and off again right after.
+   - Make sure no other case's behaviour changes.
+
+Re-run `npm run check` and syntax-check the Electron files; Claude re-runs Electron outside the sandbox.

@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+     xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/"
+     xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Search: symptoms malaria children</title>
+    <link>/search?pattern=symptoms%20malaria%20children&amp;&amp;format=xml&amp;start=0&amp;pageLength=10</link>
+    <description>Search result for symptoms malaria children</description>
+    <opensearch:totalResults>2</opensearch:totalResults>
+    <opensearch:startIndex>0</opensearch:startIndex>
+    <opensearch:itemsPerPage>10</opensearch:itemsPerPage>
+    <atom:link rel="search" type="application/opensearchdescription+xml" href="/search/searchdescription.xml"/>
+    <opensearch:Query role="request"
+      searchTerms="symptoms malaria children"
+      startIndex="0"
+      count="10"
+    />
+    <item>
+      <title>Children</title>
+      <link>/content/wikipedia_en_100_2026-08/Children</link>
+        <description>...<b>Children</b> are human beings between birth and puberty. Common <b>symptoms</b> of illness in young <b>children</b> include fever and tiredness....</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>10,000</wordCount>
+    </item>
+    <item>
+      <title>Malaria</title>
+      <link>/content/wikipedia_en_100_2026-08/Malaria</link>
+        <description>...<b>Malaria</b> is a mosquito-borne infectious disease that affects vertebrates. Human <b>malaria</b> causes <b>symptoms</b> that typically include fever, fatigue, vomiting and headaches; young <b>children</b> are most at risk of severe disease....</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>10,000</wordCount>
+    </item>
+    <item>
+      <title>HIV/AIDS</title>
+      <link>/content/wikipedia_en_100_2026-08/HIV/AIDS</link>
+        <description>...<b>symptom</b>, present in about 90% of people with AIDS.[45] They can also be affected by diverse psychiatric and neurological symptoms independent of opportunistic infections and cancers.[46] Transmission Average per act risk of getting HIV by exposure route to an infected source Exposure route Chance of infection Blood transfusion 90%[47] Childbirth (to child) 25% without treatment; 1–2% with antiretroviral treatment[48] Needle-sharing injection drug use 0.67%[49] Percutaneous needle stick 0.30%......</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>21,400</wordCount>
+    </item>
+    <item>
+      <title>HIV</title>
+      <link>/content/wikipedia_en_100_2026-08/HIV</link>
+        <description>...-<b>malaria</b> treatment campaigns.[148][153][154] Research on the timing of most recent common ancestor for HIV-1 groups M and O, as well as on HIV-2 groups A and B, indicates that SIV has given rise to transmissible HIV lineages throughout the twentieth century.[155] The dispersed timing of these transmissions to humans implies that no single external factor is needed to explain the cross-species transmission of HIV. This observation is consistent with both of the two prevailing views of the origin......</description>
+        <book>
+          <title>Wikipedia 100</title>
+        </book>
+        <wordCount>14,262</wordCount>
+    </item>
+  </channel>
+</rss>
