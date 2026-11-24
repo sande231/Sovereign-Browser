@@ -1,0 +1,21 @@
+Sovereign Kiwix traffic capture summary
+Date: 2026-11-22
+Commit: 08530eb (16 uncommitted files)
+macOS: 26.6.2 (arm64)
+Kiwix image: ghcr.io/kiwix/kiwix-serve:3.8.2@sha256:e478554a9920412eeb5ce1d73f24e4b28445ebed233187cdd03c623c32be46a5
+Kiwix args: ["--blockexternal","--searchLimit","10","*.zim"]
+Read-only root filesystem: true
+Port bindings: {"8080/tcp":[{"HostIp":"127.0.0.1","HostPort":"8090"}]}
+ZIM files: wikipedia_en_100_2026-08.zim 
+Profile: copy of /tmp/sov-audit-base without model files; model downloaded Online before the capture; capture started after switching to Offline
+Capture: tcpdump -i any -nn in the Kiwix container's network namespace; 6 local questions in Offline mode (the 5 from the runbook plus 'solar eclipse', the only one Wikipedia 100 covers), citation opened where one existed, then 2 minutes idle
+Capture start: 03:10:57.814044   end: 03:14:47.699059
+Total lines: 534
+SYN packets (connection starts): 45
+  to port 8080 (inbound requests): 45
+  to anywhere else: 0
+Outgoing IP packets not from port 8080: 0
+DNS (port 53) lines: 0
+UDP lines: 0
+ICMP lines: 0
+IPv6 lines: 0

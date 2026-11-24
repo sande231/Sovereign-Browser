@@ -5,6 +5,7 @@ out/
 *.log
 audit.flow
 mitm-hosts.txt
+mitm-capture-started.txt
 *.receipts.json
 searxng/.env
 .env
@@ -12,3 +13,4 @@ searxng/.env
 
 kiwix/zim/*.zim
 kiwix/zim/*.sha256
+__pycache__/

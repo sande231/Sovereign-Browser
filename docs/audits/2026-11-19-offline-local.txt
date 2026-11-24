@@ -1,0 +1,41 @@
+Sovereign privacy audit: offline-local
+Date: 2026-11-19 23:22:53 EST
+Commit: 08530eb (16 uncommitted files)
+Electron: 38.8.6
+macOS: 26.6.2 (arm64)
+mitmproxy: Mitmproxy: 12.2.3 binary
+Capture: mitmproxy local capture mode, target = Sovereign's node_modules/electron/dist/Electron.app/ (main process and helpers), TLS passthrough (--ignore-hosts '.*'), no CA installed, loopback not logged, nameless connections as IP:port, macOS resolver lookups made for Sovereign as dns:<server>, no SOVEREIGN_AUDIT_PROXY
+System nameservers (dns: lines accepted only for these): 2001:558:feed::1,2001:558:feed::2,75.75.75.75,75.75.76.76
+SearXNG image: docker.io/searxng/searxng:2026.9.15-ca4965040@sha256:f1aca3f61c7ff4552b8d54c0ab7fb458e907b78f51c503210cf450c900adca2c
+Kiwix image: ghcr.io/kiwix/kiwix-serve:3.8.2@sha256:e478554a9920412eeb5ce1d73f24e4b28445ebed233187cdd03c623c32be46a5
+ZIM files: wikipedia_en_100_2026-08.zim 
+Mode: Offline (whole run)
+Profile: fresh copy of /tmp/sov-audit-base (model cache and settings only; saved mode Offline; local knowledge on)
+
+Hosts captured: 
+DNS lookups attributed to Sovereign (dns: lines): 
+MATCHED:
+  (none)
+
+IN NETWORK CAPTURE BUT NOT IN RECEIPT:
+  (none)
+
+BARE IPs IN CAPTURE, NO HOSTNAME (check by hand):
+  (none)
+
+IN RECEIPT BUT NOT IN CAPTURE:
+  example.com
+  local (kiwix, 127.0.0.1)
+
+System nameservers given: 2001:558:feed::1, 2001:558:feed::2, 75.75.75.75, 75.75.76.76
+DNS VIA SYSTEM RESOLVER (macOS lookups made for Sovereign; server only):
+  (none)
+
+DNS TO OTHER SERVERS, NOT A SYSTEM NAMESERVER (check by hand):
+  (none)
+
+PASS: no uncaptured hosts and no cloud-AI hosts
+Receipt hosts: example.com local (Kiwix, 127.0.0.1)
+DNS (supporting, whole machine): 574 port-53 lines in total; lines naming hosts this app used Online: 0
+
+NOTE (2026-11-20, Claude, at Sandeep's request): the "Hosts captured:" and "DNS lookups attributed to Sovereign (dns: lines):" fields above are blank, not 0. The record template used wc and grep on mitm-hosts.txt, and that file did not exist because the capture logged nothing; the commands then printed nothing. Blank here means 0: the compare section (run on an empty file) shows no matched, uncaptured or bare-IP hosts and no DNS lines. This file can't show on its own that the capture was running; the RUNBOOK now writes a start marker and prints 0 explicitly (HANDOFF Task 2c, Round 15). The lines above this note are unchanged.

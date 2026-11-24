@@ -1,0 +1,39 @@
+Sovereign privacy audit: online
+Date: 2026-11-19 10:28:04 EST
+Commit: 08530eb (6 uncommitted files)
+Electron: 38.8.6
+macOS: 26.6.2 (arm64)
+mitmproxy: Mitmproxy: 12.2.3 binary
+SearXNG image: docker.io/searxng/searxng:2026.9.15-ca4965040@sha256:f1aca3f61c7ff4552b8d54c0ab7fb458e907b78f51c503210cf450c900adca2c
+Kiwix image: ghcr.io/kiwix/kiwix-serve:3.8.2@sha256:e478554a9920412eeb5ce1d73f24e4b28445ebed233187cdd03c623c32be46a5
+ZIM files: wikipedia_en_100_2026-08.zim 
+Mode: Online (new install switched to Online)
+Profile: brand-new /tmp/sov-audit-online; model downloaded during this run
+
+MATCHED:
+  huggingface.co
+  images.pexels.com
+  raw.githubusercontent.com
+  us.aws.cdn.hf.co
+
+IN NETWORK CAPTURE BUT NOT IN RECEIPT:
+  (none)
+
+IN RECEIPT BUT NOT IN CAPTURE:
+  127.0.0.1
+  local (kiwix, 127.0.0.1)
+  nesdis.noaa.gov
+  spaceplace.nasa.gov
+  weather.gov
+
+PASS: no uncaptured hosts and no cloud-AI hosts
+Hosts captured: 4
+
+Note added 2026-11-19 (after review; the result above is unchanged):
+Coverage gap. spaceplace.nasa.gov, nesdis.noaa.gov and weather.gov are in the
+receipt but not in the capture. They are source pages read by the main process
+(Node), which does not use Electron's session proxy, so this capture did not
+see them. The PASS above therefore covers requests that go through the session
+proxy (renderer, model download, images, downloads) only. Main-process requests
+and DNS lookups were not captured independently. See docs/HANDOFF.md, Task 2c,
+PLAN section 10.

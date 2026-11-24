@@ -6076,3 +6076,1679 @@ No secrets, no ZIMs, no dependency, no new request.
    - Make sure no other case's behaviour changes.
 
 Re-run `npm run check` and syntax-check the Electron files; Claude re-runs Electron outside the sandbox.
+
+---
+
+## Task: README and abstract (Phase 2, Task 2c)
+**Status: DONE (Sandeep, 2026-11-24).** README, abstract, evidence, LICENSE, the fresh audits (dry run, Online, Offline, sensitive, Kiwix) and screenshots are complete. Electron exit-code fix and `model-chat` repair (PLAN §15) done. Task 2d-a (navigation guards) built before push, as decided. Open follow-ups: the P2 list (PLAN §13.5, §14.7, §14.8) and Task 2d (PLAN §16, items b–d). Not committed: Sandeep commits.
+
+### PLAN (Claude)
+**Goal:** a README that Sandeep's director and a reviewer find convincing and honest. Every claim points to something in the repo (code, test, HANDOFF entry or audit file). A claim that can't be proven yet is either left out or stated as a limit.
+
+#### 1. What Claude found (current state)
+- The current `README.md` (206 lines) describes Phase 0 features only: no Offline mode, sensitive-topic guard, Kiwix or trust labels. It also says "AI generation runs locally", which is true, but it doesn't mention the first-run model download hosts.
+- **Broken image:** `README.md` points to `docs/images/sovereign-browser.png`, which doesn't exist. The real screenshots are in `demo/` (dated 2026-09-24, before Phase 1).
+- **The only hostname audit in the repo is old.** `demo/audit-result.txt` (PASS, 2026-09-24) predates Offline mode, the guard and Kiwix. The Kiwix traffic capture (2026-11-17, no egress) is recorded in HANDOFF (Task 2a, Round 4 review), but the capture file was in `/tmp` and is not in the repo.
+- **No answer-quality results.** `tests/evals/research-answer-quality.json` has 6 cases and scoring notes, but no test or script runs it and no results are recorded. So the README can't report accuracy numbers.
+- **License:** `package.json` says `"license": "MIT"`, but there is no `LICENSE` file. The default model is under the Llama 3.2 Community License (`src/main.js:172–190`).
+- **SearXNG image is not pinned** (`searxng/docker-compose.yml` uses `:latest` and a default `SEARXNG_SECRET`). Kiwix is pinned by digest and runs `--blockexternal`, read-only, `cap_drop: ALL`.
+- **Fine-tuning:** only the dataset-collection mode exists (`src/dataset-collection.js`, `SOVEREIGN_DATASET_BATCH`, output `~/sovereign-finetune/data/collected.jsonl`). No trained model is in the repo or used by the app.
+- The "Before releasing" note (re-verify helplines, professional review of crisis texts) is already in the README and must stay.
+
+#### 2. README outline
+1. **Title and one-line pitch.** Draft: "Sovereign: a desktop browser whose AI runs on your laptop, and that shows you every request that leaves it."
+2. **Abstract** (~200–250 words; final wording after Sandeep answers Q2). Structure:
+   - *Problem:* AI research assistants send questions, documents and chat history to cloud services; users can't see what leaves their device, and sensitive questions (health, crisis, immigration) are the riskiest.
+   - *Approach:* local inference (WebLLM on WebGPU, Llama 3.2 1B), a per-question Privacy Receipt of every network request, a default Offline mode, a sensitive-topic guard before any search, offline Wikipedia via Kiwix on loopback, and answer trust labels.
+   - *What was built:* an Electron browser (list of the five features).
+   - *Evaluation:* automated unit tests and Electron end-to-end tests (counted at write time), a hostname-level capture compared with the receipt (mitmproxy + `scripts/audit-compare.js`), a container traffic capture of Kiwix, UDP/WebTransport probes in Offline mode, and manual test rounds recorded in `docs/HANDOFF.md`.
+   - *Results:* only what the repo shows (see §4): e.g. audit PASS with 0 uncaptured hosts; 0 Kiwix egress; 0 datagrams for blocked Offline probes; crisis messages never reach search or Kiwix.
+   - *Limits:* small model quality, "Supported" ≠ verified, English-only pattern rules, Offline covers this app only, loopback WebTransport from `file:///` pages.
+3. **Screenshots** (§3).
+4. **Features**, each with a one-paragraph "what it does" and a "how we checked it" line:
+   - Privacy Receipt;
+   - Offline mode (default on new profiles, loopback allowlist);
+   - Sensitive-topic guard (Strict default, crisis-first, [Search anyway…]);
+   - Local knowledge (Kiwix);
+   - Answer trust labels (Supported / Source excerpts / Not found / AI alone, removed-sentence note, "Sources disagree").
+   Plus a short "Everyday browsing" list kept from the current README.
+5. **Architecture diagram** (Mermaid, so GitHub renders it): what runs where and what can leave the laptop.
+   - *On the laptop, in the app:* Electron main process (network gates, receipt, guard), renderer (Ask/Search UI), WebLLM engine on WebGPU, chat store.
+   - *On the laptop, in Docker on 127.0.0.1:* SearXNG (:8080), Kiwix (:8090, `--blockexternal`).
+   - *Leaves the laptop (Online only):* SearXNG → its upstream engines; source pages read for answers; image hosts; first-run model download (Hugging Face / GitHub raw); websites the user visits.
+   - *Never leaves:* prompts to a cloud AI, documents, chat history, model output.
+   - Arrows labelled with the receipt category each request appears under.
+6. **Privacy guarantees vs. known limits:** a two-column table. Guarantees only where §4 has proof. Limits taken from HANDOFF:
+   - Offline mode covers Sovereign's traffic only, not other apps or the OS (Task 1a §7).
+   - WebTransport/QUIC from `file:///` pages to loopback ports, and in-flight QUIC handshakes for ~4 s after switching (Task 1a known limits 5–6).
+   - Service workers may keep an open connection; an allowlisted local service may forward to the internet.
+   - The receipt doesn't cover normal browsing tabs, and SearXNG's upstream requests come from Docker, not the app (`docs/privacy-audit.md` §7).
+   - The guard uses English pattern rules: it misses indirect wording and over-blocks (Tasks 1b §8, 1c §9). Crisis detection is not a safety service.
+   - "Supported" checks citations, not faithfulness (Task 2b known limits).
+   - Answer quality depends on the 1B model and the Kiwix collections chosen.
+   - Local inference does not make browsing anonymous.
+7. **Setup:** Node/npm, `npm install`, `npm start`; WebGPU requirement; first-run model download (and that it shows in the receipt); SearXNG via Docker; Kiwix via `docs/local-knowledge-setup.md` (Wikipedia 100 for testing, Set A collections when downloaded). A note that SearXNG's secret should be set.
+8. **Testing:** `npm run check`; the Electron suites by name; how to repeat the privacy audit (`docs/privacy-audit.md`).
+9. **Project status and roadmap:** Phase 0–2 done (task list from HANDOFF). Phases 3–5: Claude has **no roadmap text** in the repo beyond "Phase 4/5: claim-level faithfulness check". Sandeep to supply (Q5).
+10. **License and credits:** Electron, WebLLM/MLC, Llama 3.2 (licence), SearXNG, Kiwix/openZIM, Wikipedia (CC BY-SA), pdf.js. Development note on AI-assisted development is Sandeep's call (Q6).
+11. **Before releasing** (kept as is).
+
+#### 3. Screenshots Sandeep needs to take
+Save to `docs/images/` (new folder). Use a fresh test profile, no personal data, light theme.
+1. **Ask AI, Online, web answer** with a **Supported** label and citations.
+2. **Privacy Receipt panel** open for that answer (rows with purposes).
+3. **Offline mode:** toolbar says Offline; "Search the web" disabled with its note.
+4. **Local knowledge answer** (Kiwix): "Local knowledge as of …" line and a local citation.
+5. **Not found + "Search the web?" offer** (T3 + T9), e.g. sky blue.
+6. **Sensitive-topic guard:** a health question with the notice and [Search anyway…]. *Not* the crisis reply (its text still awaits professional review).
+7. **Source excerpts** answer or **Sources disagree** line (optional).
+8. **Audit result:** terminal showing `audit-compare.js` PASS from a fresh run (see Q7).
+The old `demo/` images can be deleted or kept; Claude won't touch them.
+
+#### 4. Claim table
+Status: ✅ proven in repo · ⚠️ partly (state carefully) · ❌ not provable yet (leave out or state as limit).
+
+| # | README claim | Proof | Status |
+|---|---|---|---|
+| C1 | AI answers are generated locally (WebLLM/WebGPU, Llama 3.2 1B q4f16) | `src/main.js:172`, `src/ai/ai-engine-entry.js`, `tests/electron/model-chat.test.js` | ✅ |
+| C2 | No cloud AI service is contacted, and there is no silent cloud fallback | `CLOUD_AI_HOSTS` + `cloudCheck` in `src/privacy-receipt.js`; `demo/audit-result.txt` (PASS, no cloud-AI hosts) | ⚠️ audit is from 2026-09-24; no test asserts "no fallback" directly. Re-run audit (Q7) |
+| C3 | Every request the app makes appears in the Privacy Receipt with its purpose | `tests/privacy-receipt.test.js`, `tests/privacy-attribution.test.js`, `tests/audit-compare.test.js`, `demo/audit-result.txt` (0 uncaptured hosts) | ⚠️ "every" only for app/AI requests; normal browsing tabs excluded by design. Old audit |
+| C4 | Offline mode blocks the app's traffic except loopback allowlist | `tests/network-mode.test.js`, `tests/network-exits.test.js`, `tests/offline-gate-integration.test.js`, `tests/electron/offline-mode.test.js` (8 phases); HANDOFF Task 1a | ✅ with limits (app only; WebTransport from `file:///`) |
+| C5 | Offline is the default for new profiles | `tests/electron/offline-mode.test.js` (fresh phase); Task 1a | ✅ |
+| C6 | WebTransport/STUN/beacons send 0 packets while Offline | Task 1a CHANGES §3.8 table and Round 2b review (0 datagrams; Online control 1) | ✅ for http(s) pages; ❌ for `file:///` (limit) |
+| C7 | Redirects to private addresses are blocked; max 5 redirects; https→http refused | `src/safe-fetch.js`, `tests/safe-fetch*.test.js`, `tests/electron/safe-redirects.test.js` | ✅ |
+| C8 | Sensitive questions are flagged before any search; crisis messages never reach search or Kiwix | `tests/sensitive-guard.test.js`, `tests/sensitive-gate.test.js` (static crisis-first check), `tests/electron/sensitive-guard.test.js` | ✅ (with miss/over-block limits) |
+| C9 | Sensitive exports contain no sensitive search text (e.g. 0 × "fever"; rows `…:8090/` only) | Sandeep's manual retest 2026-11-17 (Task 2b final review) | ⚠️ manual only |
+| C10 | Kiwix runs on loopback only and makes no internet requests | `kiwix/docker-compose.yml` (digest pin, `--blockexternal`, `127.0.0.1:8090`, read-only); `tests/knowledge-backend.test.js` (loopback-only endpoint, off-origin results dropped); HANDOFF Task 2a Round 4 (capture: no egress) | ⚠️ capture file not in repo; cite HANDOFF or add capture summary (Q7) |
+| C11 | Local answers show source and "Local knowledge as of <date>" | `tests/electron/local-knowledge.test.js`; Task 2b | ✅ |
+| C12 | Off-topic local results are dropped; Not found instead of a wrong source | `tests/knowledge-backend.test.js` (KR-*, decoy), fixtures in `tests/fixtures/kiwix-search-*.xml` | ✅ |
+| C13 | Each answer gets a trust label; unsupported sentences are removed and counted | `src/answer-trust.js`, `tests/answer-trust.test.js` (AT1–AT47) | ✅ |
+| C14 | "Supported" means the answer is correct | — | ❌ must **not** be claimed. State "every sentence cites a source; check the sources" (Task 2b limit) |
+| C15 | Number disagreements between sources are shown | `tests/answer-trust.test.js` (AT41–AT45), Electron `trust-disagree` | ✅ (limited to the asked kind of number) |
+| C16 | Answer quality/accuracy figures | `tests/evals/research-answer-quality.json` (no results) | ❌ no numbers; describe the eval set as future work |
+| C17 | Documents are processed locally | `src/pdf-extract-worker.js`, `tests/electron/pdf-attachments.test.js`, `attachments.test.js` | ✅ |
+| C18 | Chat deletion removes the app's copy | `tests/chat-store.test.js`, `tests/electron/chat-deletion.test.js` | ✅ (LevelDB may keep old bytes until compaction: limit) |
+| C19 | N automated tests | count at write time from the test files | ⚠️ Claude counts and states the method |
+| C20 | Fine-tuned model | `src/dataset-collection.js` only | ❌ not integrated; wording per Q4 |
+| C21 | MIT licence | `package.json` only | ⚠️ needs a `LICENSE` file (Q3) |
+
+#### 5. Files
+- `README.md`: rewrite per §2 (keeps the "Before releasing" section and the Kiwix setup link).
+- `docs/images/`: Sandeep's screenshots.
+- Optional: `LICENSE` (Q3), and a short `docs/evidence.md` holding the claim table, so the README stays short (Q8).
+- No code changes, no new dependency, no network change. `npm run check` will still be run.
+
+#### 6. Open questions for Sandeep
+1. **Audience:** director and reviewer only, or also public GitHub visitors? (Changes tone and how much setup detail goes in.)
+2. **Abstract venue and word limit:** for a course report, a poster, a workshop submission? Exact limit and whether citations are allowed.
+3. **License:** keep MIT (add a `LICENSE` file with your name and year), or another? Recommendation: MIT, matching `package.json`.
+4. **Fine-tuning:** Claude's recommended wording, one line under Roadmap: "A dataset-collection mode exists for future fine-tuning of the local model; no fine-tuned model is used yet." Or leave it out entirely?
+5. **Roadmap Phases 3–5:** please give one line each; Claude has nothing in the repo for them beyond the faithfulness check (Phase 4/5).
+6. **AI-assisted development:** mention that Claude Code and Codex were used (under Sandeep's review), or not? Recommendation: one neutral line under Credits, since reviewers may ask. Your call.
+7. **Evidence refresh:** re-run the hostname audit (`docs/privacy-audit.md`) on the current build, and save a summary of the Kiwix capture into `demo/` or `docs/`, so C2, C3 and C10 become ✅? Recommendation: yes; Claude can't run mitmproxy for you.
+8. **Claim table location:** in the README (longer) or in `docs/evidence.md` linked from it? Recommendation: `docs/evidence.md`, with a 5-row summary in the README.
+9. **Model download:** the README will say the first run downloads the model from Hugging Face / GitHub raw (both seen in the audit). OK?
+
+#### 7. Approval needed
+Approve the outline (§2), the screenshot list (§3), and the claim handling (§4: ❌ claims left out or stated as limits), and answer Q1–Q9. Then Claude (or Codex) writes the README; it goes back to Sandeep for review before DONE.
+
+#### 8. Sandeep's decisions (2026-11-17)
+- **Approved** with these answers:
+  1. **Audience:** research director, academic reviewers, conference/paper readers. Research framing, evaluation and limits first; setup clear but secondary.
+  2. **Abstract:** general research abstract, ~250 words, venue-neutral.
+  3. **License:** MIT; add `LICENSE` (Copyright (c) 2026 Sandeep Shah).
+  4. **Fine-tuning:** one Roadmap line: dataset-collection mode exists; LoRA fine-tuning of Llama 3.2 1B for citation faithfulness is in progress outside this repo; no fine-tuned model is used by the app yet.
+  5. **Roadmap:** Phase 3 local image generation on the laptop (feasibility test first). Phase 4 integrate a fine-tuned, citation-faithful model (MLC conversion) and choose the model size. Phase 5 fresh privacy audits, claim-level faithfulness evaluation, multi-seed runs, paper submission.
+  6. **AI assistance:** one line under Credits (Claude Code planner/reviewer, Codex builder, approval-gate workflow in `AGENTS.md`; all decisions and manual tests by the author).
+  7. **Audit:** Sandeep re-runs it on the current build (§9). README uses careful wording now; claims are upgraded after the audit.
+  8. **Claim table:** `docs/evidence.md`, linked from the README.
+  9. **First-run download:** disclosed (Hugging Face and GitHub, once; cached afterwards).
+- **Also:** remove the broken `docs/images/sovereign-browser.png` link; pin the SearXNG image by digest (Docker change: show digest, stop for approval).
+
+#### 9. Audit steps (Sandeep, after the README draft)
+Raw captures stay out of the repo (`audit.flow`, `mitm-hosts.txt`, `*.receipts.json` are already in `.gitignore`). Only **summaries** are saved, in a new folder `docs/audits/`, named `2026-MM-DD-<run>.txt`. Each summary starts with: date, git commit (`git rev-parse --short HEAD`), Electron/OS version, ZIMs loaded, mode.
+
+**A. Hostname audit, three runs** (method: `docs/privacy-audit.md`; fresh profile each run; mitmproxy started first with `rm -f mitm-hosts.txt audit.flow`).
+1. **Online run** (`SOVEREIGN_USER_DATA_DIR=/tmp/sov-audit-online`): set the mode to Online. One Search; one Ask AI with "Search the web" on; one image search. Export the receipt to `/tmp/sov-online.receipts.json`, then `node scripts/audit-compare.js mitm-hosts.txt /tmp/sov-online.receipts.json > docs/audits/<date>-online.txt`. **Expected:** `PASS`, and no host under "IN NETWORK CAPTURE BUT NOT IN RECEIPT".
+2. **Offline run** (`/tmp/sov-audit-offline`; Wi-Fi on; model already cached in this profile; Kiwix running and enabled): Offline on. Ask a plain question; ask a local-knowledge question and open its citation; try a website in the address bar; check that "Search the web" and image buttons are disabled. Save the audit-compare output as `<date>-offline.txt`. **Expected:** `mitm-hosts.txt` empty (no hosts); receipt rows only `127.0.0.1`.
+3. **Sensitive-chat run** (`/tmp/sov-audit-sensitive`, Online, Strict): ask "I have a fever, what should I take?" and **don't** click [Search anyway…]; then ask one non-sensitive web question in a new chat as a control. Save the audit-compare output as `<date>-sensitive.txt` and append the result of `grep -ci fever /tmp/sov-sensitive.receipts.json` and `grep -ci fever mitm-hosts.txt`. **Expected:** `PASS`; both counts 0; no search host from the sensitive chat (only from the control).
+   - Before saving, read each summary: it must contain hostnames only, no query text.
+
+**B. Kiwix capture summary** (method and the already-approved one-off image: `docs/local-knowledge-setup.md`, traffic-test steps; image removed afterwards with `docker rmi`). With the Set A ZIMs (or Wikipedia 100 if Set A isn't ready), capture to `/tmp/kiwix-capture.txt` while asking 5 local questions in the app. Save only these counts to `docs/audits/<date>-kiwix-capture-summary.txt`:
+- capture start/end time, ZIMs loaded, total lines;
+- `grep -c 'Flags \[S\]'` (SYNs) and how many go **to** :8080 vs anywhere else;
+- packets with source port other than 8080 leaving the container;
+- `grep -cE '\.53[: ]'` (DNS), `grep -ci udp`, `grep -ci icmp`, `grep -c IP6`;
+- `docker inspect sovereign-kiwix` args and `ReadonlyRootfs`;
+- **Expected:** 0 outbound connections, 0 DNS, 0 UDP, 0 ICMP, 0 IPv6.
+
+**After the audits:** Claude updates `docs/evidence.md` (C2, C3, C6, C10 → ✅ if expected results hold) and the matching README wording; anything unexpected is reported to Sandeep first.
+
+#### 10. PLAN addendum (2026-11-19): the audit can't see main-process requests. Waiting for approval
+**Trigger:** Run 1 (Online) came back PASS (`docs/audits/2026-11-19-online.txt`). But `spaceplace.nasa.gov`, `nesdis.noaa.gov` and `weather.gov` are in the receipt and **not** in the capture. Those are source pages, read by Node in the main process, which ignores Electron's session proxy. So the capture is not independent for those requests. Run 2 ("0 hosts") would not show that main-process fetches are blocked. Runs 2 and 3 are paused.
+
+**10.1 Which code paths skip the session proxy** (checked in code; no change made)
+
+| Path | Code | Session proxy? | Goes off the machine? |
+|---|---|---|---|
+| Source-page reads (Ask AI + Search the web), including redirect hops | `readSourcePages` → `gatedSafeFetch` → `safeFetch` → `nodeTransport` (Node `http`/`https`, `agent: false`, DNS pinned by our own `lookup`) — `src/main.js` ~5833, `src/safe-fetch.js` | **No** | Yes. **Gap.** |
+| Image/media checks (HEAD, then a GET range as fallback) for web image results | `preflightMediaUrl` → `gatedSafeFetch` — `src/main.js` ~2269 | **No** | Yes. **Gap.** In Run 1, `images.pexels.com` was captured only because the renderer also loaded the thumbnails. A host contacted only by this check would not be seen. |
+| Main-process DNS | `safeFetchResolve` → Node `dns.lookup` (getaddrinfo → system resolver) for both rows above, and for download redirect hops (`resolvePublicAddresses`, ~4179) | **No** (no HTTP proxy ever sees DNS) | Yes, as DNS queries. **Gap in both options below.** |
+| Kiwix | `knowledgeBackend.fetchKiwix` → Node `http.request` | No | No: `normalizeKiwixEndpoint` only accepts loopback HTTP. Not a gap (loopback is bypassed by design anyway). |
+| Search backend (SearXNG) | `searchSearxng` with `makeReceiptFetch` → Electron `net.fetch` (Chromium stack, default session) | **Yes** | Default endpoint is `127.0.0.1:8080`, which is in the bypass rules. A non-loopback endpoint would be captured. Not a gap. |
+| Download checks | `fetchForDownloadPreflight` → `session.fetch` | Yes | Covered. |
+| Renderer, WebLLM model download, pages, thumbnails, spellchecker | Chromium network service, per session | Yes | Covered. |
+| `net.fetch(file://…)` (~484) | local file | n/a | No. |
+
+No `child_process`, `dgram`, `tls` or `undici` use in `src/` (the only Node network modules are in `safe-fetch.js`, `knowledge-backend.js`, `source-reader.js` (DNS default only, main passes the gated version) and `network-mode.js` (`isIP` only)). The **Offline** run is covered by the code gate (`networkMode.assertOnline` in `gatedSafeFetch` and `safeFetchResolve`) and by `tests/network-exits.test.js` / `tests/offline-gate-integration.test.js`, but **not** by the capture.
+
+**10.2 Option (a): mitmproxy local capture mode (macOS), TLS passthrough**
+- **What it is:** `mitmdump --mode local:<target>` uses a macOS Network Extension (App Proxy Provider) that redirects the target processes' outgoing TCP and UDP flows to mitmproxy. The app does not need to cooperate. The main process, renderers and the network-service helper are all caught, as long as they match the target.
+- **Version:** macOS local mode exists since mitmproxy 10.1.5 (mitmproxy blog, 2023-12-05). We have 12.2.3. The CHANGELOG was unreachable (HTTP 503), so I haven't confirmed whether 12.x changed anything. The dry run (below) settles it.
+- **macOS approval:** on first start, mitmproxy installs its signed redirector app (from memory, "Mitmproxy Redirector" in `/Applications`; not in the docs I could read). macOS then asks you to allow the network extension in **System Settings → General → Login Items & Extensions → Network Extensions** (older macOS: Privacy & Security). Expect one approval, and possibly an "allow proxy configuration" prompt. As far as I know it doesn't need `sudo`. **To verify in the dry run**; nothing has been installed.
+- **Target selection:** docs give `local:<name>`, `local:<pid>`, lists `local:a,b` and negation `local:!name`. They do **not** say whether names match exactly, by substring or by path. Sovereign runs as `Electron` (main, makes the Node fetches) plus `Electron Helper`, `Electron Helper (Renderer)`, `(GPU)` and `(Plugin)` (the Chromium network traffic comes from `Electron Helper`). Proposed target: `local:Electron,"Electron Helper"` (exact form fixed in the dry run). **Risk:** other Electron apps. VS Code runs as `Code` / `Code Helper`, but its crash handler lives under `Electron Framework.framework`. So the runbook will have you quit other Electron apps (VS Code, Slack, etc.) during a run, and the dry run checks for foreign hosts.
+- **TLS passthrough:** keep `--ignore-hosts '.*'`. In transparent-style modes the ignore regex is matched against IP and ClientHello SNI, and the flow is passed on unmodified (no decryption, no certificate install).
+- **Loopback:** the docs don't say whether local mode captures `127.0.0.1`/`::1`. Two safeguards: (1) the addon drops loopback addresses before writing them (`127.0.0.0/8`, `::1`, `localhost`), and (2) the dry run checks that SearXNG and Kiwix still work while capturing.
+- **Addon change needed (test script, not app code):** `scripts/log-hosts.py` only uses the `http_connect` and `request` hooks. With no CONNECT in local mode and passthrough on, those probably never fire, so the log would be empty and look like a false "0 hosts". It needs to log the **SNI** of each TLS ClientHello and, when there is no SNI (plain HTTP, QUIC without SNI parse), the server `IP:port`, from a connection-level hook. `scripts/audit-compare.js` must then treat a bare IP as "unmatched, check by hand" rather than PASS. (Exact hook names checked against the 12.2.3 addon API when building.) `tests/audit-compare.test.js` gets cases for that.
+- **DNS:** Node and (by default) Chromium resolve through the system resolver, `mDNSResponder`, which is a different process. So DNS is **not** in the local capture. For the Offline run, add `sudo tcpdump -n -i any port 53` and count queries for the run's test hostnames only. Other apps add noise, so this is a supporting check, not proof. It stays listed as a limit.
+- **Run setup changes:** no `SOVEREIGN_AUDIT_PROXY`. The app runs as a user would run it, including Offline mode's black-hole proxy, so the Offline run tests the real configuration. (That proxy points at loopback port 9 and is dropped by the loopback filter.)
+- **Dry run before redoing Run 1:** start local mode, approve the extension, launch Sovereign Online with a throwaway profile, do one Search-the-web question. **Pass if** the log contains a model or thumbnail host (from `Electron Helper`) **and** the source-page hosts (from the `Electron` main process), and no host from another app.
+- **Pros:** independent of the app; catches paths we don't know about; also sees non-HTTP TCP and UDP (QUIC/WebRTC) from Sovereign. **Cons:** a system extension to approve and later remove; name matching to confirm; DNS still outside; a test-script change.
+
+**10.3 Option (b): send main-process fetches through the audit proxy when `SOVEREIGN_AUDIT_PROXY` is set**
+- Change `nodeTransport` (`src/safe-fetch.js`) to open an HTTP CONNECT tunnel to the proxy and do TLS over it, only when `AUDIT_PROXY` is set (dev builds only via `testHook`).
+- **Network behaviour change** (approval gate), in security-critical code: the SSRF/DNS-pinning protection works by connecting to the address we checked. Through a proxy, the proxy connects instead, so the audit path would no longer test the real path. It needs new tests and its own review.
+- **Weaker as evidence:** it only shows the requests the app chooses to send through the proxy. It can't find an unknown path, which is the point of an independent capture. DNS is still outside.
+- Smaller setup (no system extension).
+
+**10.4 Recommendation: (a), local capture mode.** It answers the real question (does anything leave Sovereign that isn't in the receipt?) without trusting the app, and needs no app code change. (b) changes privacy-critical networking only to make the audit easier, and still couldn't show an unknown path.
+
+**10.5 Steps if (a) is approved (nothing done yet)**
+1. Claude: update `scripts/log-hosts.py` (SNI + IP fallback, loopback filter) and `scripts/audit-compare.js` (bare IPs flagged), with tests; `npm run check`. Test tooling only; no `src/` change.
+2. Sandeep: dry run (§10.2). Approve the macOS extension when prompted.
+3. Claude: rewrite RUNBOOK §1–3 for local mode (no audit proxy; quit other Electron apps; tcpdump DNS check in the Offline run), plus the extension's removal in §6.
+4. Sandeep: **redo Run 1** with local mode (the current Run 1 file stays as the session-proxy result), then Runs 2 and 3.
+
+**Decisions needed from Sandeep:**
+1. Approve option (a) (recommended) or (b).
+2. Approve installing mitmproxy's macOS network extension on this Mac (a new system component; already part of the installed mitmproxy, no new download expected).
+3. Approve the test-script changes in §10.5 step 1.
+
+#### 11. PLAN addendum (2026-11-19): Chromium's own DNS and DoH found by the dry run. Waiting for approval
+**Dry-run result (Sandeep, local capture):**
+- source pages `math.ucr.edu`, `www.nesdis.noaa.gov` and `spaceplace.nasa.gov` were captured, so main-process Node fetches are now seen;
+- thumbnails were captured;
+- `example.com` is **missing**;
+- **`doh.xfinity.com` was captured but is not in the receipt**, and there is a bare IP `2001:558:feed::1`.
+
+The dry run does **not** pass yet (conditions 3–5 of RUNBOOK D). Runs 1–3 are on hold.
+
+**11.1 Cause (confirmed)**
+- **Electron 38.8.6 is Chromium 140.0.7339.249.** Electron's own API docs (`node_modules/electron/electron.d.ts`, `ConfigureHostResolverOptions`) say:
+  - `enableBuiltInResolver`: "Enabled by default on macOS". Chromium then sends DNS itself, over UDP to the system's nameservers, from its network service (an `Electron Helper` process). It doesn't go through `mDNSResponder`.
+  - `secureDnsMode`: "Defaults to 'automatic'", and "for some DNS providers, the resolver will automatically upgrade to DoH unless DoH is explicitly disabled, even if there are no DoH servers provided in this list."
+  - `enableAdditionalDnsQueryTypes` (HTTPS/type 65 records): "Defaults to true".
+- **This Mac's nameservers** (`scutil --dns`) are `2001:558:feed::1`, `2001:558:feed::2`, `75.75.75.75` and `75.75.76.76`. These are Comcast/Xfinity's, so Chromium's automatic upgrade picks `doh.xfinity.com`. The bare IP is Chromium's own plain DNS to the first nameserver, including the lookup of the DoH host itself.
+- **Sovereign never sets the resolver while Online.** `applyHostResolverMode` (`src/main.js` ~4304) calls `app.configureHostResolver` only for Offline (`secure` mode pointed at `https://127.0.0.1:9/dns-query`, Layer 3) and when switching back (`automatic`, i.e. Chromium's defaults). So Online, Chromium's defaults apply.
+- **Why the receipt doesn't show it:** DNS and DoH run inside Chromium's network service. They are not web requests, so `webRequest` (which feeds the receipt) never sees them.
+- **Side effect worth knowing:** with HTTPS records on, Chromium can use **Encrypted Client Hello (ECH)** for sites that publish it. The capture would then log the provider's outer name (for example `cloudflare-ech.com`) instead of the real site, and the audit would show a host the receipt doesn't have. ECH didn't occur in this dry run, but it could in later runs.
+
+**11.2 Why `example.com` is missing, and how to check helper capture**
+- **Helper capture is already shown by this dry run, without `example.com`:**
+  - `thumb.wikimedia.org` was contacted **only** by the renderer: the receipt has 5 "image thumbnail preview" rows and no main-process row for it. `upload.wikimedia.org` was only the main-process "media validation" check. `thumb.wikimedia.org` was captured.
+  - `doh.xfinity.com` and the DNS-server IP can only come from Chromium's network service (Node uses the system resolver and does no DoH).
+- **So `example.com` most likely was not requested at all.** The receipt can't tell, because browsing tabs are excluded by design. Every other cause I can think of would still have left something in the log:
+  - **QUIC/HTTP3:** a first visit uses TCP. Even a QUIC flow would have been logged at least as a bare IP, and the only bare IP is the DNS server's.
+  - **ECH:** would have logged an outer name (e.g. `cloudflare-ech.com`), and none is in the log.
+  - **Cache:** the profile is a fresh copy of a base profile that never browsed.
+  - **Capture gap:** other helper traffic from the same network-service process was captured.
+- Remaining possibilities: the page didn't load (typed in the wrong field, the input was treated as a search, or an error page), or it loaded in a way I haven't found. **Question for Sandeep: did the tab show the "Example Domain" page?**
+- **Proposed RUNBOOK changes for the next dry run (docs only, after approval):**
+  1. The thumbnail check prints which thumbnail hosts are **renderer-only** (no main-process "media validation" row for the same host). Pass needs at least one renderer-only host captured. That alone proves helper capture.
+  2. The browsing-tab step names two pages and asks you to confirm each visibly loaded (page title shown):
+     - `https://example.org` (HTTPS, server name from SNI);
+     - `http://neverssl.com` (plain HTTP, exercises the Host-header path).
+
+     Both are expected under "IN NETWORK CAPTURE BUT NOT IN RECEIPT".
+  3. A supporting cross-check while the tab is open: `lsof -nP -a -i -c Electron` lists the Sovereign processes' open connections. It only reads the process table and sends nothing.
+
+**11.3 Options**
+
+**(a) Turn off Chromium's own resolver and DoH** (`app.configureHostResolver`). *Recommended.*
+- **Online** (at startup, after `ready`, before any window, and when switching back from Offline): `{ enableBuiltInResolver: false, secureDnsMode: 'off', enableAdditionalDnsQueryTypes: false }`.
+  - Each `configureHostResolver` call resets any option it doesn't pass to its default, so every call passes all three.
+- **Offline:** keep Layer 3 as it is (`secure` mode, DoH pointed at `127.0.0.1:9`, so no lookup can succeed). Whether it also passes `enableBuiltInResolver: false` will be decided by `tests/electron/offline-mode.test.js` (does secure-only still block with the built-in resolver off?). Layer 3 must not get weaker.
+- **Effect:** all of Sovereign's DNS (Chromium and Node) goes through macOS's resolver (`mDNSResponder`). This matches the documented DNS limit, and the capture no longer sees an unlisted host or the DNS-server IP.
+- **Costs, stated honestly:**
+  1. Chromium no longer upgrades to the ISP's DoH. DNS is then as private as the Mac's own settings: plain DNS to the same ISP unless macOS is set up for encrypted DNS, which then applies to the whole app, Node included. Same provider either way; only encryption on the wire changes.
+  2. No HTTPS records means no ECH, so network observers see the real server names (they already did for the Node fetches), and HTTP/3 is found a little later (via Alt-Svc).
+  3. A network-behaviour change, so it needs approval.
+- **Tests:**
+  - `tests/network-exits.test.js`: assert the Online and Offline resolver settings in the code;
+  - an Electron test, if `configureHostResolver` calls can be observed;
+  - `tests/electron/offline-mode.test.js` re-run, all phases;
+  - then the dry run again. Expect no `doh.xfinity.com` and no DNS-server IP.
+
+**(b) Show DNS/DoH in the receipt.** *Not recommended.*
+- The app can't see these requests: they happen inside the network service, below `webRequest`. Chromium's NetLog would be the only source, which records everything and is far too heavy for a privacy feature.
+- A fixed "DNS may go to your ISP's DoH server" row would be a guess: it depends on the network.
+- The capture would still show a bare DNS-server IP every run.
+
+**(c) Document it as a limit only.** *Not recommended.*
+- Every audit on a Comcast network (and on other providers with an automatic DoH upgrade) would end in `REVIEW` and need a manual note.
+- The app would keep contacting a third-party host, the ISP's DoH server, that isn't in the receipt. That goes against the project rule that every request appears in the receipt.
+
+**11.4 Steps if (a) is approved**
+1. Codex (CHANGES):
+   - change `applyHostResolverMode` and call it at startup in both modes; the startup call already exists at `src/main.js` ~4653, but it does nothing while Online;
+   - add tests;
+   - `npm run check`;
+   - run `tests/electron/offline-mode.test.js`.
+2. Claude: REVIEW. Then the RUNBOOK dry-run changes from §11.2, plus a line in "Limits of this audit": Chromium's own resolver is off, so all DNS goes through macOS.
+3. Sandeep: dry run again. Pass needs:
+   - every source-page host captured;
+   - a renderer-only thumbnail host captured;
+   - `example.org` and `neverssl.com` captured and visibly loaded;
+   - no `doh.*` host;
+   - no bare IP.
+4. Only then Runs 1–3.
+
+**Decisions needed from Sandeep:**
+1. Approve option (a) (recommended), (b) or (c).
+2. Did `example.com` visibly load in the dry run?
+3. Approve the RUNBOOK dry-run changes in §11.2 (docs only).
+
+**11.5 Decisions (Sandeep, 2026-11-19)**
+1. **Option (a) approved** (network change): set the resolver while Online as proposed; Offline protection unchanged; with tests.
+2. `example.com`: answer pending (the message said "[did / did not]"). The new dry run replaces that check, so this doesn't block anything.
+3. **RUNBOOK dry-run changes approved** (renderer-only thumbnail host; `example.org` and `neverssl.com` with a visible load; optional `lsof` cross-check). Done by Claude (Round 7).
+
+**11.6 Build brief for Codex (approved scope; nothing else)**
+- **File:** `src/main.js`, `applyHostResolverMode` (~4304) only.
+  - Add next to it:
+    - `const ONLINE_HOST_RESOLVER = { enableBuiltInResolver: false, secureDnsMode: 'off', enableAdditionalDnsQueryTypes: false };`
+    - `const OFFLINE_HOST_RESOLVER = { secureDnsMode: 'secure', secureDnsServers: ['https://127.0.0.1:9/dns-query'] };`, the **exact current Offline values, unchanged**.
+  - New logic:
+    - if `networkMode.isOffline() && offlineLayerOn('proxy')`: `configureHostResolver(OFFLINE_HOST_RESOLVER)` (as today);
+    - **otherwise, always:** `configureHostResolver(ONLINE_HOST_RESOLVER)`;
+    - keep the `typeof` guard and the `try/catch` with `logAi`.
+  - Remove the `hostResolverChanged` gating. That gating is why nothing was set while Online at startup.
+  - Pass all three Online options on every call, because Electron resets any option a call leaves out.
+- **Call sites stay as they are:**
+  - `app.whenReady` (~4653): after `loadPreferences()` and before any window or session tracking. This covers startup in both modes.
+  - The mode switch (~4435): covers leaving Offline.
+  - Don't add a new call site.
+- **Tests** (new cases in `tests/network-exits.test.js`, or a new `tests/host-resolver.test.js` added to `npm run check`):
+  - Extract `applyHostResolverMode` with the existing `body()` + `vm` pattern, with a fake `app.configureHostResolver` that records its calls, a real `createNetworkMode`, and `offlineLayerOn`.
+  - Assert, with `deepEqual` against literal objects (not the constants):
+    1. **startup Online** → exactly `{ enableBuiltInResolver: false, secureDnsMode: 'off', enableAdditionalDnsQueryTypes: false }`;
+    2. **Offline** → exactly `{ secureDnsMode: 'secure', secureDnsServers: ['https://127.0.0.1:9/dns-query'] }`, unchanged;
+    3. **leaving Offline** → the Online object again;
+    4. Offline with the `proxy` layer off (test hook) → the Online object;
+    5. a throwing `configureHostResolver` is logged, not thrown.
+  - **Static checks:**
+    - in the `app.whenReady` callback, `applyHostResolverMode()` comes before `trackNetworkSession(` and before any `new BrowserWindow`/`createWindow` call;
+    - the mode-switch function still calls `applyHostResolverMode()`.
+- **Must stay unchanged and pass:**
+  - `tests/electron/offline-mode.test.js` (all phases; Claude re-runs Electron outside the sandbox);
+  - `tests/offline-gate-integration.test.js`;
+  - `npm run check`.
+- **Not in scope:**
+  - the Privacy Receipt (no new request; DNS isn't a receipt row);
+  - the Offline allowlist;
+  - other layers;
+  - README/RUNBOOK (Claude's).
+- **Manual test after the change (Sandeep):** the new dry run (RUNBOOK D). Pass also needs no `doh.*` host and no bare IP.
+
+#### 12. PLAN addendum (2026-11-19): dry run #2, the DNS servers still show up as bare IPs. Waiting for approval
+**Dry run #2 result (Sandeep, §11 change in the build):** verdict `REVIEW`.
+- Passed:
+  - no DoH/ECH host (`doh.xfinity.com` is gone);
+  - renderer-only thumbnail host `thumb.wikimedia.org` captured;
+  - `example.org`, `neverssl.com` and the redirect host `youngsoothingfreshmelody.neverssl.com` captured;
+  - `upload.wikimedia.org` (main-process image check) captured: partial evidence that Node fetches are seen.
+- Not passed:
+  - **Source pages: none in the receipt.** The sky question had no search rows, so **Search the web** wasn't ticked. This is a run error, not a capture gap. Redo.
+  - **Bare IPs:** `2001:558:feed::1` and `2001:558:feed::2` (this Mac's first two nameservers, Xfinity), plus `2600:1f13:37c:1400:ba21:7165:5fc7:736e` (§12.5).
+- Also seen: `media:preflight` throws an unhandled HTTP 403 from Wikimedia. Follow-up for later, not part of this task.
+
+**12.1 What the code does (checked; no change made)**
+- **Main-process DNS uses only `dns.lookup`:** `safeFetchResolve` (`src/main.js:78`), `resolvePublicAddresses` (`src/safe-fetch.js:56`), and the default in `src/source-reader.js:85,550` (main passes its gated version). There is no `dns.resolve*`, `dns.Resolver` or `setServers` anywhere in `src/`.
+  - `dns.lookup` is `getaddrinfo`. On macOS that asks `mDNSResponder` over local IPC. Node itself sends no packet to a nameserver.
+- **The resolver setting is app-wide, not per session:** `app.configureHostResolver` configures the one network service. Partitions and extra sessions can't miss it.
+- **Timing:**
+  - In `whenReady`, `applyHostResolverMode()` runs before `trackNetworkSession`, before any window, and before model setup (unit-tested in Round 8). No webContents exists before that point.
+  - The dry run starts Offline (base profile), so startup applies the Offline object. Switching to Online calls `applyHostResolverMode()` again (`src/main.js:4434`), which applies the Online object.
+  - **Gap:** Electron can't read the settings back, so the code can't show that Chromium kept them (for example after a network-service restart).
+
+**12.2 Two possible explanations**
+- **(A) An Electron process still sends DNS itself.** The setting isn't taking effect, or a Chromium path ignores it.
+- **(B) `mDNSResponder` sends the queries for Sovereign, and macOS attributes them to Sovereign.** macOS tags system-resolver traffic with the app it is for (the "effective" or delegated process; this is how per-app VPNs route an app's DNS). The redirector matches flows by source app, so it may get `mDNSResponder`'s queries made for Sovereign.
+  - If so, the bare IPs are exactly the path §11 chose (all DNS through macOS), and Round 5's statement "DNS through `mDNSResponder` isn't captured" is wrong.
+- **Leaning (B), not proven:**
+  - the DoH upgrade is gone, so the setting is being applied;
+  - both `::1` and `::2` now appear. `mDNSResponder` spreads queries across several nameservers, while Chromium's built-in client in dry run #1 used only `::1`.
+- **Not checked:** how mitmproxy's redirector treats delegated flows. Its source isn't on this Mac (mitmproxy is a Homebrew cask bundle).
+
+**12.3 Identify the process (read-only; Sandeep, about 5 minutes; no app change)**
+Run **without** `mitmdump`, so the redirector is inactive and each packet shows its real sender.
+
+Terminal 1:
+
+```sh
+sudo tcpdump -n -k -i pktap,all 'port 53' 2>/dev/null | tee /tmp/sov-dns-pktap.txt
+```
+
+On macOS, `-k` on the `pktap` interface prints each packet's process: `proc` is the sender and `eproc` is the process it was sent for, when different.
+
+Terminal 2: start a fresh copy of the base profile as in RUNBOOK D. Switch to Online, ask one **Search the web** question, then **Cmd-Q**. Then **Ctrl-C** in Terminal 1, and:
+
+```sh
+grep -c . /tmp/sov-dns-pktap.txt
+grep -E 'proc Electron' /tmp/sov-dns-pktap.txt | head -5
+grep -E 'eproc Electron' /tmp/sov-dns-pktap.txt | head -5
+```
+
+How to read it:
+- `proc Electron…` (as sender) → **(A)**;
+- `proc mDNSResponder…` with `eproc Electron…` → **(B)**;
+- if no line names Electron, or the lines show no `proc` field, send Claude the first 5 lines.
+
+Don't put the output in the repo: it holds hostnames looked up by every app on the Mac. Delete it afterwards. `lsof` is not used: DNS sockets live for milliseconds and are easy to miss.
+
+**12.4 Fix, depending on 12.3**
+- **If (B) (expected). No app network change.** Audit tooling and docs only:
+  1. `scripts/log-hosts.py`: a flow with no name whose destination port is 53 is logged as `dns:<ip>`. Other nameless flows are logged as `<ip>:<port>`, so the port shows.
+  2. `scripts/audit-compare.js`:
+     - new section `DNS VIA SYSTEM RESOLVER (macOS, for Sovereign)`;
+     - an optional `--nameservers <list>` argument. The RUNBOOK passes `scutil --dns`'s nameservers. A `dns:` line to one of them doesn't cause `REVIEW`; a `dns:` line to any other address does;
+     - tests for both.
+  3. RUNBOOK, README "Limits of this audit" and `docs/privacy-audit.md`: correct "DNS is not in the capture" to say that DNS sent by macOS for Sovereign shows as `dns:` lines (counted, not named).
+  4. **Gain:** the Offline run can then expect **0 `dns:` lines from Sovereign**. That is evidence attributed to the app, much stronger than the whole-machine `tcpdump`, which stays as a supporting check.
+  - The receipt is unchanged: DNS is still not a receipt row (§11.6).
+- **If (A). App network change, needs approval:**
+  - **A1:** also turn off Chromium's built-in DNS client before the network service starts, with `app.commandLine.appendSwitch('disable-features', 'AsyncDns')` near the top of `src/main.js` (merged with any existing `disable-features`). Keep `configureHostResolver` as it is.
+  - **Risk:** Offline Layer 3 (secure DoH to `127.0.0.1:9`) must still block. `tests/electron/offline-mode.test.js` decides that; if Layer 3 gets weaker, A1 is dropped and we come back with another option.
+  - **Tests:** a static check that the switch is set before `ready`, the Offline Electron test, then the dry run again.
+  - Builder: Codex (CHANGES), with REVIEW by Claude.
+
+**12.5 The AWS IPv6 is NeverSSL; replace it with `http://example.com`**
+- **Confirmed** (one `dig` today): `2600:1f13:37c:1400:ba21:7165:5fc7:736e` is the AAAA record of both `neverssl.com` and `youngsoothingfreshmelody.neverssl.com`. `2600:1f13::/32` is AWS. It has no reverse DNS name.
+- **Why it's bare:**
+  - The `Host` header for `neverssl.com` was logged, so this is a **separate connection that sent no request bytes**: most likely a Chromium preconnect (spare socket) that was closed unused.
+  - Plain HTTP sends nothing until a request. A TLS preconnect sends its ClientHello at once, which is why HTTPS sites leave a name.
+  - The `ERR_EMPTY_RESPONSE` subpages may be the same kind of connection, closed by the server with no data. Not checked without capture.
+  - **Any plain-HTTP site can leave one**, so changing the site doesn't remove the cause on its own.
+- **Proposal:**
+  1. Replace `http://neverssl.com` with **`http://example.com`**:
+     - IANA-run;
+     - answers plain HTTP with 200 and no redirect (checked with `curl` today);
+     - a different name from `example.org`, so both tabs stay distinct;
+     - no random redirect subdomain.
+  2. With the port logging from §12.4 (needed in both cases), RUNBOOK D condition 6 becomes: no bare IP, **except** one on port 80 or 443 that `dig +short A/AAAA example.com` (or `example.org`) returns. Sandeep checks that by hand, and it is written into the dry-run record as "browsing-tab preconnect".
+- **Also for RUNBOOK D step 2:** "Before going on, open the receipt and check that it shows source-page rows. If not, Search the web wasn't ticked: ask again." That prevents the run error from dry run #2.
+
+**Decisions needed from Sandeep:**
+1. Approve the §12.3 diagnostic run (read-only `sudo tcpdump` on this Mac). *Recommended.*
+2. After its result: (B) approve the tooling and docs change in §12.4, or (A) approve A1 (network change).
+3. Approve replacing `neverssl.com` with `http://example.com`, the port logging, and the new condition 6. *Recommended.*
+4. Approve the RUNBOOK D step 2 receipt check (docs only). *Recommended.*
+
+**12.6 Decisions (Sandeep, 2026-11-19)**
+1. **Approved:** the §12.3 `tcpdump -k` diagnostic. Sandeep is running it.
+2. **Open:** the fix waits for the diagnostic's result.
+3. **Approved:**
+   - `http://example.com` (plain HTTP) replaces NeverSSL;
+   - ports are logged;
+   - condition 6 allows a bare IP only on port 80/443, and only if it is an address of that tab's own host.
+4. **Approved:** the RUNBOOK D step 2 receipt check.
+
+**12.7 Diagnostic result and Decision 2 (Sandeep, 2026-11-19)**
+- **Result:** explanation **(B)**. Method: `tcpdump -k -r` on a pcap, with the DNS cache flushed first; output in `/tmp/dns-diag.txt` (401 lines, not in the repo).
+  - Sovereign's DNS lines are all `proc mDNSResponder:259, eproc Electron:<pid>`, answers from `2001:558:feed::1.53`.
+  - Claude re-counted the file. Lines naming an Electron process: 2, both `eproc`. Lines with an Electron process as **sender**: **0**.
+  - (A plain `grep -c "proc Electron"` also matches `eproc Electron`, so it can't tell the two apart.)
+  - Chromium no longer sends its own DNS.
+- **Decision 2 approved, the macOS branch:**
+  - the capture script logs these lookups as `dns:<ip>`;
+  - the compare script accepts `dns:` lines only for the Mac's own nameservers (`scutil --dns`);
+  - the docs and README are corrected;
+  - **no `AsyncDns` switch** and no app change.
+  - Built together with the port logging, with tests.
+- **Also from Sandeep:** the NeverSSL failure in dry run #2 came from mitmproxy itself (`[Errno 60]` connecting to NeverSSL's IPv6 on port 80), not from Sovereign.
+
+#### 13. PLAN addendum (2026-11-20): Run 3 snapshot confounded by the model load. **Approved by Sandeep (2026-11-20)**
+**13.1 What happened.** In Run 3 (sensitive chat), the snapshot taken after the fever question and before the control question had 4 lines, not the expected 0: `huggingface.co`, `raw.githubusercontent.com`, `us.aws.cdn.hf.co` and `dns:2001:558:feed::1`. No search, source or SearXNG host.
+
+**13.2 What the code says (Claude, by reading the code; not yet confirmed by a run)**
+- **Switching Online loads nothing.** `setNetworkMode` (`src/main.js` ~4419) only changes the blocking layers and republishes state. At an Offline start, the setup worker only runs a local cache `check` (`ensureModelSetupService`, ~930).
+- **The Ask page loads the model lazily:** the first question calls `ensureModelReady` → `loadModel` → `engine.reload` (`src/ask.js` ~2107, ~2070). So the fever question set off the requests by **timing**. Their content doesn't depend on the question; any first question would do the same.
+- **It isn't "re-validation".** WebLLM 0.2.85 with `cacheBackend: 'indexeddb'` (`src/ai/ai-engine-entry.js`) reads IndexedDB first and fetches only on a miss (`ArtifactIndexedDBCache.fetchWithCache`). The HF pointer-hash fetch (`extractHashFromPointer`) is only in the cross-origin backend, which we don't use. A fully cached load should make **0** requests.
+- **So some files were missing from the cache.** By host: `huggingface.co` = model config, `raw.githubusercontent.com` = model library (wasm), `*.hf.co` = large-file bytes (weights or `tokenizer.json`); the `dns:` line is the system lookup for them. `hasModelInCache` checks only the weight files, so the app can report "cached" while the config, wasm or tokenizer is missing. The exact cause is open (see 13.5).
+- **Receipt:** these rows are category `model-download`, "model/runtime file request – no page content, prompt, or AI output sent" (`receiptCategoryForTrustedRequest`, `recordPrivacyWebRequest`). They go to **Background** when the Ask page has no active receipt yet when the load starts; otherwise to that page's current receipt (`classifyPrivacyRequest`). To be confirmed from Run 3's exported JSON.
+
+**13.3 Fix to the Run 3 design (RUNBOOK §3; docs only, no code or network change)**
+1. Switch Online; check Strict.
+2. Ask AI → **Load cached model**; wait for `Local model ready.` plus **30 s** (DNS lines are written only when a connection closes).
+3. **Baseline snapshot** (`sort -u mitm-hosts.txt`). Any count is fine. Expected: only model hosts and nameserver `dns:` lines.
+4. Ask the fever question (don't click Search anyway); wait **30 s**.
+5. **Second snapshot.** The test is the new lines (`comm -13 baseline after`) = **0**.
+6. Control question, export and compare as before. The record lists the baseline hosts; each must be MATCHED and filed as `model-download`.
+
+**13.4 Current Run 3.** Sandeep finishes it and saves it as evidence (suggested name `docs/audits/2026-11-20-sensitive-local-run3-confounded.txt`, with a note about the 4 model hosts). It doesn't meet "0 before control" as written, so it doesn't close C9 alone. Run 3 is then **redone** with the 13.3 design.
+- **Outcome (2026-11-20):** the confounded run was **not saved** as a file; its exported receipt was lost. Its findings survive only here (13.1–13.2). The redo is `docs/audits/2026-11-20-sensitive-local.txt` (PASS; see REVIEW Round 15).
+
+**13.5 Follow-up, P2 (separate task; needs its own PLAN and approval): a "cached" model still fetches every file. Probably the base profile lost its model files, not an app bug (correction, 2026-11-22).**
+- Symptom: with the model reported as cached, the first load of a session contacts `huggingface.co`, `raw.githubusercontent.com` and `*.hf.co`.
+- First step (no code change): read the full `model-download` URLs in Run 3's exported receipt to see which files were fetched, and check whether the base profile's IndexedDB has the `webllm/config`, `webllm/wasm` and tokenizer entries.
+- **Evidence from the Run 3 redo receipt (Claude, 2026-11-20):** it's not just config/wasm/tokenizer. The 51 `model-download` rows (23:24:21–23:24:31) request **every** model file: `mlc-chat-config.json`, the wasm, `tokenizer.json`, `tensor-cache.json` and all 22 weight shards (`params_shard_0`–`21`), plus their `*.hf.co` redirects. That looks like a **full re-download (~705 MB)** in a profile that was supposed to have the model cached.
+- **Probable path (from the code; reinstated 2026-11-22, see the correction below):** the rows are in **Background**, not in the Ask page's receipt created 14 ms earlier. So they came from the setup worker window, not the Ask page. That fits this path: the Ask page's `isModelCached` returned false → `ensureModelReady` → `modelSetup.start()` → setup worker `check-and-download`. In other words, the copied base profile's cache wasn't recognised. To confirm: what the Ask AI button said in a fresh copy of the base profile ("Load cached model" vs "Download model"), and whether the Offline run answered from the cache. If the cache really is unrecognised, the Offline runs would show the "model isn't on this computer" message.
+- ~~**Update (2026-11-20, Sandeep):** Run 2 (Offline) answered from a copy of the same base profile, so the cache was complete; the re-fetch looks like a reload policy.~~ **Withdrawn 2026-11-22 by Sandeep:** that Run 2 answered was an assumption, not checked.
+- **What the code says about a reload policy (Claude, 2026-11-20):** none found. WebLLM 0.2.85's IndexedDB backend checks `isUrlInDB(url)` in `addToCache` and returns without fetching when the file is there; the weights use `hasAllKeys` the same way. There is no `navigator.onLine` check. The app code has nothing that reloads Online either: `setNetworkMode` only republishes state, the setup worker downloads only when its own cache check says missing, and the setup window and the Ask page share `session.defaultSession` and the `sovereign://ask` origin. With the Run 2 claim withdrawn, there is no conflict left between the code and the evidence.
+- **Correction and new evidence (2026-11-22):**
+  - **§5 Kiwix run:** a fresh copy of the base profile, Offline, shows "AI model not downloaded – Go online and download".
+  - **The copies, checked by Claude (read-only):**
+    - `/tmp/sov-audit-kiwix` is **2.0 MB**. It has no `sovereign_ask_0.indexeddb.blob` directory, so it holds no model files.
+    - `/tmp/sov-audit-base` **no longer exists** (`ls /tmp`).
+    - In `/tmp/sov-audit-sensitive`, the copy was made at 23:24:00 on 2026-11-20. All 24 model blob files were **created** between 23:24:22 and 23:24:31, which is exactly Run 3's download window, and none at copy time. Its 697 MB Chromium HTTP `Cache` was created in the same window.
+  - **So, most likely:** the model files were **missing from the base profile** by the time Run 3 copied it (2026-11-20 23:24). This is not "a copied profile isn't recognised": when the files were present, the app read and wrote them normally (Run 3 itself stored all 24). Run 3's full re-fetch then follows from the "probable path" above: not cached → setup worker downloads everything → rows in Background.
+  - **Not known:**
+    - whether the base had the model when Run 2 copied it (2026-11-19). The Run 2 export is gone, and its receipt can't tell: in the knowledge path the Kiwix search and source reading run **before** the model check (`src/ask.js` ~2566/2584, then ~2699), and the poem question needs the model but leaves no receipt row either way;
+    - why the base lost its files and then disappeared. One possibility, unverified on this Mac: macOS clears old files from `/tmp`. Another: something or someone removed them.
+  - **Consequences:**
+    - Run 2 stays **PASS** as a network result (no traffic Offline). It does **not** show that Offline answering works, and it may not have exercised an Offline model load at all.
+    - §13.5 is now probably an **audit-setup problem, not an app bug**. Still worth checking in the app: Ask AI said "not downloaded" correctly in each case, so `hasModelInCache` behaved correctly.
+    - The base profile should be rebuilt (RUNBOOK §0.5), preferably outside `/tmp`, and checked with `du -sh` right before each copy (expect ~1.3 GB).
+- **Diagnostic for that first step (no code change), if still wanted:** in a fresh copy of the base profile, switch Online, open DevTools on the Ask page before asking anything, and record the Ask AI button text, `await SovereignAIEngine.isModelCached()`, and the setup notice text ("Downloading…" vs "Loading…") during the load. Compare with the same steps Offline.
+- **Scope:** probably narrower than feared: no evidence of a re-download when the files are present. Still P2. Claude suggests closing it once a rebuilt base profile, copied and started Online, shows "Load cached model" and produces no model-host rows.
+- Any fix changes network behaviour (for example, making "cached" mean all files, or refusing network fetches during a cached load), so it is gated.
+- Not in scope for Task 2c.
+
+**13.6 Approval:** Sandeep, 2026-11-20: "Approved: RUNBOOK §3 change as proposed, plus a PLAN entry", with 13.5 recorded as a P2 follow-up.
+
+#### 14. PLAN addendum (2026-11-22): clean-up, evidence and README upgrade, and the DONE list. **Approved by Sandeep (2026-11-22), see 14.7**
+All audits are done and every summary is in `docs/audits/`. Claude checked the Kiwix summary: the config lines match `kiwix/docker-compose.yml`, all 45 SYNs went to port 8080, and nothing else was seen. It ran 6 questions instead of the RUNBOOK's 5, and its `Profile:` line records the model download. **PASS, consistent.**
+
+**14.1 Order (it matters)**
+1. Screenshots first (14.4). Screenshot 8 needs `audit-compare` output, and the sensitive run's raw files still exist (`mitm-hosts.txt`, `/tmp/sov-sensitive.receipts.json`), so it can be re-run for the shot.
+2. Docs: evidence.md and the README (14.2 and 14.3), which Codex or Claude drafts after approval.
+3. §6 clean-up (Sandeep).
+4. Final checks and the DONE list (14.5).
+
+**14.2 §6 clean-up (Sandeep does the clicks; RUNBOOK §6 as written, plus these changes)**
+- **6.1, extension and proxy:**
+  - Turn off **Mitmproxy Redirector** (Network Extensions).
+  - Remove its entry under **VPN & Filters**; that entry is the proxy configuration.
+  - The existing checks stay (no `mitmdump`, extension disabled or absent, no mitmproxy CA).
+  - Add one check: `scutil --proxy` should show no `HTTPEnable : 1`, `HTTPSEnable : 1` or `ProxyAutoConfigEnable : 1`. That confirms no system proxy was left set.
+  - Removing the app from `/Applications` stays optional.
+- **6.1a (new), Docker:** run `docker images | grep -i netshoot || echo 'no netshoot image'`. Expected: none, since it was already removed. SearXNG and Kiwix keep running, because they are the app's own setup.
+- **6.2, files:** as written. Raw captures and receipts are deleted, never committed. Option: move them to `~/sov-audit-raw-2026-11/` (outside the repo) until DONE, then delete. The sensitive receipt holds only the control question's text. Claude recommends keeping them until DONE, in case a reviewer asks for a recheck.
+- **6.2 "Expected" line:** list the actual files (`2026-11-19-dryrun-local`, `-online-local`, `-offline-local`, `2026-11-19-online` (old method), `2026-11-20-sensitive-local`, `2026-11-22-kiwix-capture-summary`, `RUNBOOK.md`), not `$(date +%F)-…`.
+
+**14.3 docs/evidence.md (header "Last updated" → the build date, "after the fresh audits")**
+| # | Change | Proposed status |
+|---|---|---|
+| C2 no cloud AI, no fallback | Evidence: online-local and sensitive-local (local capture of every connection by Sovereign's processes: no cloud-AI host) and offline-local (no connections). Keep: no dedicated automated test for "no fallback"; the code has no cloud AI client. | ⚠️ → ✅, with that note |
+| C2a model downloaded once, cached | Add the online-local hosts. Limit: "cached afterwards" holds while the files are on disk. In the audit, a copied profile whose files were gone re-downloaded everything, and the app correctly said "not downloaded" first (§13.5). | ✅ (unchanged) |
+| C3 every app request in the receipt | Evidence: the dry run (the method sees main-process Node requests and Chromium-helper requests), online-local and sensitive-local (0 hosts in the capture but not in the receipt), offline-local (no connections). Limits kept: browsing tabs are excluded by design; SearXNG's upstream requests come from Docker; DNS lookups aren't receipt rows (`dns:` lines show only which nameserver was asked); hostnames only. New limit: the sensitive export's debug counter shows **2 requests with no known origin** that are in no receipt. Their host isn't logged, but every captured host matched the receipt. | ⚠️ stays (the reason changes from "audit pending" to the 2 unattributed requests). **Decision 1.** |
+| C4 Offline blocks app traffic | Add offline-local: a whole Offline run, 0 hosts and 0 `dns:` lines; whole-machine DNS capture, 0 lines naming app hosts. Limit: this run may not have loaded the model (§13.5), so an Offline model load wasn't under capture. | ✅ (unchanged), plus the limit |
+| C6 WebTransport/STUN/beacons | No change: the fresh audits didn't run those probes, so the evidence stays Task 1a. | ✅ (unchanged) |
+| C9 sensitive chat leaks nothing | Evidence: sensitive-local, baseline design. 0 new hosts after the sensitive question; test word 0 in the receipt and 0 in the capture; the sensitive receipt says "Not sent: sensitive topic (medical)" with an empty query. Claim text fixed: the sensitive chat's only row is the blocked search, not "only `127.0.0.1:8090`". Limits: one question, one category (medical), Strict; hostnames only. The 2026-11-17 manual retest stays as extra evidence. | ⚠️ → ✅, with limits |
+| C10 Kiwix makes no internet requests | Evidence: `docs/audits/2026-11-22-kiwix-capture-summary.txt`. Limits: one session, 6 questions, one ZIM (`wikipedia_en_100_2026-08`); capture inside the container's network namespace. | ⚠️ → ✅, with limits |
+| **New C3b** image thumbnails | "Image thumbnails are loaded directly from the search engines' image servers (for example `encrypted-tbn0.gstatic.com`, `ts3.explicit.bing.net`), listed as image rows." Evidence: online-local MATCHED; receipt category `image`. Limit: those servers see the user's IP address and which thumbnails are fetched. | ✅ as a disclosed limit |
+| **New C22** Offline answering | "With the model on disk, Ask AI answers Offline." Evidence: the §5 run. The solar-eclipse question was answered Offline; on the local path the model must load and run before an answer or Source excerpts can appear (`src/ask.js` ~2699). Limit: that run captured the Kiwix container, not Sovereign. Run 2 captured Sovereign (no traffic) but didn't show answering. No single run shows both. | ⚠️. **Decision 2** (which label the eclipse answer had) |
+| C19 test count | Recount: `tests/log-hosts.test.js` (with `tests/log_hosts_test.py`) is new in `npm run check`. | ✅, recounted |
+
+**14.4 README wording (only what the new summaries change)**
+- **Evaluation table:**
+  - "Hostname audit" becomes "mitmproxy macOS local capture of every connection made by Sovereign's processes, compared with the exported receipt", pointing to `docs/audits/` and the RUNBOOK.
+  - "Container capture" points to the Kiwix summary.
+- **Results so far:** replace the 2026-09-24, 2026-11-17 Kiwix and manual-sensitive bullets with one bullet per run: dry run, Online, Offline, sensitive, Kiwix. Each gives its date, PASS and the key numbers above. Keep one line: "an earlier audit (2026-09-24, older build and method) is superseded."
+- **Limits of this audit:**
+  - Drop "doesn't capture main-process requests … not run yet" (now done).
+  - Keep the hostnames-only, DNS-via-macOS and loopback bullets; the DoH bullet moves to past tense.
+  - Add:
+    - "Only Sovereign's processes are captured";
+    - thumbnails via search-engine image servers;
+    - Offline: no traffic shown by Run 2, and answering shown by the Kiwix run but not under app capture;
+    - one run per scenario, on one Mac and network (macOS 26.6.2; the ISP's resolvers);
+    - the 2 unattributed requests.
+- **Guarantees table:** the receipt row's limit adds the thumbnail sentence.
+- **Roadmap:** "fresh privacy audits" moves from Phase 5 to Done.
+- **Run-it-yourself line:** add the RUNBOOK link.
+- **Screenshots:** the comment block becomes the images (14.5).
+- Claude also checks `docs/privacy-audit.md` for the same out-of-date wording and corrects it in the same way.
+- No safety, crisis or legal text changes.
+
+**14.5 DONE list**
+1. **Screenshots** (Sandeep; §3 list, `docs/images/`, light theme, no personal data, public test questions only). Use a copy of a rebuilt `~/sov-audit-base` (`du` check first). Screenshot 8: re-run `node scripts/audit-compare.js mitm-hosts.txt /tmp/sov-sensitive.receipts.json --nameservers "$NS"` and capture the PASS. Claude checks every image link resolves and that no image shows a personal path, name or email.
+2. **Checks (Claude):** `npm run check`; `git diff --check`; a secret scan of the diff (no `.env`, keys or tokens). Electron, run by Sandeep outside the sandbox because `src/main.js` changed: `test:electron:offline-mode`, `test:electron:local-knowledge`, `test:electron:sensitive-guard`, `test:electron:model-chat`.
+3. **Files to commit (Sandeep):**
+   - code and tests: `.gitignore`, `package.json`, `src/main.js`, `scripts/audit-compare.js`, `scripts/log-hosts.py`, `searxng/docker-compose.yml`, `tests/audit-compare.test.js`, `tests/network-exits.test.js`, `tests/log-hosts.test.js`, `tests/log_hosts_test.py`;
+   - docs: `README.md`, `LICENSE`, `docs/evidence.md`, `docs/privacy-audit.md`, `docs/HANDOFF.md`, `docs/images/*.png`;
+   - audit records: `docs/audits/RUNBOOK.md` and the 6 summaries (`2026-11-19-dryrun-local.txt`, `2026-11-19-online-local.txt`, `2026-11-19-offline-local.txt`, `2026-11-19-online.txt`, `2026-11-20-sensitive-local.txt`, `2026-11-22-kiwix-capture-summary.txt`).
+   - **Never:** `mitm-hosts.txt`, `mitm-capture-started.txt`, `audit.flow`, `*.receipts.json`, anything from `/tmp` or `~/sov-audit-*`, `searxng/.env`, `.env`. The first four are git-ignored; Claude confirms with `git status --ignored` before handing over.
+4. **Sandeep's "DONE"** (approval gate).
+
+**14.6 Decisions needed**
+1. C3: keep ⚠️ because of the 2 unattributed requests (Claude's recommendation), or ✅ with that limit?
+2. The solar-eclipse answer: was it labelled AI-written (a label such as Supported or Partly supported) or Source excerpts? Either way the model ran Offline. The README wording differs: "answered" vs "the model ran; its output was replaced by excerpts".
+3. Raw files: keep them in `~/sov-audit-raw-2026-11/` until DONE (recommended), or delete them in §6 straight away?
+4. Approve PLAN §14.
+
+**14.7 Sandeep's decisions (2026-11-22)**
+1. **C3 stays ⚠️.** New **P2 follow-up** (separate task; needs its own PLAN and approval): explain the **2 requests with no known origin** in the sensitive run's export (`debug.unattributedRequestsSkipped: 2`). These are requests that `classifyPrivacyRequest` returned as `debug-skip` (no webContents and no internal origin), so they are in no receipt; they aren't rows. First step, no code change: from the kept raw files and a re-run with logging that is already there, find what kind of request they are (for example a service worker, a preconnect or a favicon) and whether each one should be attributed or ignored by design. Any change to receipt attribution is gated.
+2. **C22 ✅.** The solar eclipse question in the Offline Kiwix run got a Supported/Partly supported label, so the local model wrote the answer Offline. Note: "answering shown in the Offline Kiwix run; absence of traffic shown separately in the Offline run".
+3. **Raw files** are kept in `~/sov-audit-raw-2026-11/` until DONE (RUNBOOK §6.2).
+
+**14.8 Screenshot findings: three P2 follow-ups (2026-11-22; separate tasks, each needs its own PLAN and approval; not in scope for Task 2c)**
+1. **Excerpt fallback copies reference-list lines.**
+   - Seen: Offline, local, `What is a solar eclipse?` gave **Source excerpts** that included a Wikipedia reference-list line ("↑ Farber, Madeline (2017-08-11) … Archived from the original …").
+   - Wanted: the fallback skips reference, citation and "Archived from" lines (and similar: "Retrieved", "ISBN", lines that start with `↑` or `^`).
+   - Where: `fallbackSourceAnswer` (`src/search-utils.js` ~516), which builds the excerpt text used by `fallbackSourceAnswerWithMeta` (~859). The source reader's cleaning of Kiwix pages may be the better place to drop reference sections; the PLAN decides.
+   - Tests first: a fixture with a reference list → no reference line in the excerpts.
+2. **"Supported" ≠ verified: a new example** (`docs/images/09-supported-not-verified.png`). An answer labelled Supported contains a sentence its cited source doesn't support. This is the known limit (C14; README "Supported ≠ verified"), now with a screenshot. Follow-up: the claim-level faithfulness check already on the roadmap (Phase 5). Details (Sandeep, 2026-11-22):
+   - Offline, Use local knowledge on, `What causes a solar eclipse?`.
+   - Label: "Supported: every sentence cites a source. Open the sources to check. 7 sentences without a source were removed."
+   - Kept sentence 1: "This results in a slight increase in the Moon's distance from Earth, causing the Moon to appear larger in the sky. [1]". **Wrong:** a Moon that is farther away looks smaller.
+   - Kept sentence 2: "This results in a range of solar eclipses, including total, partial, and annular eclipses. [3]". **Doesn't answer the question.**
+   - Sources reported: [1] Solar eclipse, [2] Hybrid solar eclipse (Wikipedia 100 on `127.0.0.1:8090`).
+   - **Check (Claude; resolved in Round 20: a third source existed):** `computeTrustLabel` (`src/answer-trust.js`) gives Supported only if every kept sentence cites a source that was provided, so [3] must have been a provided source. Either a third source was listed (for example below the fold), or a [3] passed without a provided source, which would be a bug. Sandeep to check the full source list in the shot; if there are only 2 sources, it becomes its own follow-up.
+3. **Web answers fall back to excerpts: 3 out of 3** while taking screenshot 1 (Online, Search the web on). Every web answer got a Source excerpts / Search snippet excerpts label instead of an AI-written one. Follow-up:
+   - find why the model's output failed validation (the reason codes `model-output-failed-validation`, `-empty` or `-insufficient`);
+   - check whether this is a regression since Task 2b.
+   Until then, the README makes no claim about how often web answers are Supported.
+
+4. **`model-chat`'s failure handler can hang** (from REVIEW Round 25; added 2026-11-23). If the Ask page itself hangs, the handler's `executeJavaScript` (reading `#chat-thread`) may never settle, so `app.exit(1)` never runs. The suite then hangs instead of exiting non-zero: a visible failure, not a false pass. Fix: wrap the read in a ~3-second `Promise.race`, then always `app.exit(1)`. Tests only.
+
+**14.9 README images (Sandeep's choice, 2026-11-22)**
+- **Shot 1** (`01-ask-web-excerpts.png`, replaces the planned "Supported" web answer):
+  - Online, Search the web on, local knowledge off; `What causes a solar eclipse?`.
+  - Label **Source excerpts**; sources NASA Science, Perlan and Exploratorium.
+  - Caption: "A web answer: the AI's draft failed the citation check, so Sovereign shows source passages word for word and says so."
+- **Shot 2** (`02-privacy-receipt.png`): the receipt for that same answer.
+  - Search → `127.0.0.1:8080`, forwarded to duckduckgo, google cse and startpage.
+  - Source page `science.nasa.gov`: "page fetch – no query or AI output sent".
+  - "No data sent to cloud AI services".
+  - Caption: "The Privacy Receipt for that answer: the query went to the local SearXNG, which forwarded it to the search engines named; each source page was fetched with no query or AI output; nothing went to a cloud AI service."
+- **Shot 09** caption (Limits): "Supported is not verified: every kept sentence cites a source, but one says a farther Moon looks larger (it looks smaller), and another doesn't answer the question. Open the sources to check."
+- Shot 4 is used cropped to the sources and the "Local knowledge as of …" line, so the reference-list excerpt (14.8.1) isn't shown as if it were a good answer.
+- `09-supported-not-verified.png` goes in "Privacy guarantees and known limits", next to the "Supported ≠ verified" row.
+- Claude adds the image links only once the files are in `docs/images/` (the folder is empty now), then checks every link and caption against what the image actually shows.
+
+#### 15. PLAN addendum (2026-11-22): Electron failures exit 0; model-chat times out at line 207. **Approved by Sandeep (2026-11-22), see 15.6**
+**15.1 Results reported by Sandeep:** offline-mode, local-knowledge (a–l), sensitive-guard (1–22) and safe-redirects passed, all EXIT 0. **model-chat FAILED but exited 0**: `Timed out waiting for condition. Last value: null` at `waitFor` (line 54), from `main` line 207.
+
+**15.2 Why a failure exits 0 (Claude, from the code)**
+- The failure handler is `main().catch(error => { console.error(error); app.quit(); process.exitCode = 1; })`. Electron's `app.quit()` ends the process with Electron's own exit code (0) and ignores `process.exitCode`; Sandeep's run confirms it.
+- **10 suites** have this exact handler: `auto-setup-shutdown`, `browser-features`, `attachments`, `generation-shutdown`, `model-chat`, `downloads`, `media-chat-live`, `permissions`, `ui-smoke`, `stage1-usability`.
+- The other 10 already use `app.exit(1)` or `process.exit(1)`: `ask-layout`, `chat-deletion`, `home-attachments`, `local-knowledge`, `media-chat`, `offline-mode`, `pdf-attachments`, `safe-redirects`, `sensitive-guard`, `single-instance`. That includes all four that passed today.
+- **Consequence:** earlier HANDOFF results recording "exit 0" for `browser-features`, `downloads`, `permissions`, `attachments`, `ui-smoke` and `stage1-usability` (Tasks 1a–1c) prove nothing on their own, unless the output was also read. After the fix they must be re-run, with the output read, before DONE.
+
+**15.3 What line 207 waits for, and the likely cause** ⚠️ *Corrected in §15.10: line 207 is the "Stopped" wait, and the cause is `bdd2ca1`'s streaming filter, not the `safeFetch` loopback block.*
+- Line 207 waits for at least one `.citation-link` in the answer to "Use the web: lists vs tuples" (web on, mocked model). The mock writes a cited sentence ("… [1]") only if the prompt contains `NUMBERED SOURCE EVIDENCE`, which needs readable source pages.
+- The fake search server returns source URLs `http://127.0.0.1:<port>/source-one` and `/source-two`. Source reading goes through `gatedSafeFetch` → `safeFetch`, which blocks loopback and private hosts (`src/safe-fetch.js` ~52). So both sources are refused, the mock answers without a citation, and no `.citation-link` appears. `null` is the expected last value.
+- **This task's code is very likely not the cause.**
+  - This branch's only `src/main.js` change is Chromium's resolver (`configureHostResolver`, PLAN §11.6).
+  - Source reads use the main process's own lookup (`safeFetchResolve` → Node `dns.lookup`), and IP literals need no lookup at all.
+  - The loopback block came with commit `79d93b2` (2026-11-09, safe redirects), before this branch.
+  - `model-chat` has no recorded run since then: Tasks 1b and 1c list it as "Not run (they need the real model)", which was wrong, since it uses a mocked engine. A failure would have exited 0 anyway.
+- **Confirmation (Sandeep, outside the sandbox; no stash, no new download):**
+  ```sh
+  cd ~/Sovereign-Browser
+  git worktree add /tmp/sov-main main
+  ln -s ~/Sovereign-Browser/node_modules /tmp/sov-main/node_modules   # same dependencies: only package.json scripts differ
+  cd /tmp/sov-main && npm run test:electron:model-chat; echo "EXIT: $?"
+  git -C /tmp/sov-main checkout --detach 79d93b2~1 && npm run test:electron:model-chat; echo "EXIT: $?"   # before safe-fetch
+  cd ~/Sovereign-Browser && git worktree remove --force /tmp/sov-main
+  ```
+  Expected:
+  - `main`: the same timeout at line 207 (and EXIT 0, which is the old handler) → pre-existing, not from this task;
+  - `79d93b2~1`: the test reaches the final JSON (`citationOpenedUrl` …) → the break came with safe-fetch.
+
+  If `main` passes instead, the cause is on this branch, and Claude reopens 15.3. (Worktree commands only; nothing is committed, no git config changes.)
+
+**15.4 Proposed changes (tests only; no app code, network behaviour or receipt change)**
+1. **Exit codes, all 10 suites:** replace `app.quit(); process.exitCode = 1;` with `app.exit(1);` in the failure handler. Success paths are unchanged.
+2. **Guard against it coming back:** a new `tests/electron-exit-codes.test.js` in `npm run check`. It reads every `tests/electron/*.test.js` and fails if any contains `process.exitCode =`, or a `.catch(`/error handler that calls `app.quit()` without `app.exit(`/`process.exit(` with a non-zero code.
+   - Tests first: it fails on today's files (lists the 10), and passes after change 1.
+3. **model-chat fixture** (only if 15.3 confirms the cause): serve the sources on test hostnames, the way `safe-redirects` does:
+   - `SOVEREIGN_TEST_DNS` maps `source-one.test` and `source-two.test` to a public-looking address with `connect: '127.0.0.1'`;
+   - `host-resolver-rules` maps them for Chromium (the citation tab);
+   - the search results use `http://source-one.test:<port>/…`;
+   - line 207's wait and the citation-tab check stay as they are.
+   - Also, on timeout, `waitFor` reports the last `#chat-thread` text, so a future failure shows what the page said.
+4. **Re-run, outside the sandbox, reading the output:** the 10 fixed suites, plus the 4 that passed today as a regression check. Expected: each prints its success output and `EXIT 0`.
+   - Exceptions: `media-chat-live` needs the internet and may be skipped with a note.
+   - `generation-shutdown` and `auto-setup-shutdown`: Claude checks before the run whether they need the real model. If they do, they're run on a profile copied from `~/sov-audit-base`, or skipped with a note.
+   - A suite that now exits 1 is a real, previously hidden failure: report it and don't change the test to make it pass.
+
+**15.5 Approval needed**
+1. Approve 15.4 (1, 2 and 4) now; Codex builds, Claude reviews.
+2. Run the 15.3 worktree check; 15.4.3 goes ahead only once it confirms the cause is pre-existing.
+3. Task 2c stays **not DONE** until 15.4.4 is green, with output read.
+
+**15.6 Sandeep's decisions (2026-11-22) and the Codex brief**
+- **Approved:**
+  - 15.4.1, 15.4.2 and 15.4.4: Codex builds, with the guard test first; Claude reviews.
+  - 15.4.3 waits for Sandeep's worktree check (15.3).
+  - `media-chat-live` may be skipped with a note.
+  - Any suite that newly fails is **reported to Sandeep, not adjusted to pass**.
+  - Task 2c stays not DONE until 15.4.4 is green with output read.
+- **Checked by Claude before the run (15.4.4):**
+  - `generation-shutdown` uses a mocked engine (`window.SovereignAIEngine` mock), so it needs no model.
+  - `auto-setup-shutdown` uses a brand-new temp profile, starts Online with auto-download on, waits until model setup has started (`checking`/`downloading`/`ready`/`error`), opens a local page and quits mid-setup. So it **starts a real model download** from Hugging Face/GitHub and abandons it. It needs the internet. It also leaves a partial download in `$TMPDIR/sovereign-auto-setup-profile-*` (the suite doesn't clean up). **Sandeep (2026-11-22): run it Online, then clean up.** Re-run instructions for this suite:
+    ```sh
+    npm run test:electron:auto-setup-shutdown; echo "EXIT: $?"
+    rm -rf "$TMPDIR"/sovereign-auto-setup-profile-*
+    ```
+
+**Codex brief: build 15.4.1 and 15.4.2 only (tests only; no change under `src/`)**
+1. **Guard test first: `tests/electron-exit-codes.test.js`** (plain Node, no Electron).
+   - For every `tests/electron/*.test.js` it fails, naming the file, if the file contains `process.exitCode =`, or if a `.catch(` handler or an error callback of `.then(…, error => …)` calls `app.quit(` without also calling `app.exit(` or `process.exit(` with a non-zero literal.
+   - Add it to the `check` script in `package.json`, next to the other `node tests/*.test.js` entries.
+   - Run it before step 2: it must **fail** and list exactly the 10 suites in 15.2. Put that output in CHANGES.
+2. **Fix the 10 suites:** in each `main().catch(...)` handler, replace `app.quit();` + `process.exitCode = 1;` with `app.exit(1);`. Keep `console.error(error)` first. Don't touch success paths or any other line.
+3. **Verify:** the guard test passes; `npm run check` exits 0; `git diff --check` is clean. `git diff --stat` shows only the 10 suites, the new test and `package.json`.
+4. **Don't** change `model-chat`'s fixture (15.4.3), any `waitFor`, timeouts or assertions, or any app code. Don't run the Electron suites in the sandbox (they abort there); Sandeep runs them.
+5. Write CHANGES (files, guard output before and after, check results). Don't commit.
+
+**15.7 Worktree check result (Sandeep, 2026-11-23) and fix 3 approval** ⚠️ *Corrected in §15.10: it broke at `bdd2ca1` (2026-11-15), not `79d93b2`; `79d93b2` passes.*
+- **Result:**
+  - `main`: the same timeout at `model-chat.test.js:207` ("Last value: null").
+  - `79d93b2~1`: **passes**, with the final JSON (`renderedTableAndCode: true`, `citationOpenedUrl: http://127.0.0.1:51897/source-two`, `retrievalRequests` including `/source-two`).
+  - The worktree has been removed.
+- **Conclusion:** the failure was introduced by `79d93b2` (2026-11-09, "Safe redirect handling …"). `safeFetch` blocks loopback hosts, and the fixture's sources were `127.0.0.1` URLs. It is **not** from this branch.
+- **Recorded:** `model-chat` was **silently broken from `79d93b2` (2026-11-09) until 2026-11-22**. Its failure handler exited 0 (PLAN §15.2), and HANDOFF wrongly listed it as "needs the real model, not run" in Tasks 1b and 1c. No app behaviour was affected: the test fixture, not the app, used loopback source URLs. But the citation path had no working end-to-end test in that period.
+- **Fix 3 approved** (Sandeep, 2026-11-23): serve the fixture's sources on test hostnames mapped to `127.0.0.1`, as `safe-redirects` does, and make timeouts print the chat text. **Test-only; `safeFetch` is not weakened.**
+
+**Codex brief: fix 3 (PLAN §15.4.3), `tests/electron/model-chat.test.js` only**
+1. **Test hostnames:**
+   - Set `process.env.SOVEREIGN_TEST_DNS` to map `source-one.test` and `source-two.test` to `{ address: '93.184.216.34', connect: '127.0.0.1' }`, before `require('../../src/main.js')`. This is the existing test-only hook: `safeFetchResolve` in `src/main.js`, gated by `testHook` (ignored in packaged builds); `safeFetch` connects to `record.connect`.
+   - Add `app.commandLine.appendSwitch('host-resolver-rules', 'MAP source-one.test 127.0.0.1, MAP source-two.test 127.0.0.1')` so the citation tab (Chromium) reaches the fake server. Copy the pattern from `tests/electron/safe-redirects.test.js` lines 14–15.
+   - In the fake `/search` response, use `http://source-one.test:${port}/source-one` and `http://source-two.test:${port}/source-two`. The search endpoint itself stays `http://127.0.0.1:${port}/search`.
+2. **Timeout context:** when a wait times out, the error must include the Ask page's last `#chat-thread` text (first 1500 characters).
+   - Either give `waitFor` an optional context getter used only in its error message, or print the thread text in the failure handler before `app.exit(1)`. Any `await` there must finish before `app.exit(1)`, and must not throw.
+   - The handler must still pass `tests/electron-exit-codes.test.js`.
+3. **Don't change:**
+   - any wait condition, timeout, assertion, the citation-tab check (`/\/source-(one|two)/`) or the mocked engine;
+   - anything under `src/` (in particular `src/safe-fetch.js`), or any other test file.
+4. **Verify:** `node --check tests/electron/model-chat.test.js`; `node tests/electron-exit-codes.test.js`; `npm run check` (the `EPERM` integration tests may fail in the sandbox: report, don't change); `git diff --check`. Don't run Electron; Sandeep runs `npm run test:electron:model-chat`.
+   - Expected there: the final JSON with `citationOpenedUrl` on `source-one.test` or `source-two.test`, `retrievalRequests` including `/source-one` and/or `/source-two`, and **EXIT 0**.
+5. Write CHANGES Round 3. No commit, push, stash or git config changes.
+
+#### 16. PLAN addendum (2026-11-23): what activates the test hooks, and a stricter gate. **Approved as Task 2d (Sandeep, 2026-11-23), see 16.6**
+**16.1 Precise answer: the test DNS hook**
+- **What activates it:** one **environment variable**, `SOVEREIGN_TEST_DNS` (a JSON map `{host: {address, connect}}`). No flag and no file.
+  - It is read once at startup: `src/main.js:58`, `testHook('SOVEREIGN_TEST_DNS', { isPackaged: app.isPackaged })`.
+  - It is applied in `safeFetchResolve` (`src/main.js` ~74) when `!app.isPackaged` and the host is in the map.
+  - `safeFetch` then checks the public-looking `address` and connects to `connect` (`src/safe-fetch.js` ~106). So a listed host can reach loopback or the LAN despite the private-address block.
+- **The only gate is `app.isPackaged === false`** (`src/test-hooks.js`).
+- **Can it be switched on during a normal `npm start`? Yes.**
+  - `npm start` runs `electron .` (entry `src/main.js`), and **this project has no packaged build at all**: no electron-builder or forge config. So `app.isPackaged` is always false, in every real use and in every audit run.
+  - `SOVEREIGN_TEST_DNS='{…}' npm start`, or the variable left exported in a shell profile, activates it.
+- **Correction (Claude):**
+  - `src/test-hooks.js`'s comment ("an environment variable can never change what an installed Sovereign does") is true only for packaged builds, which don't exist yet.
+  - Claude's own wording in PLAN §15.7 and REVIEW Round 25 ("ignored when packaged, so `safeFetch`'s loopback block still holds for real use") **overstated it**. For real use today, it holds only if the variable isn't set.
+
+**16.2 The same applies to every test switch (all checked)**
+- **Via `testHook` (unpackaged only, so always honoured today):**
+
+  | Variable | Effect |
+  |---|---|
+  | `SOVEREIGN_TEST_DNS` | the DNS override above |
+  | `SOVEREIGN_TEST_CA_FILE` | an extra trusted CA for `safeFetch`, which would let a local proxy read source fetches |
+  | `SOVEREIGN_TEST_OFFLINE_LAYERS` | **runs Offline mode with only some of its layers** |
+  | `SOVEREIGN_TEST_NETWORK_MODE` | forces the start mode |
+  | `SOVEREIGN_AUDIT_PROXY` | routes traffic through a proxy (TLS still verified) |
+  | `SOVEREIGN_CHAT_DELETE_TEST_ANSWER`, `SOVEREIGN_TEST_LEGACY_REMOVE` | test answers for chat deletion |
+
+- **Not gated at all (read straight from `process.env`, honoured even when packaged):**
+
+  | Variable | Effect |
+  |---|---|
+  | `SOVEREIGN_PERMISSION_TEST_ANSWER=allow` | **auto-grants website permission prompts**: camera, microphone, location and others |
+  | `SOVEREIGN_MEDIA_TEST_FIXTURES=1` | fixture media results, and **skips the real media preflight** |
+  | `SOVEREIGN_TEST_DOWNLOAD_DIR`, `SOVEREIGN_TEST_SAVE_DIALOG_DIR`, `SOVEREIGN_TEST_CONTEXT_MENU_ACTION` | test download folders and context-menu actions |
+
+- **Real features, not test hooks (stay as they are):** `SOVEREIGN_USER_DATA_DIR` (the audits use it with `npm start`), `SOVEREIGN_DATASET_*`.
+- **Also outside the hooks:** Chromium command-line switches such as `--host-resolver-rules` reach any Electron app, for example `npm start -- --host-resolver-rules=…`.
+- **Risk:**
+  - Anyone who can set Sovereign's environment can usually already run code as the user, so this isn't a remote hole.
+  - The realistic risk is **accidental**: a variable left exported from a test session silently weakens a normal session, for example Offline mode with fewer layers, or permissions auto-allowed. And an audit record can't currently show that none was set.
+
+**16.3 Proposed stricter gate (needs approval; it changes how network-affecting switches are honoured)**
+1. **Two conditions for every test switch:** a test hook is honoured only if **both** hold:
+   - the app is unpackaged (as now);
+   - **the Electron entry script is a test suite**: `require.main.filename` resolves inside `<repo>/tests/electron/`.
+   - Under `npm start` the entry is `src/main.js`, so every test switch is ignored **whatever the environment says**.
+   - The test suites start Electron with `tests/electron/<suite>.test.js` and then `require('../../src/main.js')`, and their child processes do the same (`offline-mode`, `single-instance`, `sensitive-guard` spawn `[__filename, …]`). So they keep working unchanged.
+   - Implemented in `src/test-hooks.js` (`testHook(name, { isPackaged, entry, env })`) and passed from `src/main.js`.
+2. **Bring the ungated switches under the same gate:** `SOVEREIGN_PERMISSION_TEST_ANSWER`, `SOVEREIGN_MEDIA_TEST_FIXTURES`, `SOVEREIGN_TEST_DOWNLOAD_DIR`, `SOVEREIGN_TEST_SAVE_DIALOG_DIR`, `SOVEREIGN_TEST_CONTEXT_MENU_ACTION`. All are read through `testHook`.
+3. **`SOVEREIGN_AUDIT_PROXY` (Decision 2):** the older session-proxy audit method (`docs/privacy-audit.md`) uses it with `npm start`.
+   - (a) Gate it like the rest, and that method then needs a test-entry wrapper.
+   - (b) Keep it available under `npm start` as a documented audit tool. It is already refused as an Offline allowlist entry, and TLS is still verified.
+   - Claude recommends **(b)**, plus item 5's warning.
+4. **Chromium switches (Decision 3):** at startup, if the entry isn't a test suite and `app.commandLine` has `host-resolver-rules`, `ignore-certificate-errors` or `proxy-server`:
+   - (a) refuse to start, with a message;
+   - (b) start, and show the item 5 warning.
+   - Claude recommends **(a)** for `ignore-certificate-errors` and `host-resolver-rules`, and **(b)** for `proxy-server`.
+5. **Visible warning (Decision 4):** if any test switch or audit switch is active in a non-test run, log it at startup and show a one-line notice in the toolbar ("Test or audit settings are active"). Whether it also appears in the Privacy Receipt is a receipt change, so it is listed separately for approval. Claude recommends the toolbar notice and log now, and the receipt later.
+6. **Tests first:**
+   - `tests/test-hooks.test.js`:
+     - entry `src/main.js` with the env set → `''`;
+     - entry `tests/electron/x.test.js` → the value;
+     - packaged → `''`;
+     - entry missing or unknown → `''`.
+   - A static check in `npm run check`: no `process.env.SOVEREIGN_(TEST|PERMISSION_TEST|MEDIA_TEST)…` read in `src/` outside `src/test-hooks.js`.
+   - All 20 Electron suites re-run and green (output read).
+7. **RUNBOOK (docs):** every run's summary header records `SOVEREIGN_ variables set: <names>` (from `env | grep -o '^SOVEREIGN_[A-Z_]*'`). Expected: only `SOVEREIGN_USER_DATA_DIR`.
+8. **README and evidence:** one limit line under the audit limits: "Test switches are honoured only when the app is started by a test suite" (after the change). Until then: "Test switches are read from environment variables in development builds; the audits set none except the profile folder."
+
+**16.4 Effect on the existing audits (honest status)**
+- The RUNBOOK starts every run with only `SOVEREIGN_USER_DATA_DIR=…`, and Sandeep's terminal sessions aren't known to export any other `SOVEREIGN_` variable.
+- But the summaries don't record it. Claude recommends Sandeep check `env | grep '^SOVEREIGN_'` in the shell the audits were run from, and that the answer is recorded in Round 26. No re-run is needed if it shows none.
+- **Result (Sandeep, 2026-11-23):**
+  - `env | grep '^SOVEREIGN_'` in that shell shows **no `SOVEREIGN_` variables set**.
+  - The audits set variables only inline, per command, never exported: `SOVEREIGN_USER_DATA_DIR` for every run, plus `SOVEREIGN_AUDIT_PROXY` for the first Run 1 only (`2026-11-19-online.txt`, the session-proxy method, which needs it by design).
+  - So no other test switch was active in any audit run, and **the audit results stand; no re-run.**
+  - Caveat: the check shows the shell's state now; for the audit days it rests on the inline-only practice above. From now on, the RUNBOOK header line (16.3 item 7, if approved) records it per run.
+
+**16.5 Decisions needed**
+1. Approve 16.3 items 1, 2, 6 and 7 (the gate itself, its tests, the RUNBOOK header line). Codex builds, Claude reviews.
+2. `SOVEREIGN_AUDIT_PROXY`: (a) or **(b)**.
+3. Chromium switches: (a), (b), or Claude's mix.
+4. Warning: toolbar and log now (recommended), and the receipt later?
+5. Is this a separate task (recommended: Task 2d, "test-switch gate", so Task 2c can close on its own evidence), or part of Task 2c before DONE?
+
+**16.6 Sandeep's decisions (2026-11-23)**
+1. **Items 1–4 approved, as a separate Task 2d** ("test-switch gate"): the gate on unpackaged + test-suite entry; the ungated switches under it; tests first; the RUNBOOK header line. Task 2d gets its own section and PLAN when it starts.
+2. **`SOVEREIGN_AUDIT_PROXY`** stays available under `npm start`, documented, **with a visible warning**.
+3. **Chromium switches:** **refuse to start** with `--host-resolver-rules` or `--ignore-certificate-errors` (unless the entry is a test suite); **warn** on `--proxy-server`.
+4. **Warning:** toolbar notice and log now; a Privacy Receipt row later, as a separate approval.
+5. **For Task 2c now (done by Claude, 2026-11-23; docs and one comment only):**
+   - README "Development runs" paragraph and evidence **C23** (❌ not yet): "In development runs (`npm start`), leftover test environment variables can weaken protections; a stricter gate is planned in Task 2d."
+     - Wording note: Sandeep's text said "fixed in Task 2d". Claude wrote "a stricter gate is planned in Task 2d", because the fix isn't built yet. To be changed to "fixed" when Task 2d is DONE.
+   - `src/test-hooks.js`: the comment is corrected (comment only, no code change).
+6. **Task 2c is DONE only when `model-chat` passes** (Sandeep).
+
+**16.7 Task 2d finding (Claude, 2026-11-23): IPC reach and sender checks. PLAN only, for Task 2d**
+- **The handler mentioned:** `search:get-settings` (`src/main.js:5032`). It returns the search settings and the last 30 search/source activity entries, and doesn't check its sender.
+- **Can website content reach the preload API? Not in normal use; enforced here:**
+  - **Web tabs:** `createWebView()` (`src/main.js` ~3004) has **no preload**, with `sandbox: true`, `contextIsolation: true`, `nodeIntegration: false` and `webviewTag: false`, so no `window.sovereign`.
+  - **Who gets the preload:** only `createTrustedInternalView()` (~3021, internal `sovereign://` tabs), the chrome view (`index.html`, ~3548), the sidebar (`sovereign://ask/sidebar.html`, ~3578), and the model-setup window (~861). *Correction (2026-11-24): the dataset window (~4601) and the legacy-chat probe (~6014) have **no** preload (`sandbox: true`, no `preload` key; their pages have CSP `default-src 'none'` and no scripts). Claude had listed them wrongly.*
+  - **A website can't open a `sovereign://` page:** web-tab navigation and `window.open` go through `normalizeAddress` (`src/address-input.js:47`), which allows only `http`/`https`. `<webview>` is refused for every web contents (`will-attach-webview` → `preventDefault`, ~4681).
+  - **Internal tabs can't be navigated away:** `will-navigate` → `preventDefault()` and `setWindowOpenHandler` → deny (~3159–3162). The preload doesn't run in subframes (`nodeIntegrationInSubFrames` is false by default), and the internal pages have no `<iframe>`.
+- **Gaps (findings for Task 2d):**
+  1. **The chrome view, sidebar and model-setup window have no `will-navigate` guard**, and their pages don't handle `dragover`/`drop`. Chromium navigates a page when a link or file is dropped on it and the page doesn't cancel the drop. So, **probably** (inferred from the code, not yet tested), dragging a link from a website onto the toolbar or the sidebar loads that website in a view that has the preload. It would then get the full `window.sovereign` API.
+  2. **`preload.js` has no origin check:** it exposes `window.sovereign` to whatever page loads in a preload-bearing view.
+  3. **Many handlers don't check their sender**, so any page with the preload can call them. Of 92 IPC handlers, 43 have no sender reference in their own body. After following delegates, these still have **no sender check**. The impact if gap 1 or 2 were used:
+     - **Network and Offline:** `network:set-mode` (switch Online/Offline), `network:add-allowed` / `network:remove-allowed` (**change the Offline allowlist**), `network:dismiss-intro`, `network:get-state`.
+     - **Privacy:** `privacy:update-settings` (**change the sensitive-topic setting**), `privacy:get-settings`, `privacy:get-receipts` / `privacy:get-latest-receipt` (**read past receipts, which include search queries**), `ai:get-network-log`.
+     - **Settings and model:** `settings:get`, `settings:update-ai`, `settings:update-downloads`, `settings:update-startup`, `model-setup:start`, `model-setup:cancel`, `model-setup:update-settings`, `model-setup:get-state`, `search:update-settings` (**change the SearXNG endpoint**), `search:get-settings`.
+     - **Downloads and files:** `downloads:download-url` (download from a URL), `downloads:open-file` (**opens a downloaded file with the OS**), `downloads:show-in-folder`, `downloads:get-state`, `downloads:cancel` / `pause` / `clear` / `clear-finished`.
+     - **Other:** `bookmarks:*`, `ask-handoff:create` / `consume`, `browser:copy-text`, `ai:update-tab-state`, `search:cancel`.
+     - **Check their sender** (tab kind and/or per-request grant): `search:query`, `search:media`, `search:read-sources`, `knowledge:search`, `knowledge:read-sources`, the saved-chat handlers (`chatSenderTab`), and the model-setup worker (`isModelSetupSender`). `knowledge:media` was not confirmed: its check wasn't found in the first lines of `handleKnowledgeMedia`. Task 2d verifies it.
+- **Answer to Sandeep:** today these handlers are reachable **only from Sovereign's own pages**, enforced by the preload placement and navigation rules above. But gap 1 is a plausible way for a website to end up in a preload-bearing view, and gaps 2 and 3 mean nothing else would stop it.
+- **Proposed for Task 2d (PLAN only, needs approval with Task 2d):**
+  - (a) `will-navigate` → `preventDefault()` and a deny `setWindowOpenHandler` on the chrome view, the sidebar, the model-setup window and the dataset window, plus `dragover`/`drop` cancelled in their pages;
+  - (b) an origin check in `preload.js`: expose `window.sovereign` only on `sovereign:` pages and the app's own `index.html`;
+  - (c) one shared main-process sender check for every handler: the sender is a known trusted view, its current URL is a `sovereign:` page or the app's `index.html`, and, where it matters, the right tab kind (for example Settings for `network:add-allowed` and `privacy:update-settings`);
+  - (d) tests first:
+    - an Electron test that drops a link onto the toolbar and the sidebar and checks that no navigation happens;
+    - a unit test for the sender check;
+    - a static check that every `ipcMain.handle`/`on` calls the shared check (with a short, reviewed allow-list for handlers that need no check).
+
+**15.8 PLAN addendum (2026-11-23): `model-chat` still fails after fix 3. Waiting for approval**
+- **Re-run (Sandeep, 2026-11-23):**
+  - 12 suites EXIT 0: `generation-shutdown`, `browser-features`, `downloads`, `attachments`, `permissions`, `ui-smoke`, `stage1-usability`, `offline-mode`, `local-knowledge`, `sensitive-guard`, `safe-redirects` and `auto-setup-shutdown` (Online, cleaned up).
+  - `media-chat-live` skipped (needs the internet; agreed).
+  - **`model-chat` EXIT 1**, so the exit fix works. It still times out at the citation wait (now line 209).
+- **What the log shows (Claude read `~/sov-electron-runs/model-chat.log`, 62 lines):**
+  - The timeout, then "Last #chat-thread text:". That text is the **first** 1,500 characters: the first four answers, all non-web, each correctly "No sources: answer from the AI alone; verify it."
+  - The web question ("Use the web: lists vs tuples") comes later and was **cut off**. **So the log doesn't show whether the `.test` sources were read.**
+  - Cause: Claude's fix 3 brief asked for the *first* 1,500 characters; it should have been the *last*. Claude's error; Codex built what was asked.
+- **What the code rules out (Claude):**
+  - `strictModelFlag` (Strict mode asks the model first): the mock's reply is not a category name, so the question isn't flagged.
+  - The local path: Kiwix isn't running, so `localAllowedNow` is false.
+  - `safeFetch` has no port rule, and the test DNS map applies to `gatedSafeFetch`, which is what source reading uses.
+  - The mock's trigger phrase `NUMBERED SOURCE EVIDENCE` is still in the source prompt (`src/search-utils.js` ~181).
+- **Remaining hypotheses** (code since `79d93b2~1`: `src/source-reader.js` −150 lines, plus Tasks 1a–2b in `ask.js`, `search-utils.js` and `answer-trust.js`):
+  - **H1:** the source pages are fetched, but the rewritten source reader finds no usable passage in the fixture page ("Lists are mutable. Tuples are immutable.", about 40 characters, no overlap with "Use the web: lists vs tuples" beyond two words). So the prompt has no numbered evidence and the answer no `[1]`.
+  - **H2:** the fetch of the `.test` hosts fails, which would show as a `source-error` activity entry.
+  - **H3:** source reading never runs (the web path stops earlier).
+- **Step 1, diagnostic only** (test file only; no wait, timeout, assertion, fixture or app change). Codex changes `model-chat`'s failure handler to print:
+  - (a) the **last** 2,000 characters of `#chat-thread`;
+  - (b) `retrievalRequests`, the paths the fake server received (move its declaration to module scope so the handler can read it);
+  - (c) the last 10 search/source activity entries, if the Ask page can read them (`window.sovereign.search.getSettings()` → `activity`), in a `try/catch`, with every read time-limited to 3 seconds (this also closes §14.8 item 4).
+
+  Sandeep re-runs `model-chat` once and sends the log. How to read it:
+  - **H1:** `/source-one` and/or `/source-two` appear in `retrievalRequests`, and there is no source error.
+  - **H2:** a `source-error` entry.
+  - **H3:** no `/source-*` request at all.
+- **Step 2, fix by finding** (a new short PLAN entry with the evidence, for approval; never by changing waits or assertions):
+  - **H1:** make the fixture pages realistic, so that the question's terms appear in a paragraph that answers it (for example "Lists are mutable … tuples are immutable …", several sentences). That is a fixture change, not an assertion change.
+    - If the reader's rejection looks wrong for real pages too, it goes in the P2 list.
+  - **H2 or H3:** follow the error to its cause. **Don't weaken `safeFetch`.** If it turns out to be an app bug, report it to Sandeep first.
+
+**15.9 PLAN addendum (2026-11-23): diagnostic result, and step 1b. Waiting for approval**
+- **The log** (`~/sov-electron-runs/model-chat-diag.log`, Sandeep's run 2026-11-23, EXIT not stated in the message; the test must have exited 1, since it printed the diagnostics):
+  - Still the citation wait (now line 210).
+  - **Thread tail:** the whole thread fits in 2,000 characters, and it **ends with the "Please keep running until I stop you" answer. "Use the web: lists vs tuples" is not in the thread at all.**
+  - **Fake server requests:** only `/search?q=difference+between+lists+and+tuples…`, the ordinary Search page at the start of the test. **No second `/search`, no `/source-*`.**
+  - **Activity:** only that first search (started, complete, 2 results).
+- **So none of H1–H3:** the web question never reached the search request, let alone source reading. The `.test` hostnames (fix 3) were never exercised.
+- **Also seen:** the "keep running" answer ends with the mock's full output ("Working...| Type | …"), not "Stopped.". The test's wait for "Stopped" passed, so "Stopped." was shown and then overwritten: the held generation wasn't actually ended by Stop. That may be the same root cause.
+- **What the code rules out (Claude):**
+  - The submit wasn't dropped by `running`: `setRunning` keeps `sendButton.disabled === running`, and the test waits for Send to be enabled.
+  - `requireSaveConsent` doesn't throw.
+  - `getEngineApi()` returns the test's mock, so Stop calls the mock's `stop()`.
+- **What's left:** in `answerQuestion`, the user message is pushed but **not drawn** until a later `renderThread()`. On the web path, between those two points, the code awaits `privacy.getSettings()`, `strictModelFlag()` (bounded to 4 s) and `ensureModelReady()`. Either one of these doesn't settle, or the call rejects with an error that only the Ask page's console shows. The log has neither the page's console nor its status line.
+- **Step 1b, diagnostic only** (test file only; no wait, timeout, assertion, fixture, mock-behaviour or app change):
+  - (a) Record the Ask page's console messages at level warning and error, plus uncaught errors and unhandled promise rejections, via `askPage.on('console-message', …)` once the page is found. Print the last 20 in the failure handler.
+  - (b) In the failure handler, also print the page state, each read limited to 3 s: `#status` text; `#send-chat.disabled`; `#stop-chat.disabled`; `#web-toggle` checked and disabled; the number of `.chat-message` elements (or the thread's child count); `window.__summarizeCalls.length`; and the last summarize prompt's first 200 characters.
+  - Sandeep re-runs once. Claude reads the log and writes the step-2 fix as its own PLAN entry.
+- **Faster option (Sandeep decides):** Claude runs `npm run test:electron:model-chat` itself in this environment (`npm run check`'s loopback tests already run here). That opens an Electron window on Sandeep's screen for about 30 s per run, and lets Claude iterate on diagnostics without a round trip. Still test-only and diagnostic-only until a step-2 PLAN is approved.
+
+**15.10 PLAN addendum (2026-11-23): root cause found by Claude's runs and a bisect. Corrections, and the step-2 fix. Waiting for approval**
+- **Claude's runs** (Sandeep approved Claude running `model-chat` itself, diagnostics only). Logs are in `~/sov-electron-runs/`.
+  - Run 1, current diagnostics: **EXIT 1**. Reproduces Sandeep's result.
+  - Run 2, step 1b (Codex Round 5): **EXIT 1**. Ask console: only Electron's dev CSP warning, no errors or rejections. Page state: `webChecked: false`, Send enabled, 8 thread children, 4 summarize calls.
+  - Run 3, timeline (Codex Round 6): **EXIT 1**. Decisive:
+    - Q4 "Please keep running…": `summarize-start` (…477), chunk "Working...", **no visible text**, 2-second hold, table chunk (…552), `summarize-end` (…556), status "Answer generated locally." (…559), Send enabled (…562).
+    - The test sees "Working" only at …595, **after the generation ended**, and clicks Stop. There is **no `stop-called`**: `stopAnswer` correctly returns, because `running` is already false.
+    - Test steps end at `click-stop`, with **no `saw-stopped`**.
+- **Root cause:**
+  - `safeStreamingReply` (`src/ask.js` ~2155, added in `bdd2ca1`, 2026-11-15, "no model-written numbers") shows streamed text only up to the last sentence end followed by whitespace, or a newline.
+  - The mock's held answer streams "Working..." with nothing after it, so it stays hidden until the hold ends. The test can therefore only press Stop after the answer has finished, so "Stopped" never appears.
+  - **This is a test-fixture assumption broken by an intended app change, not an app bug.**
+- **Bisect** (Claude, 2026-11-23; worktree with `node_modules` symlinked, removed afterwards; old test files exit 0 on failure, so judged by output):
+  - `79d93b2`: passes (final JSON, `citationOpenedUrl: http://127.0.0.1:…/source-two`);
+  - `bdd2ca1~1`: passes;
+  - `bdd2ca1`: **fails at line 207**.
+- **Corrections (Claude's errors):**
+  1. §15.3 said line 207 was the citation wait. **It is the "Stopped" wait** (`git show HEAD:tests/electron/model-chat.test.js`, lines 207–210). The `safeFetch` loopback explanation was never the cause of this failure.
+  2. §15.7 said the failure was "introduced by `79d93b2`" and that `model-chat` was "silently broken from 2026-11-09". **Corrected:** it passes at `79d93b2`, and is silently broken **from `bdd2ca1` (2026-11-15)** until 2026-11-22, hidden by the exit-0 handler. Sandeep's `main` vs `79d93b2~1` check was correct, but the range held two candidates.
+  3. **Fix 3** (`.test` hostnames) rested on that wrong cause. At `79d93b2` the citation step passed with `127.0.0.1` sources, possibly through search snippets rather than page reads (unverified). The `.test` fixture is harmless and exercises the real source-reading path, so Claude recommends keeping it. **Decision 3.**
+  4. §15.9 "Stop didn't end the held generation; 'Stopped.' was overwritten" was **wrong**. "Stopped" never appeared. Stop was pressed after the answer had finished, and the app correctly did nothing. **There is no evidence of a Stop bug.** As Sandeep asked, the fix adds a test that Stop really ends a live generation.
+- **Step 2, the fix (test-only; no app code; no wait or timeout changed):**
+  1. **Mock fixture:** the held answer's first chunk becomes a complete, visible line, `'Working on it.\n'`, so the "Working" text is on screen *while* the hold is live. The hold, the `stop()` flag and the `'aborted by test'` throw stay as they are. The existing "Working" and "Stopped" waits are unchanged.
+  2. **New assertions** (Stop really ends generation): after "Stopped", the mock records whether its hold loop threw because of `stop()`. Assert:
+     - (a) `stop()` was called during the hold, and the held `summarize` ended with `'aborted by test'`;
+     - (b) 2.5 s later, the held answer still reads "Stopped." and the post-hold table chunk was never streamed for that turn.
+  3. **Diagnostics:** keep the failure-only diagnostics (thread tail, server requests, activity, console, page state, timeline); they print nothing on success. Decision 4: keep (recommended), or remove once green.
+  4. **Then run it here:** expected EXIT 0, with the final JSON. The web/citation steps then run for the first time since 2026-11-15. **Any new failure there is reported to Sandeep, not adjusted.**
+- **Decisions needed:**
+  1. Approve step 2 items 1–2 (fixture line, Stop assertions).
+  2. Codex builds, Claude runs it here.
+  3. Keep fix 3's `.test` hostnames?
+  4. Keep the failure-only diagnostics?
+
+**15.11 PLAN addendum (2026-11-23): step 2 run. The Stop fix works; new assertion (a) is read too early. Waiting for approval**
+- **Run 4** (Claude, Codex Round 7 as built): **EXIT 1**, at the new assertion (a): `Stop did not abort the live held generation: {"stopRequested":true,"holdAborted":false,"holdCompleted":false}`.
+  - Timeline: Q4 `summarize-start` and chunk "Working on it.\n" (…957), **`stop-called` (…958)**, "Stopping..." (…959). The thread shows "Stopped.". So **Stop now reaches the live generation**.
+  - The assertion reads the mock's flags at once, but the mock's hold loop checks `__stopRequested` only every 50 ms, so it hadn't thrown yet: both flags were still false, and the page said "Stopping...".
+  - This is a **design error in Claude's §15.10 brief** (where the assertion is read), not an app failure.
+- **Experiment** (scratch copy outside the repo; repo file unchanged): the same test with assertion (a) moved to just **after** the existing `delay(2500)`, before (b). **EXIT 0**:
+  - all Stop assertions pass;
+  - the web question runs, and the fake server receives **`/source-one` and `/source-two`** (the `.test` hosts, through the real source-reading path);
+  - `citationOpenedUrl: http://source-two.test:…/source-two`; `renderedTableAndCode: true`.
+  - **No new failure in the web or citation steps.**
+- **Proposed change (needs approval; it moves a new, not yet approved-as-built assertion, and doesn't weaken it):** move the `holdState` read and its check from right after the "Stopped" wait to right after `await delay(2500)`. Its condition stays exactly as it is (`stopRequested === true && holdAborted === true && holdCompleted !== true`). No other change. Codex builds; Claude runs it here and reports the EXIT.
+
+### CHANGES (Codex)
+_(none: Claude drafted the docs at Sandeep's request.)_
+
+#### Round 1 (2026-11-19): host resolver (PLAN §11.6)
+- Files changed: `src/main.js`, `tests/network-exits.test.js`, and this CHANGES entry. Online always applies all three approved resolver options; Offline values and call sites stay unchanged. Removed `hostResolverChanged`.
+- Tests first: `node tests/network-exits.test.js` failed on Online startup (no configure call); after implementation it passed all resolver cases and static ordering checks. `network-mode` and `npm run check:tests` also passed.
+- `npm run check` exits 1: the sandbox denies the existing safe-fetch integration test's loopback listener (`listen EPERM 127.0.0.1`). Running `tests/offline-gate-integration.test.js` separately hits the same restriction. `git diff --check` passed.
+- `npm run test:electron:offline-mode`: build and syntax check passed, but Electron could not run in this sandbox (SIGABRT). The Electron test file is unchanged. Claude must rerun full checks and Electron outside the sandbox.
+- Manual verification: Sandeep runs RUNBOOK D's dry run, checking for no `doh.*` host or bare IP. Awaiting review and approval; not marked DONE.
+
+
+#### Round 2 (2026-11-22): Electron exit codes (PLAN §15.4.1–2)
+- Added `tests/electron-exit-codes.test.js` (plain Node; reads all 20 Electron suites), and added it beside the other Node tests in `package.json`'s `check` script. The guard rejects `process.exitCode =` and checks `.catch(...)` / `.then(success, error)` callbacks for `app.quit()` without a non-zero literal exit. Includes checks of both callback forms and success-path isolation.
+- Changed only the `main().catch(...)` failure handlers in `tests/electron/{auto-setup-shutdown,browser-features,attachments,generation-shutdown,model-chat,downloads,media-chat-live,permissions,ui-smoke,stage1-usability}.test.js`: kept `console.error(error)` first and replaced `app.quit();` plus `process.exitCode = 1;` with `app.exit(1);`. No fixture, wait, timeout, assertion, success-path or app-code edits.
+- Before fixing handlers, `node tests/electron-exit-codes.test.js` exited 1 with exactly these 10 suites; `npm run check` also stopped at this guard:
+  ```text
+  FAIL: unsafe Electron failure exits:
+    attachments.test.js
+    auto-setup-shutdown.test.js
+    browser-features.test.js
+    downloads.test.js
+    generation-shutdown.test.js
+    media-chat-live.test.js
+    model-chat.test.js
+    permissions.test.js
+    stage1-usability.test.js
+    ui-smoke.test.js
+  ```
+- After the fix, the guard exited 0:
+  ```text
+  PASS: Electron failure exit codes (20 suites)
+  ```
+- `npm run check` passed the guard, build, syntax checks and Node tests through safe-fetch unit tests, then exited 1 at the existing safe-fetch integration listener: `listen EPERM: operation not permitted 127.0.0.1`. Separately, offline-gate integration exited 1 for the same sandbox restriction. Those tests were not changed. The remaining network-mode syntax/unit checks, network-exits test, `npm run check:tests`, and media-chat-live syntax check passed. No Electron suites were run.
+- `git diff --check` passed. Full `git diff --stat` includes pre-existing worktree edits (including app code and docs); the new untracked guard is also absent from ordinary diff stats. Comparison against the starting file snapshot confirms this round changes only the 10 handlers, the check-script insertion, the new guard and this CHANGES entry. Existing edits are preserved; PLAN and REVIEW are unchanged by this round.
+- Manual verification: Sandeep runs PLAN §15.4.4 outside the sandbox, reading each suite's success output and exit status. Follow §15.6 for auto-setup-shutdown's Online run and cleanup; media-chat-live may be skipped with a note. Report newly exposed failures without adjusting fixtures or assertions. Claude review and external runs remain pending; Task 2c is **not DONE**. Nothing committed.
+
+
+#### Round 3 (2026-11-23): model-chat fixture on test hostnames (PLAN §15.4.3)
+- Changed only `tests/electron/model-chat.test.js` and this CHANGES entry, using the fix 3 approval in PLAN §15.7. Existing worktree edits are preserved; PLAN and REVIEW are unchanged.
+- Added the existing `SOVEREIGN_TEST_DNS` hook for `source-one.test` and `source-two.test`, each with `{ address: '93.184.216.34', connect: '127.0.0.1' }`, before loading main, plus Chromium `host-resolver-rules` following `safe-redirects.test.js`. Search results now use those hostnames; the search endpoint remains on loopback.
+- The async failure handler prints the first 1500 characters of the Ask page's `#chat-thread` text before `app.exit(1)`. Diagnostic lookup/read failures are caught so they do not prevent the non-zero exit. All waits, timeouts, assertions, the citation-tab regex and mocked engine remain unchanged. No source code, other tests or dependencies were changed.
+- Verification: `node --check tests/electron/model-chat.test.js` passed; `node tests/electron-exit-codes.test.js` passed (`PASS: Electron failure exit codes (20 suites)`); `git diff --check` passed. `npm run check` passed through safe-fetch unit tests, then exited 1 at safe-fetch integration with `listen EPERM: operation not permitted 127.0.0.1`. Offline-gate integration was checked separately and failed with the same sandbox restriction; neither integration test was changed.
+- Manual verification: Sandeep runs `npm run test:electron:model-chat` outside the sandbox and checks its exit status. Expected: final JSON with `citationOpenedUrl` on `source-one.test` or `source-two.test`, `retrievalRequests` including `/source-one` and/or `/source-two`, and exit 0. No Electron suites were run here. Claude review and external verification remain pending; Task 2c is **not DONE**. No commit, push, stash or git config changes.
+
+
+#### Round 4 (2026-11-23): model-chat failure diagnostics (PLAN §15.8 step 1)
+- Changed only `tests/electron/model-chat.test.js` and this CHANGES entry under Sandeep's 2026-11-23 approval. Moved the same `retrievalRequests` array to module scope; its pushes are unchanged.
+- Kept `console.error(error)` first. The failure handler now prints, in order, `Last #chat-thread text (tail):` with the last 2000 characters from the Ask page selected by `askTabContents()`, `Fake server requests:` with JSON of `retrievalRequests`, and `Recent search/source activity:` with JSON of the last 10 settings activity entries read via `askPage.executeJavaScript`.
+- Each read has its own try/catch and a 3000 ms `Promise.race` deadline, with timers cleared afterward. Timeouts print `<name>: timed out`; other read failures print unavailable. The handler proceeds to `app.exit(1)` even if a diagnostic fails. No waits, existing timeouts, assertions, fixtures, mocked engine, success path, app code, other tests or dependencies were changed. Existing worktree edits and PLAN/REVIEW are preserved.
+- Verification: `node --check tests/electron/model-chat.test.js`, `node tests/electron-exit-codes.test.js` (`PASS: Electron failure exit codes (20 suites)`), and `git diff --check` passed. `npm run check` passed through safe-fetch unit tests, then exited 1 at the existing safe-fetch integration listener with `listen EPERM: operation not permitted 127.0.0.1`; the later offline-gate integration test was not reached. No integration tests were changed and no Electron suites were run.
+- Manual verification: Sandeep runs `npm run test:electron:model-chat` outside the sandbox once and sends the log and exit status. On failure, expect the original error followed by the three labelled diagnostics in order and exit 1; use PLAN §15.8's H1/H2/H3 guidance to interpret the evidence before planning a fix. Review and external verification remain pending; Task 2c is **not DONE**. No commit, push, stash or git config changes.
+
+
+#### Round 5 (2026-11-23): model-chat console and page-state diagnostics (PLAN §15.9 step 1b)
+- Changed only `tests/electron/model-chat.test.js` and this CHANGES entry under Sandeep's 2026-11-23 approval. Immediately after finding the Ask page, a console listener records warning/error level, message, line and sourceId in module-scope `askConsole`, retaining the last 50. Renderer error and unhandledrejection listeners log the `[diag] error:` / `[diag] unhandledrejection:` prefixes with the available stack/message without suppressing the events or changing the mock.
+- After the three existing failure diagnostics, added `Ask console (last 20 warnings/errors):` with JSON of the last 20 records and `Ask page state:` with JSON of `#chat-status` text (the element used by `setStatus`), Send/Stop disabled state, Web checked/disabled state, thread child element count, summarize call count and the first 200 characters of the last call's joined message contents. Each diagnostic uses its own try/catch and the existing 3 s `readDiagnostic` helper. Original error stays first and `app.exit(1)` stays last.
+- No wait conditions, existing timeouts, assertions, fixtures, mock behaviour, success-path actions or output, app code, other tests or dependencies changed. Existing worktree changes and PLAN/REVIEW are preserved.
+- Verification: `node --check tests/electron/model-chat.test.js`, `node tests/electron-exit-codes.test.js` (`PASS: Electron failure exit codes (20 suites)`) and `git diff --check` passed. `npm run check` passed through safe-fetch unit tests, then exited 1 at safe-fetch integration with `listen EPERM: operation not permitted 127.0.0.1`; later checks, including offline-gate integration, were not reached. No Electron runs.
+- Manual verification: Sandeep runs `npm run test:electron:model-chat` once outside the sandbox and shares the log and exit status. On failure, expect the original error, the three existing diagnostics, then the console and page-state labels, followed by exit 1. Claude reviews the evidence before proposing a fix. Task 2c remains **not DONE**, pending review and external verification. No commit, push, stash or git config changes.
+
+
+#### Round 6 (2026-11-23): model-chat timeline diagnostics (PLAN §15.9)
+- Changed only `tests/electron/model-chat.test.js` and this CHANGES entry under Sandeep's diagnostic-only step 1b approval. Module-scope `testSteps` records timestamps immediately before question submissions and Stop, and immediately after every `waitFor` in `main()` resolves.
+- Immediately after mock installation, added a page timeline retaining 200 entries with details capped at 120 characters. A MutationObserver records Send disabled state, status text and thread child element count changes. Wrappers record summarize start (last message's first 60 characters), chunks (first 40), completion/error and Stop; they forward callback arguments/returns and preserve the original mock promise and thrown error. Passive-in-effect event listeners record Web changes and form submissions; the submit listener uses capture and does not prevent default.
+- The failure handler now prints `Test steps:` and `Page timeline:` (last 80 page entries), after existing diagnostics and before `app.exit(1)`. Each has its own try/catch and uses the existing 3-second `readDiagnostic` limit. No success-path timeline printing, wait condition/timeout, assertion, fixture, mock output, app source, dependency or network behaviour changes. PLAN and REVIEW are untouched.
+- Verification: `node --check tests/electron/model-chat.test.js`, `node tests/electron-exit-codes.test.js` (20 suites) and `git diff --check` passed. `npm run check` passed through safe-fetch unit tests, then stopped at safe-fetch integration with sandbox `listen EPERM: operation not permitted 127.0.0.1`; later checks were not reached. No Electron runs.
+- Manual verification: Sandeep runs `npm run test:electron:model-chat` outside the sandbox and shares the log and exit status. On failure, expect the existing diagnostics followed by timestamped `Test steps:` and `Page timeline:` JSON, then exit 1. Use the ordering to inspect Stop, Send re-enabling and the web question submission before proposing a fix. Task 2c remains **not DONE**, pending review and external verification. No commit, push, stash or git config changes.
+
+#### Round 7 (2026-11-23): model-chat Stop fixture and Stop assertions (PLAN §15.10 step 2)
+- Implemented items 1 and 2 under Sandeep's 2026-11-23 approval, changing only `tests/electron/model-chat.test.js` and this CHANGES entry. The held mock now streams `'Working on it.\n'` so the streaming filter displays it during the hold. The 40 × 50 ms loop, stop flag check and `'aborted by test'` throw retain their behavior; mock-only flags record abortion immediately before the throw or completion after the loop, and both reset before Q4.
+- After the unchanged "Stopped" wait, added strict checks that Stop was requested, the hold aborted and the hold did not complete. After a fixed `delay(2500)`, the text after the last Q4 question in `#chat-thread` must still include `Stopped` and exclude `Mutability`. Existing waits, timeouts and assertions, other mock outputs, fake server, `.test` hostnames and failure-only diagnostics remain unchanged. PLAN, REVIEW and app source were not edited.
+- Verification: `node --check tests/electron/model-chat.test.js`, `node tests/electron-exit-codes.test.js` (20 suites) and `git diff --check` passed. `npm run check` passed through safe-fetch unit tests, then stopped at safe-fetch integration with sandbox `listen EPERM: operation not permitted 127.0.0.1`; later checks were not reached. No Electron runs.
+- Manual verification: Claude runs `npm run test:electron:model-chat` outside the sandbox and checks for the final JSON and exit 0. The test must stop the live hold, retain the stopped answer after 2.5 seconds, then pass the existing web/citation checks. Report any newly exposed failure without adjusting it. Task 2c remains **not DONE**, pending Claude review and Electron verification. No commit, push, stash or git config changes.
+
+#### Round 8 (2026-11-24): model-chat assertion (a) after the 2.5 s settle (PLAN §15.11)
+- Under Sandeep's 2026-11-24 approval, moved only the `holdState` read and its check in `tests/electron/model-chat.test.js` to immediately after `await delay(2500);` and before the `stoppedReply` read. The condition and error message are unchanged. No other waits, timeouts, assertions, fixtures, mocks or diagnostics changed; PLAN and REVIEW were not edited.
+- Verification: `node --check tests/electron/model-chat.test.js`, `node tests/electron-exit-codes.test.js` (20 suites) and `git diff --check` passed. `npm run check` passed through safe-fetch unit tests, then failed at safe-fetch integration because the sandbox denied `listen` on `127.0.0.1` (`EPERM`); subsequent checks were not reached. No Electron runs.
+- Manual verification: Claude runs `npm run test:electron:model-chat` outside the sandbox and checks for the final JSON and exit 0, including the Stop and existing web/citation checks. Task 2c remains **not DONE**, pending review and Electron verification. No git commit, push, stash or config changes.
+
+
+### REVIEW (Claude)
+#### Draft review (2026-11-17): README, evidence and LICENSE drafted; SearXNG pin waiting for approval (not DONE)
+**Written by Claude (docs only, no code):**
+- `README.md`, rewritten for research readers: pitch, abstract (267 words), research question, features (each linked to evidence rows), Mermaid architecture, evaluation and results, guarantees vs. known limits, setup, testing, status/roadmap, licence and credits, and "Before releasing" (unchanged).
+  - **Broken link fixed:** `docs/images/sovereign-browser.png` is gone. The screenshot list is an HTML comment (not rendered) until Sandeep adds the images to `docs/images/`.
+  - Careful wording until the audits: the audit result is stated as "earlier build (2026-09-24)", with "a fresh audit of the current build is in progress". The Kiwix capture is cited from HANDOFF. Answer accuracy is "not yet measured". "Supported ≠ verified" is stated in the features, the limits table and the abstract.
+- `docs/evidence.md`: claim table, 24 rows (C1–C21 plus C2a, C3a, C8a): 17 ✅ (C6 only for http(s) pages), 4 ⚠️ (C2, C3, C9, C10: audit pending or manual), 3 ❌ not claimed (C14, C16, C20). Every path and test name was checked against the repo.
+- `LICENSE`: MIT, Copyright (c) 2026 Sandeep Shah.
+- PLAN §8 (decisions) and §9 (audit steps) added.
+
+**Facts checked while writing:** default model and size (`src/main.js`: about 705 MB plus a WebGPU runtime); 15 guard categories (`LABELS`); receipt categories; Settings label "SearXNG endpoint"; offline-mode fresh phase asserts Offline and no model download; `tests/sensitive-gate.test.js` crisis → 0 Kiwix calls; 20 unit test files all in `npm run check`; 20 Electron scripts.
+
+**Setup text added (README only):** start SearXNG with your own `SEARXNG_SECRET` (`openssl rand -hex 32`). The compose file already reads that variable; no file changed.
+
+**Waiting for approval: pin the SearXNG image by digest** (Docker change, not made).
+- Read from the image already running locally (`docker image inspect`, no pull):
+  - `searxng/searxng@sha256:f1aca3f61c7ff4552b8d54c0ab7fb458e907b78f51c503210cf450c900adca2c`;
+  - version label `2026.9.15-ca4965040`, built 2026-09-15.
+- Proposed line in `searxng/docker-compose.yml`:
+  `image: docker.io/searxng/searxng:2026.9.15-ca4965040@sha256:f1aca3f61c7ff4552b8d54c0ab7fb458e907b78f51c503210cf450c900adca2c`
+  - Same image Sandeep runs today, so no new download and no behaviour change. Claude hasn't checked that the `2026.9.15-ca4965040` tag exists on Docker Hub. The digest alone decides what runs; if Sandeep prefers, use `searxng/searxng@sha256:…` without the tag.
+- Once approved, the README "Guarantees" table can say SearXNG is pinned too.
+
+**Results:** `npm run check` **exit 0**; `git diff --check` clean.
+
+**Files:** `README.md`, `docs/evidence.md` (new), `LICENSE` (new), `docs/HANDOFF.md` (Task 2c PLAN §8–9, this REVIEW). Nothing committed. Not DONE.
+
+**Next:** Sandeep approves (or edits) the digest pin, reviews the README draft, takes screenshots, and runs the §9 audits. Then Claude upgrades the ⚠️ claims.
+
+#### Round 2 (2026-11-17): Sandeep's abstract, Offline-default check, SearXNG pinned (not DONE)
+- **SearXNG pin approved and applied:** `searxng/docker-compose.yml` now uses `docker.io/searxng/searxng:2026.9.15-ca4965040@sha256:f1aca3f6…adca2c`. `docker compose config -q` OK. README setup says both images are pinned.
+- **"Offline by default" checked against the code** (`initialNetworkState`, `src/network-mode.js:115–123`; unit cases in `tests/network-mode.test.js`; Electron phases fresh/old/old-again/corrupt):
+  - no preferences file (new install) → Offline;
+  - unreadable preferences → Offline;
+  - preferences from before Offline mode (no saved mode) → **Online**, with a one-time choice banner;
+  - otherwise the saved choice.
+  - So it is the default for **new installs only**; Sandeep's manual tests used existing profiles, which is why they started Online. Sandeep's abstract wording (no default claim) is used as given. README feature text and limits table now say "new installs"; evidence C5 rewritten with the full rule.
+- **Abstract:** replaced with Sandeep's version (257 words), verbatim.
+- **Crisis texts await professional review:** added to the README limits table (guard row) and to evidence C8a.
+- "Earlier build" wording kept until the fresh audit.
+- `npm run check` **exit 0**; `git diff --check` clean. Nothing committed. Not DONE.
+
+#### Round 3 (2026-11-17): audit runbook written (not DONE)
+- New `docs/audits/RUNBOOK.md`: copy-paste steps for §9 (prep, Online, Offline, sensitive, query-text check, Kiwix capture, clean-up). No placeholders: dates use `$(date +%F)`, paths and commands come from `docs/privacy-audit.md` and `docs/local-knowledge-setup.md`.
+- **Fresh profiles and the model:** the Online run uses a brand-new profile and captures the ~705 MB model download on purpose. The Offline, sensitive and Kiwix runs each use their **own new copy** of a base profile that holds only the model cache and settings (prepared without the audit proxy, saved mode Offline, local knowledge on). Receipts are kept in memory only (`privacy-receipt.js` has no storage), so each copy starts with an empty receipt.
+- Checked in code: with `SOVEREIGN_AUDIT_PROXY` set, Offline mode keeps the audit proxy instead of its black-hole proxy (`applyNetworkModeToSession`, `src/main.js`), so the Offline capture is meaningful. Export default path is `~/Downloads/sovereign-privacy-receipts-<UTC date>.json`; the runbook moves the newest one. Button and setting labels checked ("Search web for images", "Use local knowledge", Strict).
+- The sensitive run snapshots the hostname log after the sensitive question and before the control question (expected 0 hosts).
+- No code change. `npm run check` exit 0. Nothing committed. Not DONE.
+
+#### Round 4 (2026-11-19): Run 1 result, coverage gap found, Runs 2–3 paused (not DONE)
+- Run 1 (Online): `PASS`, nothing in the capture that is missing from the receipt, no cloud-AI host. Summary kept as recorded in `docs/audits/2026-11-19-online.txt`, plus a gap note at the end.
+- **Gap:** the source-page hosts are in the receipt but not in the capture. Main-process Node fetches (source reads, image checks) and their DNS ignore the session proxy, so the session-proxy capture doesn't cover them. Details, options and recommendation in PLAN §10. **Waiting for Sandeep's decision.**
+- Docs updated to match: note in the Run 1 summary, RUNBOOK (pause note before Run 2, Online expectations, "Limits of this audit"), README (new "Limits of this audit" under Evaluation).
+- No code change. Nothing committed. Not DONE.
+
+#### Round 5 (2026-11-19): option (a) approved; capture scripts and RUNBOOK updated, dry run next (not DONE)
+**Sandeep's decisions:** (1) option (a), local capture mode; (2) the mitmproxy network extension is approved for passthrough only, with no mitmproxy CA installed or trusted, and disabled after the audit; (3) the `log-hosts.py` and `audit-compare.js` changes are approved, with tests.
+
+**Checked in the source (mitmproxy 12.2.3 and mitmproxy_rs 0.12.6, its lowest allowed version):**
+- **Process matching:** `--mode local:<text>` is a **case-sensitive substring match on the full executable path** (`proc_pidpath` from the flow's audit token; Swift `processName.contains(name)`). A number is a PID. `describe_spec` checked in the bundled 12.2.3.
+  - So `local:Electron` **would catch VS Code** (`…/Visual Studio Code.app/…/Electron Framework.framework/Helpers/chrome_crashpad_handler`) and any other path containing "Electron".
+  - The RUNBOOK targets `$PWD/node_modules/electron/dist/Electron.app/`, which covers Sovereign's main process and all helpers and nothing else. With that target, VS Code is **not** caught, so Terminal.app is not required.
+  - PID targeting is not used, because helpers get new PIDs.
+- **Loopback and DNS:** the redirector has no loopback or port-53 exception, so loopback is filtered in the addon. DNS through `mDNSResponder` belongs to another process and isn't captured. The RUNBOOK adds `sudo tcpdump … port 53` to the Offline run as supporting evidence, and lists DNS as a limit.
+- **Hooks:** for ignored (passthrough) connections, mitmproxy fires no `tcp_*`, `udp_*` or `tls_*` hooks (`TCPLayer(ignore=True)` has no flow).
+  - Script addons run **before** the built-in `NextLayer`, so the addon parses the peeked client bytes itself.
+  - In local/transparent mode with the default `connection_strategy=eager`, `server_connect` fires **before** the ClientHello arrives. So the name is logged in `next_layer`, and the bare-IP fallback only when the connection closes, or in `done()`.
+
+**Built (Claude; test tooling only, no `src/` change):**
+- `scripts/log-hosts.py`:
+  - logs the TLS SNI, the plain-HTTP Host header (no path) or the QUIC SNI (via mitmproxy's own parser, when available), and otherwise the bare destination IP;
+  - never logs loopback (`127.0.0.0/8`, `::1`, `::ffff:127.*`, `localhost`, `*.localhost`), by destination or by name;
+  - keeps the regular-proxy hooks (`http_connect`, `request`);
+  - ignores CONNECT bytes in `next_layer`, and looks for a name again when a client connection's destination changes. This was a bug found in the real-mitmdump check below.
+- `scripts/audit-compare.js`:
+  - bare IPs in the capture go to a new section, `BARE IPs IN CAPTURE, NO HOSTNAME (check by hand)`, and make the verdict `REVIEW`;
+  - a bare IP that the receipt names is a match;
+  - loopback capture lines are dropped;
+  - `[v6]:port` is normalised.
+- Tests:
+  - `tests/log_hosts_test.py` (SNI, fragmented records, truncated data, no SNI, Host header, loopback, eager ordering, IP fallback at close and at `done()`, the CONNECT-then-TLS case, dedup, state clean-up);
+  - `tests/log-hosts.test.js` runs it with `python3 -I`, and is added to `npm run check`, which **now needs `python3`** (present on this Mac, 3.14.4; no package installed);
+  - new cases in `tests/audit-compare.test.js`.
+- **Real mitmdump 12.2.3 check** (loopback only, no external traffic):
+  - regular mode with `--ignore-hosts '.*'`, a local `openssl s_server`, and curl with SNI `sni-test.example` via `--connect-to`;
+  - with the loopback filter turned off in a scratch wrapper, the log was `127.0.0.1`, `sni-test.example` (the SNI was read from the passthrough ClientHello);
+  - with the real filter, nothing was logged;
+  - local-mode-specific behaviour (destination known from the start, QUIC) is first exercised in the dry run.
+
+**Docs:**
+- `docs/audits/RUNBOOK.md` rewritten around local capture: target and approval (§0.6), CA check, a shared capture terminal, the **dry run (D)** first, Runs 1–3 without `SOVEREIGN_AUDIT_PROXY` and saved as `*-local`, a DNS `tcpdump` in the Offline run, extension disable in §6.1, and updated limits.
+  - Dry-run pass condition: every source-page host in the receipt is captured (main-process Node), at least one thumbnail host is captured, and `example.com` from a browsing tab is captured (pure Chromium helper; not in the receipt by design). Nothing else is captured but missing from the receipt.
+- README "Limits of this audit" and a pointer note in `docs/privacy-audit.md`.
+
+**Not verified yet (dry run):**
+- the exact macOS approval prompts;
+- that the Redirector app lands in `/Applications`;
+- that loopback flows don't break SearXNG or Kiwix under capture;
+- the exact `systemextensionsctl` state after disabling.
+
+**Also:** `.gitignore` now ignores `__pycache__/`, which `mitmdump -s` can create next to the addon; the test sets `dont_write_bytecode`.
+
+**Results:** `npm run check` exit 0; `git diff --check` clean. Nothing committed. Not DONE.
+
+**Next:** Sandeep runs §0.6 and the dry run (D) and reports the result. Runs 1–3 only after the dry run passes.
+
+#### Round 6 (2026-11-19): dry run reviewed. Not passed (DoH and DNS from Chromium); PLAN §11 waiting for approval (not DONE)
+- Dry run: main-process Node fetches **are now captured** (all 3 source-page hosts). Helper capture is also shown: `thumb.wikimedia.org` was renderer-only in the receipt and was captured, and `doh.xfinity.com` can only come from Chromium's network service.
+- Not passed:
+  - `doh.xfinity.com` and the bare IP `2001:558:feed::1` come from Chromium's built-in resolver and automatic DoH upgrade (Electron defaults on macOS; this Mac's nameservers are Comcast's). Neither is in the receipt.
+  - `example.com` was not captured; most likely it was never requested (see §11.2).
+- PLAN §11: cause, the three options, recommendation (a), proposed dry-run changes. No code or RUNBOOK change made. `git diff --check` clean; no code changed, so `npm run check` was not re-run. Nothing committed. Runs 1–3 on hold.
+
+#### Round 7 (2026-11-19): decisions recorded; Codex brief, RUNBOOK and README updated (not DONE)
+- PLAN §11.5 records Sandeep's decisions. §11.6 is the **Codex build brief** for option (a): `applyHostResolverMode` only; exact Online and Offline objects; tests for startup Online, Offline unchanged, leaving Offline, proxy layer off, and a throwing call; a static order check in `whenReady`; the Offline Electron test unchanged and passing.
+- Claude made **no `src/` change**: under the team rule, app code is Codex's CHANGES.
+- `docs/audits/RUNBOOK.md` dry run (approved changes):
+  - pages `https://example.org` and `http://neverssl.com`, each with a written-down visible load;
+  - a renderer-only thumbnail check (hosts with no main-process image row);
+  - a DoH/ECH host check;
+  - an optional read-only `lsof` cross-check;
+  - pass conditions 1–6, including no DoH host and no bare IP;
+  - a note to run the dry run only after the §11 change is in the build;
+  - the DNS limit is updated.
+  - The new check script was run against the 2026-11-19 dry-run files and reproduced the findings:
+    - all 3 source pages captured;
+    - `thumb.wikimedia.org` renderer-only and captured;
+    - `doh.xfinity.com` flagged.
+- README:
+  - the DNS trade-off is stated: all DNS goes through macOS, with no app-level DoH or ECH;
+  - names can be seen on untrusted networks and by the provider;
+  - recommendation to turn on encrypted DNS in macOS;
+  - Private Relay covers Safari only;
+  - plus a "Limits of this audit" line on the dry-run finding.
+  - **This README text describes behaviour after Codex's change.** Claude checks it in REVIEW before DONE.
+- Still open: Decision 2 (did `example.com` visibly load?). It no longer blocks anything.
+- `npm run check` exit 0 and `git diff --check` clean (below). Nothing committed. Not DONE.
+
+#### Round 8 (2026-11-19): REVIEW of Codex Round 1 (host resolver, PLAN §11.6). Approved by Claude; dry run next (not DONE)
+**Scope check:**
+- Codex changed only:
+  - `src/main.js`: `applyHostResolverMode`, the two constants above it, and the removed `hostResolverChanged` variable, which isn't used anywhere else (`grep`);
+  - `tests/network-exits.test.js`;
+  - its own CHANGES entry.
+- Compared with a snapshot taken before the run: no other file, no PLAN/REVIEW text, nothing staged.
+- Call sites unchanged: `whenReady` and `setNetworkMode`.
+
+**Code:** matches §11.6 exactly.
+- Online: `{ enableBuiltInResolver: false, secureDnsMode: 'off', enableAdditionalDnsQueryTypes: false }`, on every call.
+- Offline: `{ secureDnsMode: 'secure', secureDnsServers: ['https://127.0.0.1:9/dns-query'] }`, the same values as before.
+- The `typeof` guard and the `try/catch` with `logAi` are kept.
+- Nit, not blocking: the "Layer 3" comment now sits above the two constants; it still describes the Offline object.
+
+**Tests:** the new block in `tests/network-exits.test.js` runs the real function and constants, taken from the source, in `vm`. It compares against literal objects:
+- startup Online;
+- Offline (the old values);
+- leaving Offline;
+- Offline with the proxy layer off → Online;
+- a throwing call is logged, not thrown;
+- static order: `applyHostResolverMode()` comes before `trackNetworkSession(`, `createWindow(`, `restoreSavedSessionWindows(` and any `new BrowserWindow(` in `whenReady`; `setNetworkMode` still calls it.
+
+**Checked by Claude, outside the sandbox:**
+- **Tests first:** run against the pre-change `main.js` (a snapshot loaded through an `fs.readFileSync` shim), the new test fails with `Online startup configures the system resolver`. With the change, it passes (`host-resolver tests passed`, `network-exits tests passed`).
+- `npm run check` **exit 0**. Codex's run failed only because its sandbox denies loopback listeners (`EPERM`).
+- `npm run test:electron:offline-mode` **exit 0**, test file unchanged. All phases ok:
+  - main: fetch, ws and img blocked; summary "Offline: 0 external requests · 3 blocked (offline mode)";
+  - webrequest, proxy, confirm, fresh (offline), old (online), old-again (online), corrupt (offline).
+- `npm run test:electron:safe-redirects` **exit 0** (`{"ok":true}`). It also uses host-resolver rules, so it was re-run as a precaution.
+- `git diff --check` clean.
+
+**What the tests can't show:** whether Chromium really stops its own DNS and DoH. Electron exposes no way to read back the resolver settings. That is what the dry run checks.
+
+**README:** the DNS trade-off text added in Round 7 now matches the code.
+
+**Still open:** Decision 2 (did `example.com` visibly load?). The answer came through as the unfilled choice "[yes, it loaded / no, it didn't load / not sure]", so it isn't recorded. It no longer blocks anything.
+
+**Next: Sandeep runs RUNBOOK §0.2 and D** (dry run with the §11 change, local capture). Runs 1–3 only if D passes. Nothing committed. Not DONE.
+
+#### Round 9 (2026-11-19): dry run #2 reviewed. `REVIEW`, not passed; PLAN §12 waiting for approval (not DONE)
+- The §11 change works for DoH: no `doh.*` host. A renderer-only thumbnail host and both browsing tabs were captured.
+- Not passed:
+  - no source pages, because Search the web wasn't ticked (run error; redo);
+  - bare IPs of the two Xfinity nameservers;
+  - NeverSSL's AWS IPv6 (a connection with no request bytes).
+- Code checked: main-process DNS uses only `dns.lookup`, and the resolver setting is app-wide and applied before any window. Leading explanation: macOS's resolver sends DNS for Sovereign and the redirector attributes it to Sovereign. A read-only `tcpdump -k` run (§12.3) is proposed to confirm it before any fix.
+- Follow-up recorded, not in scope: unhandled HTTP 403 from `media:preflight` (Wikimedia).
+- Docs only (this PLAN and REVIEW). No code, RUNBOOK or README change. Nothing committed. Runs 1–3 on hold.
+
+#### Round 10 (2026-11-19): Decisions 3 and 4 put into the RUNBOOK (docs only; not DONE)
+Decisions are recorded in PLAN §12.6. `docs/audits/RUNBOOK.md` D changes:
+- **Step 2:** check the receipt for source-page rows before going on, and ask again with Search the web ticked if there are none.
+- **Step 5:**
+  - `http://example.com` (typed with `http://`, check that the address bar stays `http://`) replaces `http://neverssl.com`;
+  - the optional `lsof` step now refers to that tab;
+  - the check script, conditions 3–4 and the dry-run record use `example.com`.
+- **New block after the compare:**
+  - prints the raw bare-IP lines with their ports (the compare script drops ports);
+  - prints `dig +short A/AAAA` for `example.org` and `example.com`;
+  - the pattern was tested on sample lines (hostnames such as `cafe.de` are not matched).
+- **Condition 6:**
+  - a bare IP is allowed only on port 80/443, and only if it is an address of `example.org`/`example.com` from that output. It is recorded as a "browsing-tab preconnect";
+  - anything else is reported, including the DNS-server IPs (Decision 2 still open).
+- **Record block:** `COM_LOADED` and a `PRECONNECTS` line.
+- **New prerequisite:** run D only once the §12 port logging is in `scripts/log-hosts.py`.
+  - **Not built yet.** It is test tooling (Claude). It would be built together with the Decision 2 outcome, because both change how nameless flows are labelled (`<ip>:<port>`, `[v6]:<port>`, `dns:<ip>`), with tests.
+
+No code or script change. Nothing committed. Not DONE.
+
+#### Round 11 (2026-11-19): §12 capture change built (Decision 2, macOS branch, plus port logging); dry run #3 next (not DONE)
+Test tooling and docs only. Claude built it, as in Round 5. No `src/` change.
+
+**`scripts/log-hosts.py`:**
+- `destination_label(host, name, port)`: a nameless flow to port 53 is logged as `dns:<ip>`; any other nameless flow as `<ip>:<port>` or `[<v6>]:<port>`.
+- A parsed name still wins over the IP. Loopback is never logged, including loopback DNS.
+- Without a usable port, the old bare-IP line is kept.
+- Per-connection state now tracks the port too.
+- `_record` takes a label that is already clean, and every hook goes through `destination_label`.
+- DNS payloads are never parsed, so names that were looked up are never written.
+
+**`scripts/audit-compare.js`:**
+- `captureLabel` keeps ports on bare IPs and keeps `dns:` lines.
+- `compareHosts(…, { nameservers })` sorts `dns:` lines into `dnsSystem` (one of the Mac's nameservers) and `dnsOther` (needs review).
+  - With no list, every `dns:` line needs review.
+  - `dns:` lines never count as hosts for matching or for "in receipt but not in capture".
+- CLI: `--nameservers <ip,…>`; output sections for nameservers, DNS via the system resolver, and DNS to other servers.
+
+**Tests:**
+- `tests/log_hosts_test.py`: IPv4/IPv6 with port, IPv6 brackets, `dns:` for IPv4/IPv6 servers, loopback DNS dropped, a name winning over IP:port, invalid ports, a DNS query containing a test word that isn't logged, one line per server, the same IP on two ports.
+- `tests/audit-compare.test.js`: labels, loopback `dns:` dropped, system vs other servers, an IP:port matching a receipt IP, PASS with only system DNS, REVIEW with no list, argument parsing.
+- **Not tests-first:** the pre-change copy of the uncommitted Round 5 scripts wasn't kept, so the new tests weren't run against it. The old end-to-end expectation (bare IPs without a port) would fail with the new code.
+
+**Docs:**
+- **RUNBOOK:**
+  - method paragraph;
+  - `NS` from `scutil --dns`, with a note to stay on the same network;
+  - nameservers in the summary header;
+  - every compare call gets `--nameservers "$NS"`;
+  - D gets condition 7 (DNS), and condition 6 loses its DNS-server line;
+  - prerequisite with a self-check;
+  - Online expects only system-nameserver DNS;
+  - **Offline expects `dns:` lines: 0** (app-attributed; the `tcpdump` stays supporting);
+  - sensitive snapshot covers `dns:` lines;
+  - condition 5 has an exception for system-wide encrypted DNS;
+  - limits rewritten (DNS: which server, not which names; cache; encrypted DNS) plus the NeverSSL/mitmproxy note.
+- README "Limits of this audit" (two DNS lines) and the note in `docs/privacy-audit.md`.
+
+**Checked:**
+- CLI run with sample lines and this Mac's nameservers: the output sections are right;
+- the D bare-IP pattern ignores `dns:` lines;
+- `npm run check` **exit 0** (`log-hosts tests passed`, `audit-compare tests passed`); `git diff --check` clean; no `src/` file changed in this round.
+
+Nothing committed. Not DONE. **Next: Sandeep runs dry run #3 (RUNBOOK §0.2, then D).**
+
+#### Round 12 (2026-11-19): dry run #3 checked. **PASSED**; Runs 1–3 may go ahead (not DONE)
+Claude checked the saved record `docs/audits/2026-11-19-dryrun-local.txt`, the raw `mitm-hosts.txt` (22:41) and `/tmp/sov-dry.receipts.json` (22:42; receipt 03:35–03:38Z). All 7 conditions hold:
+1. Source pages `nesdis.noaa.gov`, `spaceplace.nasa.gov` and `weather.gov`: all captured. The main process's Node fetches are seen.
+2. Renderer-only thumbnail host `thumb.wikimedia.org`: captured. No thumbnail host had a main-process row.
+3. `example.org` and `example.com`: captured, and written down as loaded.
+4. Captured but not in the receipt: only those two.
+5. No DoH or ECH host. All 8 capture lines are accounted for: 5 matched, 2 browsing tabs, 1 `dns:`.
+6. No bare IP.
+7. DNS: only `dns:2001:558:feed::1`, one of the system nameservers. Nothing went to another server.
+
+Also: "In receipt but not in capture" is only loopback (SearXNG, Kiwix). The query-text grep on the record gives 0.
+
+**Record issues (cosmetic; the evidence is right):**
+- The header's `Capture:` line, the nameserver line, the `Dry-run purpose` line and the missing `PRECONNECTS` line come from the pre-Round-11 RUNBOOK text. The compare sections come from the new script.
+- The record doesn't include the check-script results for conditions 2 and 5. That is a RUNBOOK gap (Claude's): the template never appended them.
+- Proposed fix: append one note line with the verified results above. Waiting for Sandeep's OK.
+
+Nothing committed. Not DONE. **Next:** Runs 1–3 (RUNBOOK §1–3), then the Kiwix capture (§5).
+
+#### Round 13 (2026-11-19): dry-run record note and RUNBOOK template fix (docs only; not DONE)
+- **`docs/audits/2026-11-19-dryrun-local.txt`:** a NOTE appended at Sandeep's request. It holds the check-script results for conditions 1, 2, 3 and 5, re-run by Claude with the RUNBOOK D script on the same raw files; it says the header uses the old text, and it gives the verdict. The lines above the note are unchanged. The query-text grep gives 0.
+- **RUNBOOK D:**
+  - the check script's output is saved with `| tee /tmp/sov-dry-check.txt`, and the record block appends it under `CHECK SCRIPT (conditions 1, 2, 3, 5):`;
+  - the header must be pasted from the current file, checked with `grep -c 'dns:<server>' "$OUT"` = `1`;
+  - `/tmp/sov-dry-check.txt` is added to the raw-files list and to the §6.2 clean-up.
+- Nothing committed. Not DONE. Next: Runs 1–3.
+
+#### Round 14 (2026-11-20): Run 3 redesign (PLAN §13, approved); RUNBOOK §3 updated (docs only; not DONE)
+- **RUNBOOK §3:** "Load cached model" + `Local model ready.` + 30 s, then a baseline snapshot; the fever question + 30 s, then a second snapshot. The test is the new lines (`comm -13`) = 0. The record now lists the baseline hosts and the new-hosts count; the expected results and §6.2 clean-up list use the new `/tmp/sov-sensitive-{baseline,after,new}.txt` files.
+- P2 follow-up (cached model still fetches config/wasm/tokenizer) recorded in PLAN §13.5; not started.
+- Nothing committed. Not DONE. **Next:** Sandeep saves the current Run 3 as evidence, then redoes Run 3 with the new §3.
+
+#### Round 15 (2026-11-20): Runs 1–3 summaries reviewed; record-template fixes (docs only; not DONE)
+**Raw files available:** only the sensitive run's (`mitm-hosts.txt`, `/tmp/sov-sensitive.receipts.json`, `/tmp/sov-sensitive-{baseline,after,new}.txt`). The Online and Offline receipts and capture files had already been replaced or removed, so those two summaries were checked for internal consistency only.
+
+**online-local (2026-11-19): PASS, consistent.** `Hosts captured: 15` = 13 MATCHED + 2 `dns:` lines for system nameservers. Nothing uncaptured, no bare IPs, no other DNS servers. `127.0.0.1` in receipt only (loopback isn't logged; expected). Model hosts present because the model was downloaded in this run (brand-new profile).
+
+**offline-local (2026-11-19): PASS, consistent, with the template defect Sandeep found.** `Hosts captured:` and `DNS lookups…:` are blank, not `0`: `mitm-hosts.txt` didn't exist, so `wc`/`grep` printed nothing. MATCHED and the uncaptured section `(none)`; both DNS sections `(none)`; receipt = `example.com` (the blocked test row) + Kiwix; whole-machine DNS 574 lines, 0 naming app hosts. The blank fields aren't evidence of a fault, but the file can't show on its own that the capture was running. That is what the new marker fixes for future runs.
+
+**sensitive-local (2026-11-20, 13.3 design): PASS, re-verified on the raw files.**
+- Baseline (23:25:05) = 4 lines: `dns:2001:558:feed::1`, `huggingface.co`, `raw.githubusercontent.com`, `us.aws.cdn.hf.co`. After (23:26:01) = identical; `new.txt` empty → **0 new lines**.
+- `audit-compare` re-run by Claude: output identical to the file (MATCHED through PASS). `Hosts captured: 8` = the 8 lines of `mitm-hosts.txt`; `www.` is stripped by the compare, so `www.weather.gov` → `weather.gov`.
+- Test-word greps: receipt 0, capture 0. The sensitive receipt: label "Sensitive topic", `query` empty, one row "blocked (sensitive topic: medical) – nothing sent".
+- Control receipt: SearXNG row + 4 source pages (spaceplace ×2, nesdis, weather.gov), all MATCHED.
+- Model rows: **Background**, 51 `model-download` rows, 23:24:21–23:24:31, ended 34 s before the baseline. This confirms §13.2's receipt point; see §13.5 for what they contain.
+- **Deviations from RUNBOOK §3 (don't change the verdict):**
+  1. Before the baseline, the receipt shows an address-bar **Search for `ask`** (23:24:11, sent via SearXNG) and two **Ask AI** receipts with query `ask` in the same chat later used for the sensitive question. So the model load was triggered by a question `ask`, not by "Load cached model". The sensitive question was a follow-up in that chat, not the chat's first question. Both happened before the baseline and contain no sensitive text. **Confirmed by Sandeep:** `ask` was typed in the address bar, which triggered the first model load. Noted; no effect on the result.
+  2. The second snapshot was 24 s after the sensitive question, not 30 s. The one later line, `dns:2001:558:feed::2`, was written after the control's source hosts, so it fits the control. The 30 s rule exists to catch late DNS lines, so it should be kept next time.
+- One `debug.unattributedRequestsSkipped: 2` in the export: two requests had no known origin and aren't in any receipt. The capture shows no host outside the receipt, so if either left the machine, it went to a host already listed. Noted only.
+
+**Template fixes (Sandeep's two requests, plus one found while checking):**
+- **Capture terminal:** writes `mitm-capture-started.txt` (date and time) when the capture starts; it's in `.gitignore` and the §6.2 clean-up.
+- **Offline record:** prints `Capture running: started …` (or `NOT RECORDED`, which voids the run), and `Hosts captured: 0 (no mitm-hosts.txt: …)` / `DNS lookups…: 0` when the file is absent.
+- **Sensitive record:** labels reworded to "Sensitive question's test word, lines found in …" so they no longer contain the word. In the saved `2026-11-20-sensitive-local.txt`, the two labels were reworded the same way (values unchanged) and a NOTE appended.
+- **§4 check (found by Claude):** it used today's date for every file, so it would have skipped the 2026-11-19 records. It now checks `docs/audits/*-local.txt`. Claude ran it: all four files `:0`.
+
+Nothing committed. Not DONE. **Next:** §5 Kiwix capture.
+
+#### Round 16 (2026-11-22): §5 Kiwix run paused; model missing from the base profile (§13.5 corrected; docs only; not DONE)
+- Sandeep: in the fresh Kiwix copy, Offline, Ask AI shows "AI model not downloaded". Sandeep also withdrew the Run 2 "answered from the cache" claim as unchecked.
+- Claude checked the profile copies (read-only): the Kiwix copy is 2.0 MB with no model blob store; `/tmp/sov-audit-base` is gone; the sensitive copy's 24 model files were all created during Run 3's download. Details and consequences are in §13.5.
+- **Run 2:** PASS as a network result stands. It does not show that Offline answering works. Claude has no record of the poem answer: the summary contains no answer text by design, and the export is gone.
+- **For the Kiwix capture (approved by Sandeep, 2026-11-22; see Round 17):** in the Kiwix copy, go Online only to download the model, wait for it to finish, switch back to Offline, then start the Kiwix capture and ask the 5 questions. The summary records this profile history.
+- Nothing committed. Not DONE.
+
+
+#### Round 17 (2026-11-22): Kiwix one-off steps and base profile moved out of /tmp (approved; RUNBOOK only; not DONE)
+- **RUNBOOK §5:** a one-off note for this Kiwix run. Reuse the existing `/tmp/sov-audit-kiwix` and download the model Online (asking nothing, Search the web off). Wait for "downloaded and ready" and check `du`, switch to Offline, and only then start the tcpdump and ask the 5 questions. Append the `Profile:` line to the summary.
+- **RUNBOOK §0.5:** the base profile is built in `~/sov-audit-base`. Its expected size is ~1.3G for the profile and ~670M for `IndexedDB/sovereign_ask_0.indexeddb.blob`, the 670M figure taken from Run 3's copy.
+- **Every copy:** the dry run, Offline, sensitive and Kiwix runs are each preceded by the same `du -sh` line. If the sizes are far off or the blob folder is missing, stop and rebuild. The `PROFILE_NOTE`s and the §6.2 clean-up now use `~/sov-audit-base`.
+- Nothing committed. Not DONE. **Next:** Sandeep runs §5 with the one-off note.
+
+#### Round 18 (2026-11-22): README, evidence and RUNBOOK §6 updated (PLAN §14, approved; docs only; not DONE)
+- **`docs/evidence.md`:**
+  - Header: dated 2026-11-22, after the fresh audits.
+  - **C2 ✅** (no-fallback note kept); **C2a** gets the new evidence and the "cached while the files are on disk" limit.
+  - **C3 ⚠️**, now for the 2 unattributed requests (PLAN §14.7).
+  - **C3a** gets the RUNBOOK and the log-hosts test; **new C3b** covers thumbnails via the search engines' image servers.
+  - **C4** gets the Offline run and its limit; **C9 ✅**, with the claim text fixed; **C10 ✅**; **new C22 ✅** (in the Local AI table) with Sandeep's note.
+  - **C19:** 21 unit/integration files and 20 Electron suites, recounted. C6 is unchanged.
+  - No "audit pending" left.
+- **`README.md`:**
+  - Local AI: Offline answering (C22). Privacy Receipt: the thumbnail sentence (C3b).
+  - Evaluation table: 21 files; hostname audit = local capture, pointing to `docs/audits/`; container capture points to the Kiwix summary.
+  - Results: one bullet per run, with the 2026-09-24 audit marked superseded.
+  - Limits of this audit: rewritten with the honest limits (processes only, DNS via macOS, past DoH, loopback, thumbnails, Offline in two parts, 2 unattributed requests, one run per scenario).
+  - Guarantees table: the receipt row's limits extended.
+  - Testing line links the RUNBOOK; status and roadmap say the audits are done.
+  - **Abstract:** the sentence "In an audit of an earlier build…" was replaced with Sandeep's approved wording (2026-11-22), which starts "In fresh audits of the current build, which captured every non-loopback connection made by the app's processes, …".
+  - The screenshot comment stays until the images exist.
+- **RUNBOOK §6:**
+  - 6.1 adds the `scutil --proxy` check; new 6.1a checks that the netshoot image is gone.
+  - 6.2: done after the screenshots. Raw files move to `~/sov-audit-raw-2026-11/` (mode 700) and are deleted after DONE; the Expected line lists the six summaries; a `git status --ignored` check confirms no capture files are left in the repo.
+- Nothing committed. Not DONE. **Next:** Sandeep rebuilds `~/sov-audit-base`, takes the screenshots and runs the Electron suites; then RUNBOOK §6 and the DONE list (PLAN §14.5).
+
+#### Round 19 (2026-11-22): screenshot findings recorded as P2 follow-ups (PLAN §14.8–14.9; docs only; not DONE)
+- Three P2 follow-ups: the excerpt fallback copies reference-list lines; a new "Supported ≠ verified" example; web answers fell back to excerpts 3 times out of 3. Image placement for shot 4 (cropped) and `09-supported-not-verified.png` recorded.
+- The README is unchanged until the images exist. Nothing committed. Not DONE.
+
+#### Round 20 (2026-11-22): README screenshots linked and checked (PLAN §14.9; docs only; not DONE)
+- **Images** (`docs/images/`, 8 files, all 1600 px wide, dark theme): `01-ask-web-excerpts`, `02-privacy-receipt`, `04-local-knowledge-offline` (cropped; it also shows the Offline note, so there is no separate 03), `05-not-found-offer`, `06-sensitive-guard`, `07-source-excerpts`, `08-audit-pass`, `09-supported-not-verified`.
+- **Where they go in the README:**
+  - Privacy Receipt: 01 + 02, the same answer and its receipt.
+  - Sensitive-topic guard: 06. Local knowledge: 04 + 05.
+  - Answer trust labels: 07. Evaluation results: 08. Guarantees and limits, after the table: 09.
+  - The screenshot comment block is removed.
+- **Captions** were written from what each image shows (Claude looked at every image):
+  - 01's caption uses the UI's own wording ("the AI couldn't write a reliable answer"). It doesn't say "failed the citation check", because the reason code isn't visible.
+  - 02 names only the `science.nasa.gov` row that is shown.
+  - 06 notes that local knowledge ran and found nothing.
+  - 09 notes that [3] is a third local article below the visible part (Sandeep, 2026-11-22: title not recorded).
+- **Shot 09's [3]:** Sandeep confirmed a third source existed, so it's not the bug suspected in §14.8.2; no new follow-up.
+- **Checks:**
+  - **Links:** every relative link and anchor in `README.md` and `docs/evidence.md` resolves (script check, 0 broken); all 8 images are referenced.
+  - **Personal details:** none in the pixels (no name, email, username or home path; shot 08 shows `~/…` and the ISP nameservers already in the committed summaries), and none in the file metadata (strings scan).
+  - **Metadata:** all 8 PNGs carry C2PA content credentials stating "Claude provided this file at the request of a user and may have created or modified the file contents", probably added by the tool used to resize them. **Sandeep (2026-11-22): keep it**: it's accurate, since Claude cropped and resized the real screenshots without changing their content. The README credits line now says: "Screenshots are real captures, cropped and resized with AI assistance."
+- Nothing committed. Not DONE. **Next:** the Electron suites (Sandeep), RUNBOOK §6, then the DONE list (PLAN §14.5).
+
+#### Round 21 (2026-11-22): Electron results; model-chat failure hidden by exit 0 (PLAN §15 written, waiting for approval; not DONE)
+- Passed with exit 0: offline-mode, local-knowledge (a–l), sensitive-guard (1–22), safe-redirects. **model-chat failed at line 207 but exited 0.**
+- Causes found (PLAN §15.2–15.3):
+  - 10 suites use `app.quit(); process.exitCode = 1`, which exits 0;
+  - model-chat's fake sources are loopback URLs, which `safeFetch` refuses (since 2026-11-09), so no citation appears.
+  - Likely pre-existing; a worktree check against `main` and `79d93b2~1` confirms it.
+- Nothing committed. Not DONE.
+
+#### Round 22 (2026-11-22): PLAN §15 approved; Codex brief written (not DONE)
+- Approval and decisions in §15.6. The Codex brief covers the guard test first, then the 10-suite exit fix; tests only.
+- Pre-run check: `generation-shutdown` is mocked. `auto-setup-shutdown` starts and abandons a real model download, needs the internet, and leaves a temp profile: run it with clean-up, or skip with a note (Sandeep decides).
+- **Waiting for:** Codex CHANGES (15.4.1–2), Sandeep's worktree check (15.3). Then Claude reviews, Sandeep re-runs 15.4.4 with output read. Nothing committed. Not DONE.
+
+#### Round 23 (2026-11-22): REVIEW of Codex Round 2 (Electron exit codes, PLAN §15.4.1–2). **Approved by Claude**; Electron re-run next (not DONE)
+- **Scope (checked by Claude on the diff):**
+  - Each of the 10 suites has exactly one change: `app.quit(); process.exitCode = 1;` → `app.exit(1);`, with `console.error(error)` kept first.
+  - `package.json` gains one `node tests/electron-exit-codes.test.js &&` entry in `check`. The new file is `tests/electron-exit-codes.test.js`.
+  - Nothing under `src/`, no fixture, wait or assertion changed. Codex wrote only its CHANGES section.
+- **Guard verified independently:**
+  - Run against the HEAD versions of all 20 suites (copied to a scratch folder), it exits 1 and lists exactly the 10.
+  - On the current files: `PASS: Electron failure exit codes (20 suites)`.
+  - Its own cases cover both callback forms, a nested `.then(…).catch(…)`, `app.exit(0)` and non-literal `process.exit(status)` (both rejected), and text inside comments and strings (ignored).
+- **Checks outside Codex's sandbox:** `npm run check` exit 0, including the safe-fetch and offline-gate integration tests that hit `EPERM` in the sandbox; `git diff --check` clean.
+- **Nits (no change needed):**
+  1. A failure handler that neither quits nor exits isn't flagged. That would hang rather than exit 0, so it stays visible.
+  2. The guard itself uses `process.exitCode = 1`. That is correct for a plain Node script and outside `tests/electron/`, so it isn't scanned.
+- **Expected in the re-run:** `model-chat` now exits **1** at line 207. That is the known failure (PLAN §15.3), not a new one, and stays until 15.4.3 (after the worktree check).
+- Nothing committed. Not DONE. **Next:** Sandeep's worktree check (15.3), then the 15.4.4 re-run with logs.
+
+#### Round 24 (2026-11-23): worktree check confirms model-chat broke at 79d93b2; fix 3 approved and briefed (not DONE)
+- `main` fails at line 207 and `79d93b2~1` passes, so the break came with the `safeFetch` loopback block, not this branch.
+- **`model-chat` was silently broken from 2026-11-09 to 2026-11-22** because of the exit-0 failure handler (PLAN §15.7).
+- Fix 3 is briefed for Codex (§15.7): test hostnames through the existing test-only DNS hook, and chat text on timeout. Test-only; `safeFetch` unchanged.
+- Nothing committed. Not DONE.
+
+#### Round 25 (2026-11-23): REVIEW of Codex Round 3 (model-chat fixture, PLAN §15.4.3). **Approved by Claude**; Electron re-run next (not DONE)
+- **Scope:** only `tests/electron/model-chat.test.js` changed (plus CHANGES).
+  - `src/` is unchanged by this round (`src/main.js` still holds only the §11.6 resolver change); `src/safe-fetch.js` is untouched.
+  - No wait condition, timeout, assertion, citation-tab regex or mocked engine changed.
+- **Fixture:**
+  - `SOVEREIGN_TEST_DNS` maps `source-one.test` and `source-two.test` to `{ address: '93.184.216.34', connect: '127.0.0.1' }`, set before `src/main.js` loads.
+  - `host-resolver-rules` maps both for Chromium.
+  - The search results use the `.test` URLs, and the search endpoint stays on loopback.
+  - This is the same pattern as `safe-redirects`, through the same test-only hook (ignored when packaged), so `safeFetch`'s loopback block still holds for real use.
+- **Failure handler:** it prints the first 1,500 characters of `#chat-thread`, with any read failure caught, then calls `app.exit(1)`. The guard passes.
+- **Checks outside the sandbox (Claude):** `node --check` ok; guard `PASS (20 suites)`; `npm run check` exit 0 (including the two integration tests that hit `EPERM` in Codex's sandbox); `git diff --check` clean.
+- **Nit (no change needed now):** if the Ask page itself hangs, `executeJavaScript` in the handler could wait forever, and `app.exit(1)` would never run. That gives a hang, not a false exit 0, so it stays visible. A 3-second `Promise.race` would close it; it can go in the P2 list if wanted.
+- **Expected in the re-run:** `model-chat` gives **EXIT 0**, with the final JSON (`citationOpenedUrl` on `source-one.test` or `source-two.test`; `retrievalRequests` including `/source-one` and/or `/source-two`).
+- Nothing committed. Not DONE. **Next:** Sandeep's 15.4.4 re-run, with logs.
+
+#### Round 26 (2026-11-23): test-hook activation answered; PLAN §16 written (waiting for approval; not DONE)
+- `SOVEREIGN_TEST_DNS` is a plain environment variable, gated only by `app.isPackaged === false`. There is no packaged build, so **it is honoured under a normal `npm start`**. The same holds for every `testHook` switch, and five more test switches aren't gated at all (PLAN §16.2).
+- **Correction:** Claude's statements in PLAN §15.7 and REVIEW Round 25 that the hook "is ignored when packaged, so `safeFetch`'s loopback block still holds for real use" were overstated (§16.1).
+- P2 list: the `model-chat` failure handler can hang, added as §14.8 item 4.
+- Nothing committed. Not DONE.
+- **Env check (Sandeep, 2026-11-23):** no `SOVEREIGN_` variables exported; the audits used only inline `SOVEREIGN_USER_DATA_DIR` (and `SOVEREIGN_AUDIT_PROXY` in the first Run 1). The audit results stand (§16.4). §16.5 decisions are still open.
+
+#### Round 27 (2026-11-23): re-run read; model-chat diagnosis planned (§15.8); §16 decisions recorded; 2c docs limit added (not DONE)
+- 12 suites passed; `model-chat` fails honestly (EXIT 1). The log's chat text is the wrong end, Claude's brief error, so the cause isn't yet known. PLAN §15.8 gives a diagnostic-only step, then a fix by finding.
+- §16 decisions recorded (§16.6). Task 2d is separate.
+- Done now:
+  - README "Development runs" paragraph and evidence C23 (wording: "planned", not "fixed");
+  - `src/test-hooks.js` comment corrected (comment only).
+- Nothing committed. **Not DONE** until `model-chat` passes.
+- **Round 27 addendum:** Sandeep asked which handler doesn't check its sender, and whether websites can reach the preload API. Answer and findings are in PLAN §16.7: not reachable in normal use, but the chrome view, sidebar and setup window lack a navigation guard, the preload has no origin check, and 43 handlers lack a sender check. Added to Task 2d.
+
+#### Round 28 (2026-11-23): REVIEW of Codex Round 4 (model-chat failure diagnostics, PLAN §15.8 step 1). **Approved by Claude**; Sandeep's run next (not DONE)
+- **Scope:** only `tests/electron/model-chat.test.js` changed (plus CHANGES).
+  - `retrievalRequests` moved to module scope (the same array and pushes); everything else is in the failure handler.
+  - No wait, timeout, assertion, fixture, mocked engine or success-path change. `src/` is untouched by this round: the only `src/` diffs are the §11.6 resolver change and Claude's comment fix in `src/test-hooks.js`.
+- **Handler:**
+  - `console.error(error)` first; then three reads, in order, each in its own `try/catch` and limited to 3 s by `Promise.race`:
+    - (a) the **last** 2,000 characters of `#chat-thread`;
+    - (b) `retrievalRequests`;
+    - (c) the last 10 `search.getSettings().activity` entries.
+  - A missing Ask page or a timeout prints "unavailable" or "timed out"; then `app.exit(1)` always runs. This also closes §14.8 item 4 (the possible hang).
+- **Checks (Claude, outside the sandbox):** `node --check` ok; guard `PASS (20 suites)`; `npm run check` exit 0; `git diff --check` clean.
+- **Next:** Sandeep runs `npm run test:electron:model-chat > ~/sov-electron-runs/model-chat-2.log 2>&1; echo "EXIT: $?"`. Claude reads the log and decides H1/H2/H3 (§15.8), then writes the step-2 PLAN entry for approval. Nothing committed. Not DONE.
+
+#### Round 29 (2026-11-23): diagnostic log read. The web question never reached the search (PLAN §15.9; step 1b proposed; not DONE)
+- The web question isn't in the thread; the server got no second `/search` and no `/source-*` request. So none of H1–H3. The cause is in the Ask page before the search: a pending `await` or a silent rejection.
+- Also seen: Stop didn't end the held generation ("Stopped." overwritten).
+- Step 1b: add the page's console errors and UI state to the diagnostics. Or, if Sandeep agrees, Claude runs the suite here. Nothing committed. Not DONE.
+
+#### Round 30 (2026-11-23): root cause found. `model-chat` broke at bdd2ca1 (streaming filter hides "Working..."), not 79d93b2 (PLAN §15.10; not DONE)
+- **Claude's three runs:** all EXIT 1; the timeline shows Stop pressed after the answer had finished.
+- **Bisect:** `79d93b2` passes, `bdd2ca1~1` passes, `bdd2ca1` fails at line 207 (the "Stopped" wait).
+- **Corrections** (§15.10): line 207 was misidentified as the citation wait; it broke at `bdd2ca1`, not `79d93b2`; the "Stop bug" isn't one.
+- The step-2 fix (visible "Working" line plus real Stop assertions) is waiting for approval.
+- Codex Rounds 5–6 (diagnostics) reviewed by Claude: diagnostics only; the mock wrappers return the original results unchanged. Nothing committed. Not DONE.
+
+#### Round 31 (2026-11-23): REVIEW of Codex Round 7 and run 4. Stop fix works; assertion (a) too early; scratch experiment green (PLAN §15.11; not DONE)
+- Codex Round 7 matches the brief: fixture line `Working on it.\n`, hold flags, assertions (a) and (b); nothing else changed.
+- Run 4: EXIT 1 at (a), a timing flaw in Claude's brief. The scratch copy with (a) after the 2.5 s settle gives EXIT 0, with the `.test` sources read and the citation tab opened.
+- Waiting for Sandeep's approval of the one move. Nothing committed. Not DONE.
+
+
+#### Round 32 (2026-11-24): REVIEW of Codex Round 8 (§15.11). **model-chat passes (EXIT 0)**. Approved by Claude (Task 2c still not DONE)
+- **Scope:** only the `holdState` block moved, to just after `await delay(2500)`; its condition and message are unchanged; nothing else changed.
+- **Claude's run 5** (`~/sov-electron-runs/model-chat-claude-5.log`): **EXIT 0**, with the final JSON:
+  - `followupContext: true`, `renderedTableAndCode: true`;
+  - `citationOpenedUrl: http://source-two.test:…/source-two`;
+  - `retrievalRequests` including `/source-one` and `/source-two`.
+  - So the Stop assertions (a) and (b) pass, and the web/citation steps run green for the first time since 2026-11-15.
+- `npm run check` exit 0.
+- **Task 2c's DONE condition** ("only when `model-chat` passes", Sandeep) is now met on Claude's run. **DONE stays Sandeep's decision.** Per Sandeep, Task 2d-a is built before 2c is pushed.
+
+
+#### Round 33 (2026-11-24): §6 clean-up (steps 1–5) and Task 2c DONE
+- **§6 clean-up by Sandeep:**
+  - step 1: no `mitmdump`; the Mitmproxy Redirector extension shows `[activated disabled]`;
+  - step 2: no proxy or VPN entry (`scutil --nc list` empty);
+  - step 3: no mitmproxy CA (fixed `-Z | grep SHA-1` check), no system proxy;
+  - step 4: Docker running, no netshoot image, no capture container (guarded check);
+  - step 5: the two originals already copied to RAW were removed after `cmp`; the five `/tmp` snapshots were moved; `~/sov-audit-raw-2026-11` is `drwx------` with 7 files; no capture files left in the repo; nothing left in `/tmp`.
+- **Kept:** `~/sov-audit-base`, for re-auditing after Task 2d (Sandeep).
+- **Step 6** (delete RAW) waits until the PR is merged.
+- **Task 2c marked DONE by Sandeep (2026-11-24).**
+- **Pre-commit checks (Claude, 2026-11-24):**
+  - `npm run check` exit 0; `git diff --check` clean.
+  - Secret scan of `git diff HEAD` plus all 16 untracked non-image files: no key, token or private-key patterns; no secret assignments (the only `SEARXNG_SECRET` lines generate one with `openssl rand` into the ignored `.env`); long hex strings are only pinned image digests (SearXNG, Kiwix, netshoot); no personal email.
+  - `git status --porcelain --ignored`: the ignored items are `.DS_Store` files, `searxng/.env` and the Kiwix ZIM file plus its `.sha256`, so none can be staged by explicit `git add`.
+  - No raw captures, receipts or `mitm-*` files in the tree.
+  - 49 files to commit (25 modified, 24 new); the list is in Claude's reply to Sandeep.
+
+## Task: Navigation guards for preload-bearing views (Phase 2, Task 2d-a)
+**Status: DONE (Sandeep, 2026-11-24).** PLAN approved and built (Codex Rounds A, A2, B, B2); reviewed by Claude (REVIEW Round 1); Sandeep's manual check is recorded in REVIEW Round 2. Not committed: Sandeep commits. It is split out from Task 2d (PLAN §16.7 gap 1) at Sandeep's decision. Items (b)–(d) (preload origin check, shared sender check, handler static check) stay in Task 2d. It is to be built before Task 2c is pushed.
+
+### PLAN (Claude)
+**1. Why.**
+- Sandeep's manual drag test (2026-11-24) was **inconclusive**: a real trackpad drag was hard to perform, and the sidebar didn't navigate in Sandeep's attempts, but a drop couldn't be confirmed. So gap 1 is treated as **plausible**.
+- The views that load `preload.js` and have **no** navigation guard are the toolbar view (`index.html`, `src/main.js` ~3548), the sidebar (`sovereign://ask/sidebar.html`, ~3578) and the hidden model-setup window (`sovereign://ask/model-setup.html`, ~861).
+- If any of them navigated to a website, that site would get the whole `window.sovereign` API.
+- Internal tabs already have the guard (`will-navigate` → `preventDefault()` and `setWindowOpenHandler` → deny, ~3159–3162). Web tabs have no preload.
+
+**2. What exists today (checked 2026-11-24).**
+- **Preload-bearing views:**
+  - internal tabs (guarded);
+  - the toolbar view, the sidebar and the model-setup window (**unguarded**).
+- **No preload,** but in Sandeep's list:
+  - the **dataset window** (~4601: `sandbox: true`, page `dataset-collection.html` with CSP `default-src 'none'`, no scripts; batch mode only);
+  - the **legacy-chat probe** (~6014: hidden, transient, no preload, no scripts). It isn't in Sandeep's list; Claude recommends guarding it too (one line). **Decision 2.**
+- **None of these pages navigates itself:** there is no `location` use in `renderer.js`, `sidebar.js` or `model-setup.js`. Main loads them with `loadFile`/`loadURL`, which **doesn't** emit `will-navigate`, so a guard won't block Sovereign's own loads.
+- **Tab drag in the toolbar:** `dragstart`/`dragend` on the tab strip. Detach is decided from the pointer position (`isOutsideTabBar(clientX, clientY)`), and `dropEffect` is only logged, so cancelling page-level `dragover`/`drop` doesn't change detach. A dragged tab dropped back on the toolbar could today navigate the toolbar view itself; the guard stops that as well.
+
+**3. Change (small; no change to web tabs, network rules, Offline, the receipt or IPC handlers).**
+1. **New `src/navigation-guard.js`** (plain Node, no Electron import), exporting `lockNavigation(contents)`:
+   - `contents.on('will-navigate', event => event.preventDefault())`;
+   - `contents.on('will-frame-navigate', event => { if (!event.isMainFrame) event.preventDefault(); })`, so subframes can't navigate either;
+   - `contents.setWindowOpenHandler(() => ({ action: 'deny' }))`.
+   - Each call is idempotent per `contents` (a `WeakSet`).
+2. **`src/main.js`:** call `lockNavigation(...webContents)` right after creating each of:
+   - the toolbar view and the sidebar view;
+   - the model-setup window and the dataset window;
+   - (if approved) the legacy-chat probe.
+
+   The internal-tab guard can switch to the same helper with no behaviour change; that is optional, and Claude recommends it for one rule in one place.
+3. **New `src/drop-guard.js`** (page script): `document.addEventListener('dragover', e => e.preventDefault())` and `document.addEventListener('drop', e => e.preventDefault())`.
+   - Included with `<script src="./drop-guard.js">` in `index.html`, `sidebar.html` and `model-setup.html`.
+   - Element-level handlers run first, so tab drag still works.
+   - The dataset page and the probe page allow no scripts (CSP `default-src 'none'`), so they rely on the main-process guard alone.
+4. **Docs:** evidence and README unchanged until DONE. At DONE, §16.7 gap 1 is marked "fixed in Task 2d-a", and the Task 2d list is updated.
+
+**4. Tests first (each must fail before the change, and pass after).**
+1. **Unit, `tests/navigation-guard.test.js`** (in `npm run check`): `lockNavigation` on a fake `contents` must:
+   - register `will-navigate`, and its handler must call `preventDefault`;
+   - register `will-frame-navigate`, preventing subframes;
+   - set a window-open handler returning `{ action: 'deny' }`;
+   - be idempotent.
+2. **Static, in the same file:**
+   - every `new WebContentsView(`/`new BrowserWindow(` in `src/main.js` is either `createWebView()` (the web tab, guarded by `normalizeAddress`, listed as the one reviewed exception) or followed within its function by `lockNavigation(` on that object (or, for internal tabs, the existing guard);
+   - `index.html`, `sidebar.html` and `model-setup.html` each include `drop-guard.js`.
+3. **Electron, new `tests/electron/navigation-guards.test.js`**, with a local fake server counting requests. For the toolbar view, the sidebar and the model-setup window:
+   - (i) `location.href = 'http://127.0.0.1:<port>/nav-<view>'` from the page. Assert that after 1 s the view's URL is unchanged and the server received **no** `/nav-*` request.
+   - (ii) `window.open('http://127.0.0.1:<port>/open-<view>')`. Assert it returns `null`, no new `webContents` has that URL, and no `/open-*` request arrived.
+   - (iii) dispatch a synthetic `dragover` and `drop` carrying `text/uri-list` on `document`. Assert `defaultPrevented === true`.
+   - **Limit:** a real OS drag can't be synthesized in Electron tests (`sendInputEvent` has no drag data). A drop-triggered navigation is a renderer-initiated navigation and goes through the same `will-navigate` path as (i), so (i) covers the main-process guard, and (iii) covers the page-level cancel. The dataset window and the probe are covered by the static test only (batch mode and the hidden probe aren't started in Electron tests).
+   - The suite's failure handler uses `app.exit(1)`, so it passes `tests/electron-exit-codes.test.js`.
+4. **Regression (outside the sandbox, output read):**
+   - `browser-features` (tabs, including drag and detach), `ui-smoke`, `stage1-usability`, `ask-layout`, `model-chat` (once §15.11 lands), `offline-mode`, `auto-setup-shutdown` (Online, with clean-up), `generation-shutdown`, and `npm run check`;
+   - plus a 1-minute manual check: drag a tab within the strip, and out to detach it.
+
+**5. Build and review.** Codex builds, with the tests first and the failing output recorded in CHANGES; then the change. Claude reviews and runs the Electron suites here. Sandeep does the manual tab-drag check.
+
+**6. Decisions needed.**
+1. Approve this PLAN.
+2. Also guard the legacy-chat probe (recommended; one line)?
+3. Move the internal-tab guard onto the shared helper too (recommended; no behaviour change)?
+
+**Also still open from Task 2c:** PLAN §15.11, moving `model-chat`'s assertion (a) after the 2.5 s settle. With that move the suite is green (scratch experiment, EXIT 0).
+
+### CHANGES (Codex)
+
+#### Round A (2026-11-24): tests first
+
+Tests-only round, per Sandeep's explicit instruction and PLAN approval in the 2026-11-24 task message. Approved decisions used by the tests: include the legacy-chat probe, replace the internal-tab bespoke guard with `lockNavigation`, and leave drops on editable text fields uncancelled. PLAN and REVIEW are unchanged. Task is not marked DONE; implementation and Electron execution remain for later rounds/review.
+
+- Added `tests/navigation-guard.test.js`: requires the intentionally absent helper first; tests navigation/frame handlers, popup denial and per-contents idempotence; audits all WebContentsView/BrowserWindow constructors within their named functions (only `createWebView` is exempt); rejects the internal-tab bespoke handlers; checks drop-script inclusion/order; evaluates drop-guard in a VM with fake document/Element targets, including editable descendants.
+- Added `tests/electron/navigation-guards.test.js`: isolated temporary profile with downloads disabled and setup notice seen, Online mode, loopback HTTP request counters, toolbar/sidebar/model-setup/Settings navigation and popup checks with 1000 ms waits, body drop cancellation on the three guarded pages, and uncancelled toolbar address/find drops. Internal-page drop checks are explicitly skipped. Success prints JSON and calls `app.exit(0)`; failure calls `app.exit(1)`.
+- Updated `package.json`: Node test in `check`, Electron syntax check in `check:tests`, and `test:electron:navigation-guards` command. Preserved existing workspace edits. No source or HTML changes, dependencies, guard implementations, commits, pushes, stashes or git-config changes in this round.
+
+Verification (Node v25.9.0):
+
+```text
+node --check tests/navigation-guard.test.js                 EXIT 0
+node --check tests/electron/navigation-guards.test.js        EXIT 0
+node tests/electron-exit-codes.test.js                       EXIT 0
+PASS: Electron failure exit codes (21 suites)
+
+node tests/navigation-guard.test.js                         EXIT 1 (expected)
+Error: Cannot find module '../src/navigation-guard.js'
+Require stack:
+- /Users/sandeep/Sovereign-Browser/tests/navigation-guard.test.js
+    at Object.<anonymous> (/Users/sandeep/Sovereign-Browser/tests/navigation-guard.test.js:5:28)
+  code: 'MODULE_NOT_FOUND'
+
+npm run check                                              EXIT 1 (expected)
+answer-trust tests passed (AT1–AT47)
+PASS: Electron failure exit codes (21 suites)
+Error: Cannot find module '../src/navigation-guard.js'
+  code: 'MODULE_NOT_FOUND'
+
+git diff --check                                           EXIT 0
+```
+
+The missing-module failure is intentional for Round A; later assertions cannot execute until the helper exists. `check` stops at this expected failure before the build and remaining checks. Electron was NOT run (Claude runs it). To reproduce the red test, run `node tests/navigation-guard.test.js`. Claude's runtime command is `npm run test:electron:navigation-guards`. After implementation, manually drop a URL on the toolbar background and sidebar (no navigation), then onto the address/find fields (text insertion allowed); drag a tab within the strip and out to detach it.
+
+#### Round A2 (2026-11-24): test locator corrections
+
+- Changed only `tests/electron/navigation-guards.test.js` and this CHANGES entry: invoke `window.sovereign.toggleSidebar()` through the toolbar preload API before waiting for the lazily created sidebar; locate Settings with `url => url.startsWith('sovereign://settings/')`.
+- Assertions, checks, timing, app source and HTML are unchanged. PLAN and REVIEW are untouched. Electron was not run; no commit, push, stash or git config changes.
+- Verification: `node --check tests/electron/navigation-guards.test.js`, `node tests/electron-exit-codes.test.js` (21 suites), and `git diff --check` passed. Required `npm run check` still exits 1 at the existing, intentional Round A missing `../src/navigation-guard.js` failure, before building app assets; implementation is outside this round.
+- Manual review: inspect the two locator corrections; Claude's later Electron run should get past sidebar/Settings discovery and exercise the unchanged assertions. Task 2d-a remains not DONE, pending review and Sandeep's approval.
+
+
+#### Round B (2026-11-24): navigation guards and drop guard
+
+Implemented the approved Round B scope. Task is not marked DONE; Claude's review/Electron run and Sandeep's manual check remain pending.
+
+- `src/navigation-guard.js`: CommonJS helper with a per-contents WeakSet, main-page navigation cancellation, subframe navigation cancellation, and popup denial.
+- `src/main.js`: guards immediately after constructing the toolbar, sidebar, model-setup, dataset and legacy-chat probe views/windows. Also guards the trusted internal-view constructor (required by the existing constructor-coverage assertion) and replaces the internal-tab bespoke handlers with `lockNavigation(wc)`; the repeated call is a no-op. `createWebView` and existing unrelated workspace changes are preserved.
+- `src/drop-guard.js`: document dragover/drop cancellation except targets within `input`, `textarea`, or empty/true contenteditable fields.
+- `src/index.html`, `src/sidebar.html`, `src/model-setup.html`: load the drop guard before all other app scripts. These pages have no meta CSP; the protocol handler serves local files, and the existing applicable response CSP permits `script-src 'self'`. No CSP changes.
+- `package.json`: adds syntax checks for both new scripts to `check`.
+- `docs/HANDOFF.md`: this CHANGES entry only. No tests, waits, assertions, PLAN or REVIEW edits; no dependencies or Electron execution; no commit, push, stash or git-config changes.
+
+Verification:
+
+- `node tests/navigation-guard.test.js`: EXIT 1 at line 50, `Expected all existing view/window constructors`. The helper assertions before it pass. The static test's string/comment-stripping regex masks the model-setup constructor, leaving six visible constructors rather than seven. Specifically, it treats the closing quote on `contents.send('model-setup:command', command)` as a string opener and masks through the opening quote of the setup window title. Tests are unchanged per the Round B instruction; this needs Claude's test review.
+- `node tests/electron-exit-codes.test.js`: EXIT 0, 21 suites.
+- `node --check src/main.js`, `node --check src/navigation-guard.js`, `node --check src/drop-guard.js`: EXIT 0.
+- `npm run check`: EXIT 1 at the same constructor-count assertion, after answer-trust and Electron exit-code tests pass. It stops before build/integration tests, so no sandbox EPERM integration result was reached. Log: `/tmp/sovereign-2da-round-b-check.log`.
+- `git diff --check`: EXIT 0.
+
+Manual testing: drop a URL onto toolbar/sidebar backgrounds (no navigation), then into address/find fields (text insertion allowed). Drag a tab within the strip and out to detach it. Claude runs `npm run test:electron:navigation-guards` and the planned regression suites; Electron was not run here.
+
+#### Round B2 (2026-11-24): static-test masking correction
+
+- `tests/navigation-guard.test.js`: replaced only the masking statement with the exact requested comment-only regex and updated its comment. Strings are kept because quotes inside regex literals make string masking unreliable. All seven constructors are now found with every assertion unchanged.
+- `docs/HANDOFF.md`: appended this Task 2d-a CHANGES entry only; PLAN and REVIEW untouched. No source edits or git commit/push/stash/config commands. Task remains not DONE.
+- Verification: `node tests/navigation-guard.test.js` passes; `node tests/electron-exit-codes.test.js` passes (21 suites). `npm run check` passes through safe-fetch unit tests, then exits 1 on sandbox `listen EPERM` for `127.0.0.1` in the integration test; reported only as requested. `git diff --check` passes.
+- Manual verification: inspect the masking statement and comment, then run `node tests/navigation-guard.test.js` to verify constructor coverage and all unchanged assertions.
+
+### REVIEW (Claude)
+#### Round 1 (2026-11-24): REVIEW of Codex Rounds A, A2, B and B2. **Approved by Claude**; manual tab/drop check by Sandeep next (not DONE)
+- **Tests first, shown:**
+  - Round A tests: `node tests/navigation-guard.test.js` failed (module missing).
+  - The Electron suite at first failed for the wrong reason (the sidebar is created lazily; Settings is `sovereign://settings/`). Round A2 fixed only those locators.
+  - Then, against the unchanged app: **EXIT 1, `toolbar: navigation changed URL`** (actual `http://127.0.0.1:…/nav-toolbar`, expected `file://…/src/index.html`). **This confirms gap 1's mechanism:** the preload-bearing toolbar view could be navigated to a web page.
+- **Change (Round B), reviewed line by line:**
+  - `src/navigation-guard.js`: `lockNavigation()` (idempotent per contents): `will-navigate` → `preventDefault()`; `will-frame-navigate` → prevented for subframes; window-open → deny.
+  - `src/main.js`: applied to the model-setup window, internal tabs (`createTrustedInternalView` and the internal-tab events, replacing the bespoke guard), the toolbar view, the sidebar, the dataset window and the legacy-chat probe. **Not** to `createWebView()`; web tabs keep `normalizeAddress`.
+  - `src/drop-guard.js`, included first in `index.html`, `sidebar.html` and `model-setup.html`: cancels `dragover`/`drop` except on `input`, `textarea` and `[contenteditable]`.
+- **Address bar decision (Sandeep):** drops into editable text fields aren't cancelled, so `#address` and `#find-input` keep the browser's text insertion; drops elsewhere are cancelled.
+  - Tested: synthetic drops on `#address` and `#find-input` → `defaultPrevented === false`; on `body` → `true`.
+  - That a real drop actually inserts the text is left to Sandeep's manual check (synthetic events don't insert).
+- **Round B2:** the static test's string masking was broken by regex literals in `src/main.js` (it hid the model-setup constructor). Now only comments are masked; assertions unchanged. Claude proved the exact line in a scratch copy first.
+- **Checks (Claude, outside the sandbox, 2026-11-24):**
+  - `node tests/navigation-guard.test.js` PASS; `npm run check` exit 0; `git diff --check` clean.
+  - **`navigation-guards`: EXIT 0.** Toolbar, sidebar, model-setup and an internal tab: navigation blocked, popup null, drops cancelled (the internal page is unchanged, so its drop check is skipped). The server received **no** requests (`requests: {}`).
+  - **Regression, all EXIT 0:** browser-features, ui-smoke, stage1-usability, ask-layout, model-chat, offline-mode, generation-shutdown, downloads, permissions, attachments, home-attachments, pdf-attachments, media-chat, chat-deletion, single-instance, safe-redirects, sensitive-guard, local-knowledge, auto-setup-shutdown (Online; temp profile cleaned).
+    - The internal-tab suites are included, as Sandeep asked, to show no behaviour change. `media-chat-live` was skipped (needs the internet).
+    - Logs are in `~/sov-electron-runs/2da/`, and each was read. The "Error occurred in handler" lines in chat-deletion, local-knowledge, media-chat and safe-redirects are the suites' deliberate refusal cases (the counts for local-knowledge and safe-redirects match the 2026-11-23 runs), and each suite prints its pass result.
+- **Limit (as in the PLAN):** a real OS drag isn't simulated. Drop-triggered navigation goes through the same `will-navigate` path that the suite tests.
+- **Next:** Sandeep's 1-minute manual check:
+  1. drag a tab within the strip, then out to detach it;
+  2. drop a link and some text into the address bar (inserted as text, no navigation);
+  3. drop a link onto the toolbar background and the sidebar (nothing happens).
+
+  Then Sandeep's DONE decision. Nothing committed.
+
+#### Round 2 (2026-11-24): Sandeep's manual check, and DONE
+Sandeep's manual check in a normal `npm start`, recorded exactly:
+1. **1a, reorder tabs** (drag within the tab strip): **works.**
+2. **1b, detach a tab** into its own window: **works.**
+3. **Drop a link and selected text into the address bar:** inserted as text, no navigation. **Works.**
+4. **Drop onto the toolbar and the sidebar:** **inconclusive by hand.** A trackpad drag is hard to perform; in every attempt the toolbar and sidebar stayed intact and never became a web page. This point is covered by the automated `navigation-guards` suite (REVIEW Round 1: page-initiated navigation blocked, drops cancelled, no request reached the server).
+
+**Task 2d-a marked DONE by Sandeep (2026-11-24).** §16.7 gap 1 is fixed by this task. Items (b)–(d) (the preload origin check, a shared sender check for every IPC handler, and a static check that every handler uses it) remain in Task 2d.
+- **2026-11-24, RUNBOOK fix (Sandeep's report):** the certificate check in RUNBOOK §0.6 and §6.1 now uses `security find-certificate -a -c mitmproxy -Z 2>/dev/null | grep -q 'SHA-1'`. The exit-code-only version gave a false "FOUND" on this Mac (seen 2026-11-19). The §6 clean-up so far:
+  - step 1: no `mitmdump`, extension `[activated disabled]`;
+  - step 2: no proxy or VPN entry (`scutil --nc list` empty);
+  - step 3: no mitmproxy CA, no system proxy.
+- **2026-11-24, RUNBOOK fix (Sandeep):** §6.1a (the netshoot check) now runs only when `docker info` succeeds; otherwise it says Docker isn't running instead of printing a false all-clear. It also checks for a leftover `sovereign-kiwix-traffic` container.

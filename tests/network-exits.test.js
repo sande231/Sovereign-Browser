@@ -101,3 +101,63 @@ for (const name of ['handleSearchQuery', 'handleMediaSearch']) {
 }
 assert.ok(!/\bsearchSearxng(?:Media)?\s*\(/.test(unguardedSearch), 'sensitive-exits');
 assert.match(body('handleReadSources'), /allowedSearchRequests/);
+
+// Run the production resolver function and constants, with no Electron or network access.
+const resolverConstants = [...source.matchAll(/^const (?:ONLINE|OFFLINE)_HOST_RESOLVER = .*;$/gm)]
+  .map(match => match[0]).join('\n');
+function resolverHarness(initial = 'online', proxy = true) {
+  const calls = [];
+  const logs = [];
+  const context = {
+    app: { configureHostResolver(options) { calls.push(JSON.parse(JSON.stringify(options))); } },
+    networkMode: createNetworkMode({ initial }),
+    offlineLayerOn(name) { assert.equal(name, 'proxy'); return proxy; },
+    logAi(...args) { logs.push(JSON.parse(JSON.stringify(args))); }
+  };
+  vm.createContext(context);
+  vm.runInContext(`${resolverConstants}\n${body('applyHostResolverMode')}`, context);
+  return { context, calls, logs, apply: () => vm.runInContext('applyHostResolverMode()', context) };
+}
+const resolver = resolverHarness();
+resolver.apply();
+assert.deepEqual(resolver.calls, [{
+  enableBuiltInResolver: false, secureDnsMode: 'off', enableAdditionalDnsQueryTypes: false
+}], 'Online startup configures the system resolver');
+resolver.context.networkMode.set('offline');
+resolver.apply();
+assert.equal(resolver.calls.length, 2);
+assert.deepEqual(resolver.calls[1], {
+  secureDnsMode: 'secure', secureDnsServers: ['https://127.0.0.1:9/dns-query']
+}, 'Offline retains the existing DNS black hole');
+resolver.context.networkMode.set('online');
+resolver.apply();
+assert.equal(resolver.calls.length, 3);
+assert.deepEqual(resolver.calls[2], {
+  enableBuiltInResolver: false, secureDnsMode: 'off', enableAdditionalDnsQueryTypes: false
+}, 'Leaving Offline restores every Online option');
+const withoutProxy = resolverHarness('offline', false);
+withoutProxy.apply();
+assert.deepEqual(withoutProxy.calls, [{
+  enableBuiltInResolver: false, secureDnsMode: 'off', enableAdditionalDnsQueryTypes: false
+}], 'Disabling the proxy layer uses the Online resolver');
+const failingResolver = resolverHarness();
+failingResolver.context.app.configureHostResolver = () => { throw new Error('resolver failure'); };
+assert.doesNotThrow(failingResolver.apply);
+assert.deepEqual(failingResolver.logs, [
+  ['host resolver mode change failed', { error: 'resolver failure' }]
+]);
+const readyStart = source.indexOf('app.whenReady().then(async () => {');
+assert.ok(readyStart >= 0);
+const readyEnd = source.indexOf('\n});', readyStart);
+assert.ok(readyEnd > readyStart);
+const ready = source.slice(readyStart, readyEnd);
+const resolverPosition = ready.indexOf('applyHostResolverMode()');
+assert.ok(resolverPosition >= 0);
+for (const call of ['trackNetworkSession(', 'createWindow(', 'restoreSavedSessionWindows(']) {
+  assert.ok(ready.indexOf(call) > resolverPosition, `${call} follows resolver setup`);
+}
+for (const match of ready.matchAll(/new\s+BrowserWindow\s*\(|\bcreateWindow\s*\(/g)) {
+  assert.ok(match.index > resolverPosition, 'All window creation follows resolver setup');
+}
+assert.match(body('setNetworkMode'), /applyHostResolverMode\(\)/);
+console.log('host-resolver tests passed');
