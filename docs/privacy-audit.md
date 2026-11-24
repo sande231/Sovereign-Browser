@@ -1,5 +1,7 @@
 # Sovereign Privacy Receipt Audit
 
+> **Note (2026-11-19):** the session-proxy method below doesn't see the main process's own Node requests (source-page reads, image checks) or DNS. The current audits use mitmproxy's macOS **local capture mode** instead: see [docs/audits/RUNBOOK.md](audits/RUNBOOK.md). That mode also sees the DNS lookups macOS makes for Sovereign, as `dns:<server>` lines. `scripts/log-hosts.py` supports both methods.
+
 This guide compares Sovereign's in-app privacy receipt with a hostname-level network capture. It is intended for development verification, not as a production privacy guarantee.
 
 The audit uses Electron's normal proxy support. Sovereign does **not** disable certificate checks and does not add `ignore-certificate-errors`. The mitmproxy command below uses TLS passthrough, so it records hostnames without decrypting HTTPS content.

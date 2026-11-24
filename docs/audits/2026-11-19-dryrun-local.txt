@@ -1,0 +1,52 @@
+Sovereign privacy audit: dryrun-local
+Date: 2026-11-19 22:46:16 EST
+Commit: 08530eb (16 uncommitted files)
+Electron: 38.8.6
+macOS: 26.6.2 (arm64)
+mitmproxy: Mitmproxy: 12.2.3 binary
+Capture: mitmproxy local capture mode, target = Sovereign's node_modules/electron/dist/Electron.app/ (main process and helpers), TLS passthrough (--ignore-hosts '.*'), no CA installed, loopback not logged, no SOVEREIGN_AUDIT_PROXY
+System nameservers: 2001:558:feed::1,2001:558:feed::2,75.75.75.75,75.75.76.76
+SearXNG image: docker.io/searxng/searxng:2026.9.15-ca4965040@sha256:f1aca3f61c7ff4552b8d54c0ab7fb458e907b78f51c503210cf450c900adca2c
+Kiwix image: ghcr.io/kiwix/kiwix-serve:3.8.2@sha256:e478554a9920412eeb5ce1d73f24e4b28445ebed233187cdd03c623c32be46a5
+ZIM files: wikipedia_en_100_2026-08.zim 
+Mode: Online (base copy switched to Online)
+Profile: fresh copy of /tmp/sov-audit-base (model cache and settings only)
+
+MATCHED:
+  nesdis.noaa.gov
+  spaceplace.nasa.gov
+  thumb.wikimedia.org
+  upload.wikimedia.org
+  weather.gov
+
+IN NETWORK CAPTURE BUT NOT IN RECEIPT:
+  example.com
+  example.org
+
+BARE IPs IN CAPTURE, NO HOSTNAME (check by hand):
+  (none)
+
+IN RECEIPT BUT NOT IN CAPTURE:
+  127.0.0.1
+  local (kiwix, 127.0.0.1)
+
+System nameservers given: 2001:558:feed::1, 2001:558:feed::2, 75.75.75.75, 75.75.76.76
+DNS VIA SYSTEM RESOLVER (macOS lookups made for Sovereign; server only):
+  dns:2001:558:feed::1
+
+DNS TO OTHER SERVERS, NOT A SYSTEM NAMESERVER (check by hand):
+  (none)
+
+REVIEW: 2 hosts in network capture but not in receipt
+Hosts captured: 8
+Dry-run purpose: source pages (main process), renderer-only thumbnails and two browsing tabs (example.org over HTTPS, example.com over plain HTTP; Chromium helper; not in the receipt by design, so they are expected under IN NETWORK CAPTURE BUT NOT IN RECEIPT); no DoH host and no bare IP expected
+Browsing tabs visibly loaded (as written down): example.org=loaded example.com=loaded
+
+NOTE (appended 2026-11-19 after review, at Sandeep's request): check-script results for conditions 1, 2, 3 and 5, not in the original record (RUNBOOK template gap). Re-run by Claude with the RUNBOOK D check script on the same raw files (mitm-hosts.txt 22:41, receipt export 22:42):
+  Source pages (main process, Node): nesdis.noaa.gov CAPTURED, spaceplace.nasa.gov CAPTURED, weather.gov CAPTURED
+  Thumbnails, renderer-only hosts (Chromium helper, no main-process row): thumb.wikimedia.org CAPTURED
+  Thumbnails, hosts also checked by the main process (not proof of helper capture): (none in receipt)
+  Browsing tab (Chromium helper, not in receipt by design): example.org CAPTURED
+  Browsing tab (Chromium helper, not in receipt by design): example.com CAPTURED
+  DoH / ECH hosts in capture: (none)
+  Header lines above (Capture, nameservers, Dry-run purpose; no preconnects line) use the pre-Round-11 RUNBOOK text; the compare sections use the current script. Browsing-tab preconnects: none (no bare IP). Verdict for the dry run: PASSED all 7 conditions (HANDOFF Task 2c, REVIEW Round 12).

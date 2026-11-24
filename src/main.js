@@ -2,6 +2,7 @@ const knowledgeBackend = require('./knowledge-backend');
 let knowledgeBooks = [];
 let knowledgeSettings = { enabled: false, endpoint: knowledgeBackend.DEFAULT_ENDPOINT };
 const sensitiveGuard = require('./sensitive-guard');
+const { lockNavigation } = require('./navigation-guard');
 let privacySettings = { sensitiveTopics: 'strict' };
 const path = require('node:path');
 const fs = require('node:fs');
@@ -873,6 +874,7 @@ function createModelSetupWindow() {
       webviewTag: false
     }
   });
+  lockNavigation(setupWindow.webContents);
   modelSetupWindow = setupWindow;
 
   const setupContents = usableWindowWebContents(setupWindow);
@@ -3030,6 +3032,7 @@ function createTrustedInternalView() {
       webviewTag: false
     }
   });
+  lockNavigation(view.webContents);
   setupDownloadHandlingForSession(view.webContents.session);
   return view;
 }
@@ -3156,10 +3159,7 @@ function attachSearchTabEvents(tab) {
       wc.executeJavaScript('window.SovereignNewTab?.focusSearch?.()', true).catch(() => {});
     }
   });
-  wc.on('will-navigate', event => {
-    event.preventDefault();
-  });
-  wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+  lockNavigation(wc);
 }
 
 function showTab(state, tabId) {
@@ -3555,6 +3555,7 @@ function createChromeView(state) {
       webviewTag: false
     }
   });
+  lockNavigation(state.uiView.webContents);
 
   state.window.contentView.addChildView(state.uiView);
   state.uiView.webContents.on('console-message', event => {
@@ -3585,6 +3586,7 @@ function createSidebarView(state) {
       webviewTag: false
     }
   });
+  lockNavigation(state.sidebarView.webContents);
 
   aiWebContentsIds.add(state.sidebarView.webContents.id);
   state.sidebarView.webContents.on('destroyed', () => {
@@ -4202,7 +4204,6 @@ const networkSessionQueues = new WeakMap();
 const offlineProxySessions = new WeakSet();
 const spellcheckerStateBeforeOffline = new WeakMap();
 const offlinePausedDownloads = new Set();
-let hostResolverChanged = false;
 
 function offlineLayerOn(name) {
   return TEST_OFFLINE_LAYERS === 'all' || TEST_OFFLINE_LAYERS.split(',').includes(name);
@@ -4301,15 +4302,15 @@ function applySpellcheckerMode(ses, offline) {
 }
 
 // Layer 3: Chromium's own DNS goes to an unreachable local DoH server while Offline.
+const ONLINE_HOST_RESOLVER = { enableBuiltInResolver: false, secureDnsMode: 'off', enableAdditionalDnsQueryTypes: false };
+const OFFLINE_HOST_RESOLVER = { secureDnsMode: 'secure', secureDnsServers: ['https://127.0.0.1:9/dns-query'] };
 function applyHostResolverMode() {
   if (typeof app.configureHostResolver !== 'function') return;
   try {
     if (networkMode.isOffline() && offlineLayerOn('proxy')) {
-      app.configureHostResolver({ secureDnsMode: 'secure', secureDnsServers: ['https://127.0.0.1:9/dns-query'] });
-      hostResolverChanged = true;
-    } else if (hostResolverChanged) {
-      app.configureHostResolver({ secureDnsMode: 'automatic', secureDnsServers: [] });
-      hostResolverChanged = false;
+      app.configureHostResolver(OFFLINE_HOST_RESOLVER);
+    } else {
+      app.configureHostResolver(ONLINE_HOST_RESOLVER);
     }
   } catch (error) {
     logAi('host resolver mode change failed', { error: error?.message || String(error) });
@@ -4603,6 +4604,7 @@ async function runDatasetCollection() {
     width: 560, height: 240, title: 'Dataset collection',
     webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true }
   });
+  lockNavigation(datasetWindow.webContents);
   datasetWindow.on('closed', () => {
     for (const controller of activeSearchRequests.values()) controller.abort();
     app.quit();
@@ -6016,6 +6018,7 @@ function withLegacyProbe(fn) {
       show: false,
       webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true }
     });
+    lockNavigation(probe.webContents);
     try {
       await probe.loadURL('sovereign://ask/legacy-chat-probe.html');
       return await fn(probe.webContents);
