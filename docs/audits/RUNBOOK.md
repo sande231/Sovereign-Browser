@@ -180,9 +180,13 @@ mkdir -p docs/audits
   echo "ZIM files: $(ls -1 kiwix/zim/*.zim 2>/dev/null | xargs -n1 basename | tr '\n' ' ')"
   echo "Mode: $MODE"
   echo "Profile: $PROFILE_NOTE"
+  SOVEREIGN_EXPORTED_NAMES=$(env | grep -o '^SOVEREIGN_[A-Z_]*' | sort | paste -sd' ' - || true)
+  echo "SOVEREIGN_ variables exported in this shell: ${SOVEREIGN_EXPORTED_NAMES:-(none)}"
   echo
 } > "$OUT"
 ```
+
+Expected: "(none)"; the run commands set SOVEREIGN_USER_DATA_DIR inline only, and Sovereign's own startup output in the run terminal must show no '[Sovereign]' test/audit warning (except the old session-proxy method, which uses SOVEREIGN_AUDIT_PROXY by design).
 
 ## Capture terminal (used by every run)
 
@@ -382,10 +386,10 @@ SOVEREIGN_USER_DATA_DIR=/tmp/sov-audit-offline npm start
 ```
 
 In Sovereign (toolbar shows **Offline**; **don't** switch to Online):
-1. **Ask AI**: ask `Write a two-line poem about rain.` (plain question).
-2. **Ask AI**, new chat: ask `How tall is Mount Everest?`. Expect a local-knowledge answer; click its citation **[1]** and check that the local article opens.
+1. **Ask AI**: untick **Use local knowledge**, then ask `Write a two-line poem about rain.` (plain question). The local model should answer it (with "No sources: answer from the AI alone"). With local knowledge on, a question that has no local article gives **Not found** by design, and the model is not asked.
+2. **Ask AI**, new chat: tick **Use local knowledge** again, then ask `How tall is Mount Everest?`. With the full Set A collections, expect a local-knowledge answer: click its citation **[1]** and check that the local article opens. With only Wikipedia 100 (no article on it), **Not found** is expected.
 3. Check that **Search the web** and the image button are disabled, with the Offline note.
-4. Address bar: type `https://example.com` and press Enter. Expect the Offline block page.
+4. Address bar: type `https://example.com` and press Enter. The load fails: expect a **blank view** in a tab titled **Offline**, and in the toolbar status line, for a few seconds (about 4), `Offline mode is on, so this site can't load. Switch to Online to open it.` There is no separate block page.
 5. **Search** tab: search `photosynthesis`. Expect the Offline message.
 6. Receipt panel → **Export JSON** → save.
 7. **Cmd-Q.** Then **Ctrl-C** in Terminal 1 and in Terminal 3.

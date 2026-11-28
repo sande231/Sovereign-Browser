@@ -1,0 +1,47 @@
+Sovereign privacy audit: online-local-2d
+Date: 2026-11-27 23:13:44 EST
+Commit: ad79412 (21 uncommitted files)
+Electron: 38.8.6
+macOS: 26.6.2 (arm64)
+mitmproxy: Mitmproxy: 12.2.3 binary
+Capture: mitmproxy local capture mode, target = Sovereign's node_modules/electron/dist/Electron.app/ (main process and helpers), TLS passthrough (--ignore-hosts '.*'), no CA installed, loopback not logged, nameless connections as IP:port, macOS resolver lookups made for Sovereign as dns:<server>, no SOVEREIGN_AUDIT_PROXY
+System nameservers (dns: lines accepted only for these): 2001:558:feed::1,2001:558:feed::2,75.75.75.75,75.75.76.76
+SearXNG image: docker.io/searxng/searxng:2026.9.15-ca4965040@sha256:f1aca3f61c7ff4552b8d54c0ab7fb458e907b78f51c503210cf450c900adca2c
+Kiwix image: ghcr.io/kiwix/kiwix-serve:3.8.2@sha256:e478554a9920412eeb5ce1d73f24e4b28445ebed233187cdd03c623c32be46a5
+ZIM files: wikipedia_en_100_2026-08.zim 
+Mode: Online (base copy switched to Online)
+Profile: fresh copy of ~/sov-audit-base (model cached; switched to Online); Task 2d tree
+SOVEREIGN_ variables exported in this shell: (none)
+
+Sovereign startup warnings ([Sovereign] lines in the app's own output): 0
+Capture running: started 2026-11-27 23:00:45 EST; capture log: 'Local redirector started.' at 23:00:46
+Operator observations (Sandeep, 2026-11-27): (1) a stray one-word question was sent first with local knowledge ticked: Not found; its "Search the web" offer was not clicked (receipt: Local knowledge, Kiwix only). (2) plain question with Search the web and local knowledge unticked, after "Local model ready": answered by the local model ("No sources", "Answer generated locally"). (3) Search tab query: 5 results. (4) Web question with Search the web ticked: answered as Source excerpts (the known P2 fallback, HANDOFF Task 2c PLAN 14.8 item 3). (5) Image search ("Search web for images"): 5 image results from commons.wikimedia.org (served from thumb.wikimedia.org and upload.wikimedia.org). Receipt: one Search receipt (SearXNG), one Ask AI web retrieval receipt (4 source pages), one Media image retrieval receipt (5 thumb.wikimedia.org and 5 upload.wikimedia.org rows), local-knowledge (Kiwix) rows on 127.0.0.1. No model-download hosts: the model was cached in the profile copy.
+MATCHED:
+  britannica.com
+  nesdis.noaa.gov
+  spaceplace.nasa.gov
+  thumb.wikimedia.org
+  upload.wikimedia.org
+
+IN NETWORK CAPTURE BUT NOT IN RECEIPT:
+  (none)
+
+BARE IPs IN CAPTURE, NO HOSTNAME (check by hand):
+  (none)
+
+IN RECEIPT BUT NOT IN CAPTURE:
+  127.0.0.1
+  local (kiwix, 127.0.0.1)
+
+System nameservers given: 2001:558:feed::1, 2001:558:feed::2, 75.75.75.75, 75.75.76.76
+DNS VIA SYSTEM RESOLVER (macOS lookups made for Sovereign; server only):
+  dns:2001:558:feed::1
+  dns:2001:558:feed::2
+
+DNS TO OTHER SERVERS, NOT A SYSTEM NAMESERVER (check by hand):
+  (none)
+
+PASS: no uncaptured hosts and no cloud-AI hosts
+Hosts captured: 7
+
+NOTE (Claude, 2026-11-27): (a) the web answer's label was first recorded as "Supported" from a quick-choice answer; Sandeep's detailed account says Source excerpts, which is recorded above. (b) Item (2) closes Task 2d finding 1 as not reproduced: with both boxes unticked after "Local model ready", the local model answered (Online here; Offline in Claude's probe on this branch and on main, HANDOFF Task 2d REVIEW Round 4).

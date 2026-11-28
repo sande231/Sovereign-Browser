@@ -40,7 +40,25 @@ const {
 const privacyReceipts = require('./privacy-receipt');
 const { createPermissionController } = require('./permission-policy');
 const { createChatStore, legacyChatIds, parseLegacyChats } = require('./chat-store');
-const { testHook } = require('./test-hooks');
+const { testHook, auditHook, ignoredTestSwitches } = require('./test-hooks');
+const { checkSender } = require('./ipc-policy');
+const APP_PATH = app.getAppPath();
+const APP_ROOT = path.resolve(__dirname, '..');
+const IS_TEST_RUN = testHook('gate', {
+  isPackaged: app.isPackaged, appPath: APP_PATH, appRoot: APP_ROOT, env: { gate: 'open' }
+}) === 'open';
+function hook(name) {
+  return testHook(name, { isPackaged: app.isPackaged, appPath: APP_PATH, appRoot: APP_ROOT });
+}
+if (!IS_TEST_RUN) {
+  for (const name of ['host-resolver-rules', 'ignore-certificate-errors']) {
+    if (app.commandLine.hasSwitch(name)) {
+      console.error(`[Sovereign] Refusing to start: --${name} can redirect or weaken connections. Start Sovereign without it.`);
+      app.exit(1);
+      return;
+    }
+  }
+}
 const dns = require('node:dns').promises;
 const { isIP } = require('node:net');
 const { safeFetch, checkHopUrl, resolvePublicAddresses } = require('./safe-fetch');
@@ -56,12 +74,12 @@ const {
   offlineDecision,
   parseAllowlistEntry
 } = require('./network-mode');
-const testDns = JSON.parse(testHook('SOVEREIGN_TEST_DNS', { isPackaged: app.isPackaged }) || '{}');
-const testCaFile = testHook('SOVEREIGN_TEST_CA_FILE', { isPackaged: app.isPackaged });
+const testDns = JSON.parse(hook('SOVEREIGN_TEST_DNS') || '{}');
+const testCaFile = hook('SOVEREIGN_TEST_CA_FILE');
 const testCa = testCaFile ? fs.readFileSync(testCaFile) : undefined;
 // Offline mode (docs/HANDOFF.md, "Offline mode"). The real start mode comes from preferences.
-const TEST_NETWORK_MODE = testHook('SOVEREIGN_TEST_NETWORK_MODE', { isPackaged: app.isPackaged });
-const TEST_OFFLINE_LAYERS = testHook('SOVEREIGN_TEST_OFFLINE_LAYERS', { isPackaged: app.isPackaged }) || 'all';
+const TEST_NETWORK_MODE = hook('SOVEREIGN_TEST_NETWORK_MODE');
+const TEST_OFFLINE_LAYERS = hook('SOVEREIGN_TEST_OFFLINE_LAYERS') || 'all';
 const networkMode = createNetworkMode({ initial: 'offline' });
 let networkSettings = { choiceMade: true, offlineAllowlist: [] };
 const OPEN_EXTERNAL_OFFLINE_MESSAGE = "Offline mode is on. Opening another app would leave Sovereign's protection.";
@@ -121,7 +139,7 @@ const MAX_CONTEXT_DATA_URL_BYTES = 50 * 1024 * 1024;
 const ENABLE_DETACH_DIAGNOSTICS = false;
 const DETACH_LOG_PREFIX = '[Sovereign detach]';
 const AI_LOG_PREFIX = '[Sovereign AI]';
-const MEDIA_TEST_FIXTURES = process.env.SOVEREIGN_MEDIA_TEST_FIXTURES === '1';
+const MEDIA_TEST_FIXTURES = hook('SOVEREIGN_MEDIA_TEST_FIXTURES') === '1';
 const AUDIT_PROXY_BYPASS_RULES = '<local>;localhost;127.0.0.1;[::1]';
 
 function normalizeAuditProxy(value) {
@@ -130,7 +148,7 @@ function normalizeAuditProxy(value) {
     return null;
   }
   try {
-    const parsed = new URL(raw);
+    const parsed = new URL(raw.includes('://') ? raw : `http://${raw}`);
     if (!['http:', 'https:', 'socks:', 'socks4:', 'socks5:'].includes(parsed.protocol) || !parsed.hostname) {
       return null;
     }
@@ -148,8 +166,8 @@ function normalizeAuditProxy(value) {
   }
 }
 
-// Development only: ignored in packaged builds (testHook returns '' when packaged).
-const AUDIT_PROXY = normalizeAuditProxy(testHook('SOVEREIGN_AUDIT_PROXY', { isPackaged: app.isPackaged }));
+// Audit proxy remains available in unpackaged development runs.
+const AUDIT_PROXY = normalizeAuditProxy(auditHook('SOVEREIGN_AUDIT_PROXY', { isPackaged: app.isPackaged }));
 const AUDIT_PROXY_HOST_PORT = (() => {
   try {
     const parsed = new URL(AUDIT_PROXY?.url || '');
@@ -158,6 +176,15 @@ const AUDIT_PROXY_HOST_PORT = (() => {
     return '';
   }
 })();
+
+const startupWarnings = [];
+if (!IS_TEST_RUN) {
+  if (AUDIT_PROXY) startupWarnings.push(`Audit proxy is on (SOVEREIGN_AUDIT_PROXY): this app's traffic goes through ${AUDIT_PROXY_HOST_PORT}.`);
+  const ignored = ignoredTestSwitches(process.env, false);
+  if (ignored.length) startupWarnings.push(`Test settings were found and ignored: ${ignored.join(', ')}.`);
+  if (app.commandLine.hasSwitch('proxy-server')) startupWarnings.push('Started with --proxy-server: traffic may go through another proxy.');
+  for (const warning of startupWarnings) console.warn(`[Sovereign] ${warning}`);
+}
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -537,6 +564,44 @@ function findTabBySender(sender) {
   return { state: null, tab: null };
 }
 
+function describeSender(event) {
+  let role = 'unknown';
+  let tabKind;
+  for (const state of windows.values()) {
+    if (state.uiView?.webContents === event.sender) { role = 'chrome'; break; }
+    if (state.sidebarView?.webContents === event.sender) { role = 'sidebar'; break; }
+  }
+  if (role === 'unknown' && event.sender.id === modelSetupWebContentsId) role = 'setup';
+  if (role === 'unknown') {
+    const { tab } = findTabBySender(event.sender);
+    if (tab) { role = 'tab'; tabKind = tab.kind; }
+  }
+  return {
+    role, tabKind, url: event.senderFrame?.url || '',
+    isMainFrame: Boolean(event.senderFrame) && event.senderFrame === event.sender.mainFrame
+  };
+}
+
+const indexUrl = pathToFileURL(path.join(__dirname, 'index.html')).href;
+function handleTrusted(channel, policy, fn) {
+  ipcMain.handle(channel, (event, ...args) => {
+    const r = checkSender(describeSender(event), policy, { indexUrl });
+    if (!r.ok) throw new Error("This action isn't allowed from this page.");
+    return fn(event, ...args);
+  });
+}
+
+function onTrusted(channel, policy, fn) {
+  ipcMain.on(channel, (event, ...args) => {
+    const r = checkSender(describeSender(event), policy, { indexUrl });
+    if (!r.ok) {
+      console.warn(`[Sovereign] Ignored IPC ${channel} from an untrusted sender: ${r.reason}`);
+      return;
+    }
+    return fn(event, ...args);
+  });
+}
+
 function getTabOwner(tab) {
   return windows.get(tab.windowId) || null;
 }
@@ -556,6 +621,7 @@ function getPageWidth(state, totalWidth) {
 function getChromeHeight(state, totalWidth) {
   const baseHeight = totalWidth <= 860 ? UI_HEIGHT_COMPACT : UI_HEIGHT;
   return baseHeight +
+    (startupWarnings.length ? 28 : 0) +
     ((!networkSettings.choiceMade && !networkMode.isOffline()) || state?.networkConfirmVisible ? NETWORK_INTRO_HEIGHT : 0) +
     (state?.findBarVisible ? FIND_BAR_HEIGHT : 0) +
     (state?.downloadsPanelVisible ? DOWNLOADS_PANEL_HEIGHT : 0);
@@ -714,7 +780,7 @@ function preferencesPath() {
 }
 
 function defaultDownloadDirectory() {
-  return process.env.SOVEREIGN_TEST_DOWNLOAD_DIR || app.getPath('downloads');
+  return hook('SOVEREIGN_TEST_DOWNLOAD_DIR') || app.getPath('downloads');
 }
 
 function sanitizeDownloadDirectory(value) {
@@ -1673,14 +1739,14 @@ function chooseSavePathForFilename(rawFilename, ownerState, options = {}) {
   const filename = sanitizeFilename(rawFilename);
   const shouldAsk = Boolean(options.forceAsk || downloadSettings.askWhereToSave);
 
-  if (shouldAsk && process.env.SOVEREIGN_TEST_SAVE_DIALOG_DIR) {
-    const testDialogDir = process.env.SOVEREIGN_TEST_SAVE_DIALOG_DIR;
+  if (shouldAsk && hook('SOVEREIGN_TEST_SAVE_DIALOG_DIR')) {
+    const testDialogDir = hook('SOVEREIGN_TEST_SAVE_DIALOG_DIR');
     fs.mkdirSync(testDialogDir, { recursive: true });
     return uniqueDownloadPath(filename, testDialogDir);
   }
 
-  if (!shouldAsk && process.env.SOVEREIGN_TEST_DOWNLOAD_DIR) {
-    const testDir = process.env.SOVEREIGN_TEST_DOWNLOAD_DIR;
+  if (!shouldAsk && hook('SOVEREIGN_TEST_DOWNLOAD_DIR')) {
+    const testDir = hook('SOVEREIGN_TEST_DOWNLOAD_DIR');
     fs.mkdirSync(testDir, { recursive: true });
     return uniqueDownloadPath(filename, testDir);
   }
@@ -2563,7 +2629,7 @@ async function saveLinkFromContext(tab, params) {
 }
 
 function runContextMenuTestAction(tab, params) {
-  const action = String(process.env.SOVEREIGN_TEST_CONTEXT_MENU_ACTION || '').trim();
+  const action = String(hook('SOVEREIGN_TEST_CONTEXT_MENU_ACTION') || '').trim();
   if (!action) {
     return false;
   }
@@ -4244,7 +4310,8 @@ function networkStateSnapshot() {
     offlineAllowlist: [...networkSettings.offlineAllowlist],
     namedAllowlist: namedKnowledgeAllowlist(),
     maxAllowlist: MAX_ALLOWLIST,
-    auditProxy: Boolean(AUDIT_PROXY)
+    auditProxy: Boolean(AUDIT_PROXY),
+    warnings: [...startupWarnings]
   };
 }
 
@@ -4455,21 +4522,21 @@ async function setNetworkMode(next, { choice = true, requireConfirm = false, con
   return networkStateSnapshot();
 }
 
-ipcMain.on('network:confirm-visible', (event, visible) => {
+onTrusted('network:confirm-visible', {}, (event, visible) => {
   const state = findWindowStateBySender(event.sender);
   if (!state || state.uiView.webContents !== event.sender) return;
   state.networkConfirmVisible = visible === true;
   layoutViews(state);
 });
 
-ipcMain.handle('network:get-state', () => networkStateSnapshot());
+handleTrusted('network:get-state', {}, () => networkStateSnapshot());
 
-ipcMain.handle('network:set-mode', (_event, mode, options) => setNetworkMode(mode === 'online' ? 'online' : 'offline', { requireConfirm: true, confirmed: options?.confirmed === true }));
+handleTrusted('network:set-mode', {}, (_event, mode, options) => setNetworkMode(mode === 'online' ? 'online' : 'offline', { requireConfirm: true, confirmed: options?.confirmed === true }));
 
 // "Stay online" and closing the strip both mean Online (asked once, PLAN §2).
-ipcMain.handle('network:dismiss-intro', (_event, choice, options) => setNetworkMode(choice === 'offline' ? 'offline' : 'online', { requireConfirm: true, confirmed: options?.confirmed === true }));
+handleTrusted('network:dismiss-intro', {}, (_event, choice, options) => setNetworkMode(choice === 'offline' ? 'offline' : 'online', { requireConfirm: true, confirmed: options?.confirmed === true }));
 
-ipcMain.handle('network:add-allowed', (_event, text) => {
+handleTrusted('network:add-allowed', { tabKinds: ['settings'] }, (_event, text) => {
   const parsed = parseAllowlistEntry(text, { blockedHostPorts: blockedLocalHostPorts(), namedAllowlist: namedKnowledgeAllowlist() });
   if (!parsed.ok) return { ok: false, error: parsed.error, state: networkStateSnapshot() };
   if (networkSettings.offlineAllowlist.includes(parsed.entry)) {
@@ -4484,7 +4551,7 @@ ipcMain.handle('network:add-allowed', (_event, text) => {
   return { ok: true, entry: parsed.entry, state: networkStateSnapshot() };
 });
 
-ipcMain.handle('network:remove-allowed', async (_event, entry) => {
+handleTrusted('network:remove-allowed', { tabKinds: ['settings'] }, async (_event, entry) => {
   const value = String(entry || '');
   networkSettings.offlineAllowlist = networkSettings.offlineAllowlist.filter(item => item !== value);
   savePreferences();
@@ -4496,8 +4563,8 @@ ipcMain.handle('network:remove-allowed', async (_event, entry) => {
 });
 
 // Test-only: answer website permission prompts without a native dialog ('allow' or 'deny').
-const PERMISSION_TEST_ANSWER = ['allow', 'deny'].includes(process.env.SOVEREIGN_PERMISSION_TEST_ANSWER)
-  ? process.env.SOVEREIGN_PERMISSION_TEST_ANSWER
+const PERMISSION_TEST_ANSWER = ['allow', 'deny'].includes(hook('SOVEREIGN_PERMISSION_TEST_ANSWER'))
+  ? hook('SOVEREIGN_PERMISSION_TEST_ANSWER')
   : '';
 const permissionSessions = new WeakSet();
 
@@ -4704,19 +4771,19 @@ app.on('before-quit', () => {
   destroyModelSetupWindow();
 });
 
-ipcMain.handle('browser:get-state', event => {
+handleTrusted('browser:get-state', {}, event => {
   const state = findWindowStateBySender(event.sender);
   return windowSnapshot(state);
 });
 
-ipcMain.on('browser:new-tab', (event, url) => {
+onTrusted('browser:new-tab', {}, (event, url) => {
   const state = findWindowStateBySender(event.sender);
   if (state) {
     createTab(state, url || DEFAULT_HOME, true);
   }
 });
 
-ipcMain.on('browser:open-search', (event, payload) => {
+onTrusted('browser:open-search', {}, (event, payload) => {
   const state = findWindowStateBySender(event.sender);
   if (state) {
     if (state.sidebarVisible) {
@@ -4745,30 +4812,30 @@ ipcMain.on('browser:open-search', (event, payload) => {
   }
 });
 
-ipcMain.on('browser:open-downloads', event => {
+onTrusted('browser:open-downloads', {}, event => {
   openInternalPage(findWindowStateBySender(event.sender), 'downloads');
 });
 
-ipcMain.on('browser:set-downloads-panel-visible', (event, visible) => {
+onTrusted('browser:set-downloads-panel-visible', {}, (event, visible) => {
   setDownloadsPanelVisible(findWindowStateBySender(event.sender), visible);
 });
 
-ipcMain.on('browser:toggle-downloads-panel', event => {
+onTrusted('browser:toggle-downloads-panel', {}, event => {
   const state = findWindowStateBySender(event.sender);
   if (state) {
     setDownloadsPanelVisible(state, !state.downloadsPanelVisible);
   }
 });
 
-ipcMain.on('browser:open-settings', event => {
+onTrusted('browser:open-settings', {}, event => {
   openInternalPage(findWindowStateBySender(event.sender), 'settings');
 });
 
-ipcMain.on('browser:open-bookmarks', event => {
+onTrusted('browser:open-bookmarks', {}, event => {
   openInternalPage(findWindowStateBySender(event.sender), 'bookmarks');
 });
 
-ipcMain.handle('browser:toggle-bookmark', event => {
+handleTrusted('browser:toggle-bookmark', {}, event => {
   const state = findWindowStateBySender(event.sender);
   if (!state) {
     throw new Error('Sovereign could not identify the current browser window.');
@@ -4776,58 +4843,58 @@ ipcMain.handle('browser:toggle-bookmark', event => {
   return toggleBookmarkForActiveTab(state);
 });
 
-ipcMain.handle('browser:copy-text', (_event, text) => {
+handleTrusted('browser:copy-text', {}, (_event, text) => {
   clipboard.writeText(String(text || '').slice(0, 50000));
   return true;
 });
 
-ipcMain.on('browser:reopen-closed-tab', event => {
+onTrusted('browser:reopen-closed-tab', {}, event => {
   reopenClosedTab(findWindowStateBySender(event.sender));
 });
 
-ipcMain.on('browser:set-find-bar-visible', (event, visible) => {
+onTrusted('browser:set-find-bar-visible', {}, (event, visible) => {
   setFindBarVisible(findWindowStateBySender(event.sender), visible);
 });
 
-ipcMain.on('browser:find-in-page', (event, query) => {
+onTrusted('browser:find-in-page', {}, (event, query) => {
   runFindInActiveTab(findWindowStateBySender(event.sender), query, { findNext: false });
 });
 
-ipcMain.on('browser:find-next', (event, query) => {
+onTrusted('browser:find-next', {}, (event, query) => {
   runFindInActiveTab(findWindowStateBySender(event.sender), query, {
     findNext: true,
     forward: true
   });
 });
 
-ipcMain.on('browser:find-previous', (event, query) => {
+onTrusted('browser:find-previous', {}, (event, query) => {
   runFindInActiveTab(findWindowStateBySender(event.sender), query, {
     findNext: true,
     forward: false
   });
 });
 
-ipcMain.on('browser:stop-find', event => {
+onTrusted('browser:stop-find', {}, event => {
   const state = findWindowStateBySender(event.sender);
   const tab = state?.tabs.get(state.activeTabId);
   clearFindSelection(tab);
 });
 
-ipcMain.on('browser:switch-tab', (event, tabId) => {
+onTrusted('browser:switch-tab', {}, (event, tabId) => {
   const state = findWindowStateBySender(event.sender);
   if (state) {
     showTab(state, Number(tabId));
   }
 });
 
-ipcMain.on('browser:close-tab', (event, tabId) => {
+onTrusted('browser:close-tab', {}, (event, tabId) => {
   const state = findWindowStateBySender(event.sender);
   if (state) {
     closeTab(state, Number(tabId));
   }
 });
 
-ipcMain.on('browser:detach-tab', (event, tabId, position) => {
+onTrusted('browser:detach-tab', {}, (event, tabId, position) => {
   const state = findWindowStateBySender(event.sender);
   logDetach('ipc browser:detach-tab', {
     foundWindow: Boolean(state),
@@ -4840,7 +4907,7 @@ ipcMain.on('browser:detach-tab', (event, tabId, position) => {
   }
 });
 
-ipcMain.on('browser:show-tab-menu', (event, tabId) => {
+onTrusted('browser:show-tab-menu', {}, (event, tabId) => {
   const state = findWindowStateBySender(event.sender);
   logDetach('ipc browser:show-tab-menu', {
     foundWindow: Boolean(state),
@@ -4852,21 +4919,21 @@ ipcMain.on('browser:show-tab-menu', (event, tabId) => {
   }
 });
 
-ipcMain.on('browser:toggle-sidebar', event => {
+onTrusted('browser:toggle-sidebar', {}, event => {
   const state = findWindowStateBySender(event.sender);
   if (state) {
     toggleSidebar(state);
   }
 });
 
-ipcMain.on('browser:navigate', (event, input) => {
+onTrusted('browser:navigate', {}, (event, input) => {
   const state = findWindowStateBySender(event.sender);
   if (state) {
     navigateActive(state, input);
   }
 });
 
-ipcMain.on('browser:back', event => {
+onTrusted('browser:back', {}, event => {
   const state = findWindowStateBySender(event.sender);
   const tab = state?.tabs.get(state.activeTabId);
   const history = tab?.view.webContents.navigationHistory;
@@ -4875,7 +4942,7 @@ ipcMain.on('browser:back', event => {
   }
 });
 
-ipcMain.on('browser:forward', event => {
+onTrusted('browser:forward', {}, event => {
   const state = findWindowStateBySender(event.sender);
   const tab = state?.tabs.get(state.activeTabId);
   const history = tab?.view.webContents.navigationHistory;
@@ -4884,7 +4951,7 @@ ipcMain.on('browser:forward', event => {
   }
 });
 
-ipcMain.on('browser:reload', event => {
+onTrusted('browser:reload', {}, event => {
   const state = findWindowStateBySender(event.sender);
   const tab = state?.tabs.get(state.activeTabId);
   if (tab) {
@@ -4892,12 +4959,12 @@ ipcMain.on('browser:reload', event => {
   }
 });
 
-ipcMain.handle('ai:get-state', event => {
+handleTrusted('ai:get-state', {}, event => {
   const state = findWindowStateBySender(event.sender);
   return aiSnapshot(state);
 });
 
-ipcMain.handle('ai:extract-active-page-text', async event => {
+handleTrusted('ai:extract-active-page-text', {}, async event => {
   const state = findWindowStateBySender(event.sender);
   if (!state) {
     throw new Error('Sovereign could not identify the current browser window.');
@@ -4906,17 +4973,17 @@ ipcMain.handle('ai:extract-active-page-text', async event => {
   return extractActivePageText(state);
 });
 
-ipcMain.on('ai:update-tab-state', (_event, tabId, patch) => {
+onTrusted('ai:update-tab-state', {}, (_event, tabId, patch) => {
   const numericTabId = Number(tabId);
   if (tabOwners.has(numericTabId) || aiStates.has(numericTabId)) {
     updateAiState(numericTabId, patch);
   }
 });
 
-ipcMain.handle('ai:get-network-log', () => aiNetworkEvents.slice(-100));
+handleTrusted('ai:get-network-log', {}, () => aiNetworkEvents.slice(-100));
 
-ipcMain.handle('privacy:get-settings', () => ({ ...privacySettings }));
-ipcMain.handle('privacy:update-settings', (_event, patch) => {
+handleTrusted('privacy:get-settings', {}, () => ({ ...privacySettings }));
+handleTrusted('privacy:update-settings', { tabKinds: ['settings'] }, (_event, patch) => {
   if (['strict', 'standard'].includes(patch?.sensitiveTopics)) {
     privacySettings = { sensitiveTopics: patch.sensitiveTopics };
     savePreferences();
@@ -4927,11 +4994,11 @@ ipcMain.handle('privacy:update-settings', (_event, patch) => {
   return { ...privacySettings };
 });
 
-ipcMain.handle('privacy:get-latest-receipt', () => privacyReceipts.getLatestReceipt());
+handleTrusted('privacy:get-latest-receipt', {}, () => privacyReceipts.getLatestReceipt());
 
-ipcMain.handle('privacy:get-receipts', () => privacyReceipts.getReceipts());
+handleTrusted('privacy:get-receipts', {}, () => privacyReceipts.getReceipts());
 
-ipcMain.handle('privacy:start-activity', (event, request) => {
+handleTrusted('privacy:start-activity', {}, (event, request) => {
   const { tab } = findTabBySender(event.sender);
   if (!tab || !['ask', 'search'].includes(tab.kind)) {
     throw new Error('Privacy receipts can only be started from Sovereign Search and Ask AI tabs.');
@@ -4963,7 +5030,7 @@ ipcMain.handle('privacy:start-activity', (event, request) => {
   return receipt;
 });
 
-ipcMain.handle('privacy:export-receipts', async event => {
+handleTrusted('privacy:export-receipts', {}, async event => {
   const state = findWindowStateBySender(event.sender);
   const defaultPath = path.join(
     app.getPath('downloads'),
@@ -4999,15 +5066,15 @@ ipcMain.handle('privacy:export-receipts', async event => {
   };
 });
 
-ipcMain.handle('model-setup:get-state', () => modelSetupSnapshot());
+handleTrusted('model-setup:get-state', {}, () => modelSetupSnapshot());
 
-ipcMain.handle('model-setup:start', () => ensureModelSetupService({ forceStart: true }));
+handleTrusted('model-setup:start', {}, () => ensureModelSetupService({ forceStart: true }));
 
-ipcMain.handle('model-setup:cancel', () => cancelModelSetup());
+handleTrusted('model-setup:cancel', {}, () => cancelModelSetup());
 
-ipcMain.handle('model-setup:update-settings', (_event, patch) => updateAiSettings(patch));
+handleTrusted('model-setup:update-settings', {}, (_event, patch) => updateAiSettings(patch));
 
-ipcMain.on('model-setup:worker-ready', event => {
+onTrusted('model-setup:worker-ready', {}, event => {
   if (!isModelSetupSender(event.sender)) {
     return;
   }
@@ -5017,7 +5084,7 @@ ipcMain.on('model-setup:worker-ready', event => {
   }
 });
 
-ipcMain.on('model-setup:worker-state', (event, patch) => {
+onTrusted('model-setup:worker-state', { roles: ['setup'] }, (event, patch) => {
   if (!isModelSetupSender(event.sender)) {
     return;
   }
@@ -5032,12 +5099,12 @@ ipcMain.on('model-setup:worker-state', (event, patch) => {
   }
 });
 
-ipcMain.handle('search:get-settings', () => ({
+handleTrusted('search:get-settings', {}, () => ({
   settings: searchSettingsSnapshot(),
   activity: searchActivityEvents.slice(-30)
 }));
 
-ipcMain.handle('search:update-settings', (_event, patch) => {
+handleTrusted('search:update-settings', {}, (_event, patch) => {
   const input = patch && typeof patch === 'object' ? patch : {};
   if (typeof input.endpoint === 'string') {
     if (hostPortOf(normalizeSearxngEndpoint(input.endpoint)) === hostPortOf(knowledgeSettings.endpoint)) throw new Error('SearXNG and Kiwix must use separate endpoints.');
@@ -5389,10 +5456,10 @@ async function localMediaRequest(event, input, download = false) {
     length: response.headers.get('content-length')
   };
 }
-ipcMain.handle('knowledge:search', (event, input) => handleKnowledgeSearch(event, input));
-ipcMain.handle('knowledge:read-sources', handleKnowledgeReadSources);
-ipcMain.handle('knowledge:media', handleKnowledgeMedia);
-ipcMain.handle('knowledge:status', async event => {
+handleTrusted('knowledge:search', {}, (event, input) => handleKnowledgeSearch(event, input));
+handleTrusted('knowledge:read-sources', {}, handleKnowledgeReadSources);
+handleTrusted('knowledge:media', {}, handleKnowledgeMedia);
+handleTrusted('knowledge:status', {}, async event => {
   const tab = findTabBySender(event.sender).tab;
   if (!['ask', 'settings'].includes(tab?.kind)) throw new Error('Local knowledge status requires Settings or Ask.');
   if (!knowledgeSettings.enabled) {
@@ -5430,7 +5497,7 @@ ipcMain.handle('knowledge:status', async event => {
     };
   }
 });
-ipcMain.handle('knowledge:update-settings', (event, patch = {}) => {
+handleTrusted('knowledge:update-settings', {}, (event, patch = {}) => {
   if (findTabBySender(event.sender).tab?.kind !== 'settings') throw new Error('Local knowledge settings require Settings.');
   const endpoint = knowledgeBackend.normalizeKiwixEndpoint(patch.endpoint ?? knowledgeSettings.endpoint, {
     blockedHostPorts: blockedLocalHostPorts(),
@@ -5616,7 +5683,7 @@ async function handleSearchQuery(event, request) {
     activeSearchRequests.delete(requestId);
   }
 }
-ipcMain.handle('search:query', handleSearchQuery);
+handleTrusted('search:query', {}, handleSearchQuery);
 
 async function handleMediaSearch(event, request) {
   const { tab } = findTabBySender(event.sender);
@@ -5709,9 +5776,9 @@ async function handleMediaSearch(event, request) {
     activeSearchRequests.delete(requestId);
   }
 }
-ipcMain.handle('search:media', handleMediaSearch);
+handleTrusted('search:media', {}, handleMediaSearch);
 
-ipcMain.handle('media:preflight', async (event, request) => {
+handleTrusted('media:preflight', {}, async (event, request) => {
   const { tab } = findTabBySender(event.sender);
   if (!tab || !['ask', 'search'].includes(tab.kind)) {
     throw new Error('Media validation is only available from Sovereign internal pages.');
@@ -5733,7 +5800,7 @@ ipcMain.handle('media:preflight', async (event, request) => {
   return checked;
 });
 
-ipcMain.handle('media:download', async (event, request) => {
+handleTrusted('media:download', {}, async (event, request) => {
   const { tab } = findTabBySender(event.sender);
   if (!tab || !['ask', 'search'].includes(tab.kind)) {
     throw new Error('Media downloads are only available from Sovereign internal pages.');
@@ -5858,16 +5925,16 @@ async function handleReadSources(event, request) {
     activeSearchRequests.delete(requestId);
   }
 }
-ipcMain.handle('search:read-sources', handleReadSources);
+handleTrusted('search:read-sources', {}, handleReadSources);
 
-ipcMain.on('search:cancel', (event, requestId) => {
+onTrusted('search:cancel', {}, (event, requestId) => {
   const id = String(requestId || '').slice(0, 80);
   if (allowedSearchRequests.get(id)?.senderId === event.sender.id) allowedSearchRequests.delete(id);
   if (allowedKnowledgeRequests.get(id)?.senderId === event.sender.id) allowedKnowledgeRequests.delete(id);
   activeSearchRequests.get(id)?.abort();
 });
 
-ipcMain.handle('settings:get', () => ({
+handleTrusted('settings:get', {}, () => ({
   knowledge: { ...knowledgeSettings },
   knowledgeGuide: pathToFileURL(path.join(__dirname, '..', 'docs', 'local-knowledge-setup.md')).href,
   search: searchSettingsSnapshot(),
@@ -5879,11 +5946,11 @@ ipcMain.handle('settings:get', () => ({
   startup: startupSettingsSnapshot()
 }));
 
-ipcMain.handle('settings:update-downloads', (_event, patch) => updateDownloadSettings(patch));
+handleTrusted('settings:update-downloads', {}, (_event, patch) => updateDownloadSettings(patch));
 
-ipcMain.handle('settings:update-startup', (_event, patch) => updateStartupSettings(patch));
+handleTrusted('settings:update-startup', {}, (_event, patch) => updateStartupSettings(patch));
 
-ipcMain.handle('settings:update-ai', (_event, patch) => updateAiSettings(patch));
+handleTrusted('settings:update-ai', {}, (_event, patch) => updateAiSettings(patch));
 
 // Saved Ask AI chats: one file in the user-data folder, owned by the main process.
 // Local file I/O only; no network request, so nothing to add to the Privacy Receipt.
@@ -5896,7 +5963,7 @@ function discardPendingChat(id) {
   pendingChatConsents.delete(id);
 }
 
-ipcMain.handle('chats:pending-consent', (event, id) => {
+handleTrusted('chats:pending-consent', {}, (event, id) => {
   chatSenderTab(event, ['ask']);
   if (typeof id !== 'string' || !id || id.length > 100) return { ok: false };
   pendingChatConsents.set(id, event.sender.id);
@@ -5970,7 +6037,7 @@ function broadcastSavedChats() {
 async function confirmChatDeletion(state, { message, keepLabel }) {
   // Test-only (ignored when packaged): skip the dialog. Read on every call so one test can
   // answer both ways.
-  const testAnswer = testHook('SOVEREIGN_CHAT_DELETE_TEST_ANSWER', { isPackaged: app.isPackaged });
+  const testAnswer = hook('SOVEREIGN_CHAT_DELETE_TEST_ANSWER');
   if (['delete', 'keep'].includes(testAnswer)) {
     return testAnswer === 'delete';
   }
@@ -6047,7 +6114,7 @@ function peekLegacyChats() {
 // Test-only (ignored when packaged): make the removal fail, to prove a failed removal never
 // restores deleted chats.
 function legacyRemovalTestFailure() {
-  if (testHook('SOVEREIGN_TEST_LEGACY_REMOVE', { isPackaged: app.isPackaged }) === 'fail') {
+  if (hook('SOVEREIGN_TEST_LEGACY_REMOVE') === 'fail') {
     throw new Error('legacy removal failed (test)');
   }
 }
@@ -6129,17 +6196,17 @@ async function deleteAllSavedChats(state, { message, keepLabel }) {
   return { status, confirmed: true, legacyPending: !legacyRemoved };
 }
 
-ipcMain.handle('chats:legacy-status', event => {
+handleTrusted('chats:legacy-status', {}, event => {
   chatSenderTab(event, ['ask', 'settings']);
   return { legacyPending: legacyDeleteNoticeVisible() };
 });
 
-ipcMain.handle('chats:list', event => {
+handleTrusted('chats:list', {}, event => {
   chatSenderTab(event, ['ask']);
   return savedChatSnapshot();
 });
 
-ipcMain.handle('chats:save', (event, chat) => {
+handleTrusted('chats:save', {}, (event, chat) => {
   chatSenderTab(event, ['ask']);
   if (!aiSettings.saveChatsOnDevice) {
     throw new Error('Saving chats is turned off.');
@@ -6157,14 +6224,14 @@ ipcMain.handle('chats:save', (event, chat) => {
   return broadcastSavedChats();
 });
 
-ipcMain.handle('chats:delete', (event, id) => {
+handleTrusted('chats:delete', {}, (event, id) => {
   chatSenderTab(event, ['ask']);
   discardPendingChat(id);
   return broadcastSavedChats();
 });
 
 // Clear history: always physical cleanup once confirmed, even if the file cannot be parsed.
-ipcMain.handle('chats:clear', async event => {
+handleTrusted('chats:clear', {}, async event => {
   const { state } = chatSenderTab(event, ['ask']);
   const result = await deleteAllSavedChats(state, {
     message: status => `Delete ${savedChatsText(status)} from Sovereign's storage?`,
@@ -6179,14 +6246,14 @@ ipcMain.handle('chats:clear', async event => {
 
 // The Ask page found the legacy key itself (it opened before any bulk delete). Imports nothing
 // while a legacy delete is pending, and never a deleted id (see chat-store.js).
-ipcMain.handle('chats:import-legacy', (event, chats) => {
+handleTrusted('chats:import-legacy', {}, (event, chats) => {
   chatSenderTab(event, ['ask']);
   chatStore().importLegacy(Array.isArray(chats) ? chats : []);
   return broadcastSavedChats();
 });
 
 // The Ask page removed the legacy key with removeItem and checked it is gone.
-ipcMain.handle('chats:legacy-removed', event => {
+handleTrusted('chats:legacy-removed', {}, event => {
   chatSenderTab(event, ['ask']);
   if (chatStore().legacyDeletePending()) {
     chatStore().legacyDeleteDone();
@@ -6196,7 +6263,7 @@ ipcMain.handle('chats:legacy-removed', event => {
 });
 
 // Called by Settings right after "Save chats on this device" is turned off.
-ipcMain.handle('chats:offer-delete-on-disable', async event => {
+handleTrusted('chats:offer-delete-on-disable', {}, async event => {
   const { state } = chatSenderTab(event, ['settings']);
   if (aiSettings.saveChatsOnDevice) {
     return { count: 0, deleted: 0 };
@@ -6213,7 +6280,7 @@ ipcMain.handle('chats:offer-delete-on-disable', async event => {
   return { count, unreadable, deleted: count, cleared: true, legacyPending: result.legacyPending };
 });
 
-ipcMain.handle('settings:choose-download-directory', event => {
+handleTrusted('settings:choose-download-directory', {}, event => {
   const state = findWindowStateBySender(event.sender);
   const openDialogOptions = {
     title: 'Choose Download Folder',
@@ -6230,7 +6297,7 @@ ipcMain.handle('settings:choose-download-directory', event => {
   return updateDownloadSettings({ defaultDirectory: result[0] });
 });
 
-ipcMain.handle('ask-handoff:create', (_event, payload) => {
+handleTrusted('ask-handoff:create', {}, (_event, payload) => {
   pruneAskHandoffs();
   const handoff = sanitizeAskHandoff(payload);
   if (handoff.files.length === 0) {
@@ -6241,7 +6308,7 @@ ipcMain.handle('ask-handoff:create', (_event, payload) => {
   return { id, count: handoff.files.length };
 });
 
-ipcMain.handle('ask-handoff:consume', (_event, id) => {
+handleTrusted('ask-handoff:consume', {}, (_event, id) => {
   pruneAskHandoffs();
   const key = String(id || '').slice(0, 120);
   if (!key) {
@@ -6252,9 +6319,9 @@ ipcMain.handle('ask-handoff:consume', (_event, id) => {
   return handoff || { files: [] };
 });
 
-ipcMain.handle('bookmarks:get', () => bookmarksSnapshot());
+handleTrusted('bookmarks:get', {}, () => bookmarksSnapshot());
 
-ipcMain.handle('bookmarks:add', (_event, input) => {
+handleTrusted('bookmarks:add', {}, (_event, input) => {
   const payload = input && typeof input === 'object' ? input : {};
   return addOrUpdateBookmark({
     title: payload.title,
@@ -6262,11 +6329,11 @@ ipcMain.handle('bookmarks:add', (_event, input) => {
   });
 });
 
-ipcMain.handle('bookmarks:rename', (_event, id, title) => renameBookmark(id, title));
+handleTrusted('bookmarks:rename', {}, (_event, id, title) => renameBookmark(id, title));
 
-ipcMain.handle('bookmarks:remove', (_event, idOrUrl) => removeBookmark(idOrUrl));
+handleTrusted('bookmarks:remove', {}, (_event, idOrUrl) => removeBookmark(idOrUrl));
 
-ipcMain.on('bookmarks:open', (event, url) => {
+onTrusted('bookmarks:open', {}, (event, url) => {
   const state = findWindowStateBySender(event.sender);
   const checked = normalizeAddress(url);
   if (state && checked.ok) {
@@ -6274,16 +6341,16 @@ ipcMain.on('bookmarks:open', (event, url) => {
   }
 });
 
-ipcMain.on('bookmarks:open-current-tab', (event, url) => {
+onTrusted('bookmarks:open-current-tab', {}, (event, url) => {
   const state = findWindowStateBySender(event.sender);
   if (state) {
     navigateActive(state, url);
   }
 });
 
-ipcMain.handle('downloads:get-state', () => downloadsSnapshot());
+handleTrusted('downloads:get-state', {}, () => downloadsSnapshot());
 
-ipcMain.handle('downloads:download-url', async (event, inputUrl) => {
+handleTrusted('downloads:download-url', {}, async (event, inputUrl) => {
   const url = validateDownloadUrlInput(inputUrl);
   if (networkMode.isOffline() && !networkDecision(url).allow) {
     recordOfflineBlocked({ url, method: 'GET', resourceType: 'download', webContentsId: event.sender.id });
@@ -6295,17 +6362,17 @@ ipcMain.handle('downloads:download-url', async (event, inputUrl) => {
   return downloadsSnapshot();
 });
 
-ipcMain.on('downloads:cancel', (_event, downloadId) => {
+onTrusted('downloads:cancel', {}, (_event, downloadId) => {
   const item = downloadItemForAction(downloadId);
   item?.cancel();
 });
 
-ipcMain.on('downloads:pause', (_event, downloadId) => {
+onTrusted('downloads:pause', {}, (_event, downloadId) => {
   const item = downloadItemForAction(downloadId);
   item?.pause();
 });
 
-ipcMain.on('downloads:resume', (_event, downloadId) => {
+onTrusted('downloads:resume', {}, (_event, downloadId) => {
   const item = downloadItemForAction(downloadId);
   if (item && networkMode.isOffline() && !networkDecision(item.getURL()).allow) {
     return;
@@ -6316,7 +6383,7 @@ ipcMain.on('downloads:resume', (_event, downloadId) => {
   }
 });
 
-ipcMain.on('downloads:clear', (_event, downloadId) => {
+onTrusted('downloads:clear', {}, (_event, downloadId) => {
   const id = Number(downloadId);
   if (!Number.isInteger(id) || activeDownloadItems.has(id)) {
     return;
@@ -6325,7 +6392,7 @@ ipcMain.on('downloads:clear', (_event, downloadId) => {
   broadcastDownloadsState();
 });
 
-ipcMain.on('downloads:clear-finished', () => {
+onTrusted('downloads:clear-finished', {}, () => {
   for (const [id, record] of downloads.entries()) {
     if (!activeDownloadItems.has(id) && record.state !== 'progressing') {
       downloads.delete(id);
@@ -6334,14 +6401,14 @@ ipcMain.on('downloads:clear-finished', () => {
   broadcastDownloadsState();
 });
 
-ipcMain.on('downloads:show-in-folder', (_event, downloadId) => {
+onTrusted('downloads:show-in-folder', {}, (_event, downloadId) => {
   const record = downloads.get(Number(downloadId));
   if (record?.savePath) {
     shell.showItemInFolder(record.savePath);
   }
 });
 
-ipcMain.handle('downloads:open-file', async (_event, downloadId) => {
+handleTrusted('downloads:open-file', {}, async (_event, downloadId) => {
   const record = downloads.get(Number(downloadId));
   if (!record?.savePath || record.state !== 'completed') {
     throw new Error('The file is not ready to open.');
@@ -6358,7 +6425,7 @@ function openExternalOnline(url) {
   return shell.openExternal(url);
 }
 
-ipcMain.handle('browser:open-external', async (event, url) => {
+handleTrusted('browser:open-external', {}, async (event, url) => {
   const checked = normalizeAddress(url);
   if (!checked.ok) {
     return { ok: false, error: checked.error };

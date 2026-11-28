@@ -6890,6 +6890,7 @@ All audits are done and every summary is in `docs/audits/`. Claude checked the K
      - **Downloads and files:** `downloads:download-url` (download from a URL), `downloads:open-file` (**opens a downloaded file with the OS**), `downloads:show-in-folder`, `downloads:get-state`, `downloads:cancel` / `pause` / `clear` / `clear-finished`.
      - **Other:** `bookmarks:*`, `ask-handoff:create` / `consume`, `browser:copy-text`, `ai:update-tab-state`, `search:cancel`.
      - **Check their sender** (tab kind and/or per-request grant): `search:query`, `search:media`, `search:read-sources`, `knowledge:search`, `knowledge:read-sources`, the saved-chat handlers (`chatSenderTab`), and the model-setup worker (`isModelSetupSender`). `knowledge:media` was not confirmed: its check wasn't found in the first lines of `handleKnowledgeMedia`. Task 2d verifies it.
+- **Status (2026-11-24):** gap 1 fixed in Task 2d-a; **gaps 2 and 3 fixed in Task 2d** (preload origin check; every handler through `handleTrusted`/`onTrusted`).
 - **Answer to Sandeep:** today these handlers are reachable **only from Sovereign's own pages**, enforced by the preload placement and navigation rules above. But gap 1 is a plausible way for a website to end up in a preload-bearing view, and gaps 2 and 3 mean nothing else would stop it.
 - **Proposed for Task 2d (PLAN only, needs approval with Task 2d):**
   - (a) `will-navigate` → `preventDefault()` and a deny `setWindowOpenHandler` on the chrome view, the sidebar, the model-setup window and the dataset window, plus `dragover`/`drop` cancelled in their pages;
@@ -7752,3 +7753,328 @@ Sandeep's manual check in a normal `npm start`, recorded exactly:
   - step 2: no proxy or VPN entry (`scutil --nc list` empty);
   - step 3: no mitmproxy CA, no system proxy.
 - **2026-11-24, RUNBOOK fix (Sandeep):** §6.1a (the netshoot check) now runs only when `docker info` succeeds; otherwise it says Docker isn't running instead of printing a false all-clear. It also checks for a leftover `sovereign-kiwix-traffic` container.
+
+## Task: Test-switch gate, preload origin check and IPC sender check (Phase 2, Task 2d)
+**Status: DONE (Sandeep, 2026-11-27).** Built and verified (2026-11-24); manual checks done (Sandeep); re-audit done (Offline and Online, both PASS); extension off and clean-up checked (2026-11-27). Uncommitted on branch `phase-2/test-switch-gate`.
+- The design was pre-approved by Sandeep from Task 2c PLAN §16 and §16.7, so it runs without a PLAN stop.
+- One uncovered choice was asked and answered (2026-11-24): `network:add-allowed` and `network:remove-allowed` are **Settings only**, and `tests/electron/offline-mode.test.js` moves those two calls from the toolbar view to a Settings tab, with assertions unchanged.
+- Working on `main` (PR #13 merged as `ad79412`), uncommitted. Sandeep branches and commits.
+
+### PLAN (Claude)
+**1. Inventory (checked 2026-11-24).**
+- **Test switches** (11):
+  - read through `testHook`: `SOVEREIGN_TEST_DNS`, `SOVEREIGN_TEST_CA_FILE`, `SOVEREIGN_TEST_NETWORK_MODE`, `SOVEREIGN_TEST_OFFLINE_LAYERS`, `SOVEREIGN_CHAT_DELETE_TEST_ANSWER`, `SOVEREIGN_TEST_LEGACY_REMOVE`;
+  - **read straight from `process.env`, ungated**: `SOVEREIGN_PERMISSION_TEST_ANSWER`, `SOVEREIGN_MEDIA_TEST_FIXTURES`, `SOVEREIGN_TEST_DOWNLOAD_DIR`, `SOVEREIGN_TEST_SAVE_DIALOG_DIR`, `SOVEREIGN_TEST_CONTEXT_MENU_ACTION`.
+- **Audit switch:** `SOVEREIGN_AUDIT_PROXY` (through `testHook`).
+- **Features, not test switches:** `SOVEREIGN_USER_DATA_DIR`, `SOVEREIGN_DATASET_BATCH`, `SOVEREIGN_DATASET_OUT`, `SOVEREIGN_DATASET_DELAY_MS`. They stay as they are.
+- **The app sets no Chromium switch.** The audit proxy uses `session.setProxy`. Tests append `host-resolver-rules` (`model-chat`, `offline-mode`, `safe-redirects`).
+- **Preload-bearing views** (internal tabs, toolbar, sidebar, model-setup window) all run with `sandbox: false`, so `preload.js` can use `path` and `url`.
+- **`knowledge:media`: confirmed protected.** `handleKnowledgeMedia` → `knowledgeGate`, which throws unless `findTabBySender(event.sender).tab.kind === 'ask'`.
+- **Test callers of the restricted channels:**
+  - `privacy:update-settings`: only from Settings (`sensitive-guard`);
+  - `network:add-allowed` / `remove-allowed`: from the toolbar (`offline-mode`), so that test moves (decision above);
+  - `search:update-settings` (from the toolbar in `model-chat`) and `settings:update-ai` (from Ask in `media-chat`): not restricted by tab kind, so no test changes.
+
+**2. Test-switch gate.**
+- `src/test-hooks.js`:
+  - `testHook(name, { isPackaged, entry, appRoot, env })` returns the value **only if** `isPackaged === false` **and** `entry` (the Electron entry script) resolves inside `<appRoot>/tests/electron/`. Anything else returns `''`: packaged, a missing or unknown entry, or `src/main.js` (`npm start`).
+  - `auditHook(name, { isPackaged, env })` handles `SOVEREIGN_AUDIT_PROXY`: unpackaged only, as today, so it stays available under `npm start`.
+  - Exports `TEST_SWITCHES` (the 11 names) and `ignoredTestSwitches(env, gateOpen)`.
+- `src/main.js`:
+  - `ENTRY = require.main?.filename`;
+  - every one of the 11 switches is read **only** through `testHook`; the 5 ungated ones are converted;
+  - `SOVEREIGN_AUDIT_PROXY` through `auditHook`.
+
+**3. Chromium switches** (only when the entry is not a test suite).
+- `--host-resolver-rules` or `--ignore-certificate-errors` (`app.commandLine.hasSwitch`): Sovereign **refuses to start**. It writes a one-line message to stderr naming the switch and why, and exits with code 1 before any window opens.
+  - No dialog: a modal dialog would block automated tests, and `npm start` runs from a terminal anyway.
+- `--proxy-server`: start, with a warning (item 4).
+
+**4. Notice** (non-test runs only).
+- At startup, main collects warnings:
+  - the audit proxy is on (with its host:port);
+  - test settings were found and **ignored** (names only);
+  - started with `--proxy-server`.
+- Each is logged to the terminal (`[Sovereign] …`) and sent to the toolbar, which shows a one-line notice (`#startup-notice`, hidden when there are no warnings).
+- **No Privacy Receipt change.**
+
+**5. Preload origin check (gap 2).**
+- `src/preload.js` exposes `window.sovereign` (and registers its listeners) only if `location.protocol === 'sovereign:'`, or `location.href` without query and hash equals `pathToFileURL(path.join(__dirname, 'index.html')).href`. Otherwise it exposes nothing.
+
+**6. Shared sender check (gap 3).**
+- **New `src/ipc-policy.js`** (pure): `checkSender({ role, tabKind, url, isMainFrame }, policy, { indexUrl })` → `{ ok, reason }`. Allowed only if:
+  - `isMainFrame` is true;
+  - `url` is a `sovereign:` URL or exactly `indexUrl`;
+  - `role` is `chrome`, `sidebar`, `tab` (a non-web tab) or `setup`, and allowed by the policy;
+  - the `tabKind` is in the policy's list, if it has one.
+- **`src/main.js`:** `describeSender(event)` (role from the window state, tabs and the model-setup window; URL from `event.senderFrame.url`; main frame = `senderFrame === sender.mainFrame`). Every handler is registered through `handleTrusted(channel, policy, fn)` / `onTrusted(channel, policy, fn)`:
+  - a rejected `handle` throws "This action isn't allowed from this page.";
+  - a rejected `on` is ignored and logged.
+- **Policies:** the default is any trusted view. Then:
+  - `network:add-allowed`, `network:remove-allowed`, `privacy:update-settings` → Settings tab only;
+  - `model-setup:worker-state` → the setup window only.
+
+  The existing inner checks stay: `chatSenderTab`, search grants, `knowledgeGate`.
+- **Static check:** no `ipcMain.handle(` / `ipcMain.on(` in `src/main.js` outside the two wrappers. The allow-list is empty, and any future entry needs review.
+
+**7. RUNBOOK.** The summary header records the `SOVEREIGN_` variables exported in the recording shell (expected: none; the run commands set `SOVEREIGN_USER_DATA_DIR` inline). Each run's capture notes say the app's own startup log must show no `[Sovereign]` test or audit warning.
+
+**8. Tests first (each must fail before the change).**
+1. `tests/test-hooks.test.js` (extended):
+   - main entry → ignored;
+   - test entry (`tests/electron/x.test.js`) → honoured;
+   - packaged → ignored;
+   - missing or unknown entry → ignored;
+   - a path that only *looks* similar (`tests/electron-evil/…`, `../tests/electron`) → ignored;
+   - `auditHook` unpackaged → honoured, packaged → ignored.
+2. Static (in `tests/test-hooks.test.js`): `src/` reads `process.env.SOVEREIGN_*` only in `src/test-hooks.js`, except the 4 features.
+3. `tests/ipc-policy.test.js`: `checkSender` cases (each role, a subframe, an http, `file:` or other-file URL, an unknown role, a web tab, a tab-kind policy) and the static wrapper check.
+4. Electron `tests/electron/test-switch-gate.test.js`: spawns the real app with entry `src/main.js` and a temp profile:
+   - (a) `SOVEREIGN_PERMISSION_TEST_ANSWER=allow` and `SOVEREIGN_TEST_DNS={}` set → the log shows them ignored;
+   - (b) `--ignore-certificate-errors` → exit 1 with the message;
+   - (c) `--host-resolver-rules=…` → exit 1;
+   - (d) `--proxy-server=127.0.0.1:9` → warning logged;
+   - (e) `SOVEREIGN_AUDIT_PROXY=127.0.0.1:9` → audit warning logged;
+   - (f) no switches → no warning.
+5. Electron `tests/electron/ipc-sender.test.js`:
+   - a test window using `src/preload.js` on an `http://127.0.0.1` page → `window.sovereign` is undefined;
+   - the same preload on `sovereign://ask/`, in a window that isn't a known view → `network.addAllowed` rejected, allowlist unchanged;
+   - toolbar → `network.addAllowed` and `privacy.updateSettings` rejected;
+   - Settings tab → both allowed;
+   - sidebar → `getState` allowed.
+6. `offline-mode.test.js`: only the `addAllowed`/`removeAllowed` calls move to a Settings tab (decision above).
+
+**9. Run everything:** `npm run check`, `git diff --check`, all Electron suites except `media-chat-live` (`auto-setup-shutdown` cleaned up), with logs read. **Docs only after green:** README "Development runs" and evidence C23 → fixed; `src/test-hooks.js` comment updated; §16.7 gaps 2–3 marked fixed.
+
+**10. Stop conditions (Sandeep):** anything outside this scope (network, receipt, allowlist, safety or legal text); a newly failing suite (report, don't adjust); an uncovered design choice.
+
+### CHANGES (Codex)
+
+#### Round 1 (2026-11-24): tests first
+
+- Extended `tests/test-hooks.test.js`, keeping the existing cases. Existing unpackaged expectations with no entry now expect `''` instead of `fail`, `delete`, or `value`, as required by the new missing-entry rule. Added entry containment, packaged, audit hook, inventory and ignored-switch cases, recursive source environment-read checks and the audit-call check.
+- Added `tests/ipc-policy.test.js`: sender/policy matrix, wrapper-body registration checks with an empty reviewed-exception list, and Settings-only policy assertions.
+- Added `tests/electron/test-switch-gate.test.js`: six real-app child-process cases, isolated profiles, sanitized environment, bounded waits, SIGTERM/SIGKILL cleanup and explicit Electron exit status. It never requires app main in its own process.
+- Added `tests/electron/ipc-sender.test.js`: external preload exposure, unregistered internal window rejection, toolbar rejection, Settings acceptance and sidebar acceptance. Downloads are disabled in its temporary profile.
+- `tests/electron/offline-mode.test.js`: moved all six add/remove calls to a lazy Settings helper, opened once per child that needs it. This includes the additional localhost add at former line 418. No assertion or expected value changed; no phase required an exception.
+- `package.json`: added the IPC Node test to `check`, both Electron commands and their syntax checks.
+- No src/HTML changes, new dependencies, Electron runs or git mutations. Existing workspace changes preserved; PLAN and REVIEW untouched. Task is not marked DONE.
+
+Verification (Node v25.9.0):
+
+```text
+node --check (all five new/changed test files): EXIT 0
+node tests/test-hooks.test.js: EXIT 1 (expected)
+AssertionError [ERR_ASSERTION]: 'fail' !== ''
+  at tests/test-hooks.test.js:7:8
+node tests/ipc-policy.test.js: EXIT 1 (expected)
+Error: Cannot find module '../src/ipc-policy.js'
+  at tests/ipc-policy.test.js:5:25
+node tests/electron-exit-codes.test.js: EXIT 0
+PASS: Electron failure exit codes (23 suites)
+npm run check: EXIT 1 (expected, same missing ipc-policy module)
+git diff --check: EXIT 0
+```
+
+These intentional failures stop later assertions from executing until implementation exists. Electron runtime results are unverified, as requested. Reproduce with the two Node commands above; after implementation, run `npm run test:electron:test-switch-gate`, `npm run test:electron:ipc-sender` and `npm run test:electron:offline-mode`. Manual review: check that only Settings can change the allowlist/privacy setting and that ordinary app startup ignores test overrides and reports the specified warnings.
+
+#### Round 2 (2026-11-24): gate, notices, Chromium switches, preload origin check, IPC sender check
+
+- `src/test-hooks.js`: unpackaged plus resolved `tests/electron/` entry containment gate; separate unpackaged audit hook; all 11 switch names and ignored-switch reporting; updated rule comment.
+- `src/main.js`: all 11 test overrides use the entry-aware helper; audit proxy uses `auditHook`. Non-test startup refuses the two specified Chromium switches before windows and reports ignored overrides, audit proxy and `--proxy-server`. Bare audit proxy `host:port` is interpreted as HTTP, matching the Round 1 fixture. Startup warnings travel in the network snapshot; chrome reserves 28px when present.
+- `src/index.html`, `src/renderer.js`, `src/styles.css`: hidden status notice, joined warnings and one-line styling (full text also available on hover).
+- `src/ipc-policy.js`, `src/main.js`: pure main-frame/origin/role policy and shared wrappers for every IPC registration. Allowlist edits and privacy settings require Settings; worker-state requires setup. Existing handler bodies, inner checks and directly called dataset handlers retained.
+- `src/preload.js`: expose the existing bridge only on sovereign URLs or the exact toolbar file URL after stripping query/hash.
+- `docs/audits/RUNBOOK.md`: exported variable names in summary header, `(none)` fallback and expected clean startup guidance. `package.json`: syntax check for the new IPC module.
+- No test file changes in this round; existing Round 1 changes preserved. No README/evidence, PLAN/REVIEW, dependencies, network rules, receipt or safety/legal text changes. No Electron runs or git mutations. Task remains in progress, not DONE.
+
+Verification:
+- PASS: `node tests/test-hooks.test.js`, `node tests/ipc-policy.test.js`, `node tests/navigation-guard.test.js`, `node tests/electron-exit-codes.test.js` (23 suites).
+- PASS: syntax checks for main, preload and renderer; `git diff --check`.
+- BLOCKED: `npm run check` exits 1 at `tests/sensitive-gate.test.js`, printing `G0`, before build/integration checks. An in-memory diagnostic exposing the existing catch's error stack (no file edits) identifies `TypeError: saveHandler is not a function` at line 192. The test extracts handlers using literal `ipcMain.handle('chats:save'` / `chats:delete` source markers, now replaced by the required trusted wrappers. Other extraction sites in that test also use old registrations (pending consent and knowledge status/update). This is a test-harness incompatibility, not an observed sandbox EPERM. Per PLAN stop conditions and the no-test-edits instruction, reported without adjustment. Later checks did not run; Electron runtime behavior remains unverified.
+
+Manual verification after the test-harness conflict is resolved: run the two Round 1 Electron suites and offline-mode regression; inspect normal startup with an ignored test variable, audit proxy and `--proxy-server` for terminal plus toolbar notices; confirm clean startup hides the notice and the two forbidden switches exit 1. Confirm Settings can update the restricted settings while toolbar and unknown internal windows are rejected. Sandeep/Claude must resolve the source-extraction tests before the full check can be green.
+
+#### Round 3 (2026-11-24): sensitive-gate test markers for handleTrusted (approved)
+
+- `tests/sensitive-gate.test.js`: checked all five channel markers against `src/main.js` and replaced the old `ipcMain.handle` slice markers with `handleTrusted`. Added four VM registration shims that capture the handler in the same existing variable/map, including the settings override. Retained all existing fake `ipcMain` entries. No `onTrusted` shim was needed. Assertions, expected values and case labels are unchanged.
+- `docs/HANDOFF.md`: appended this Task 2d CHANGES entry only; PLAN and REVIEW preserved. No production code changes, Electron runs or git mutations. Task remains pending approval before DONE.
+
+Verification:
+- PASS: `node tests/sensitive-gate.test.js` (exit 0). Full output (the suite does not print individual G labels on success):
+
+```text
+sensitive-gate tests passed
+```
+
+- `npm run check`: exit 1 at `tests/safe-fetch-integration.test.js` with `Error: listen EPERM: operation not permitted 127.0.0.1` (`syscall: 'listen'`). Earlier checks, including sensitive-gate and the AI build, passed. Sandbox integration failure reported only; subsequent checks did not execute.
+- PASS: `git diff --check`.
+- Manual reproduction: run `node tests/sensitive-gate.test.js` and expect the exact output above, then `npm run check` and `git diff --check`. No Electron testing performed in this round.
+
+#### Round 4 (2026-11-24): network-exits gate assertion for hook()/auditHook (approved)
+
+- `tests/network-exits.test.js`: retained the direct `process.env` exclusion for all three switches; require `hook()` for network mode and offline layers, verify the existing `body('hook')` contains a `testHook()` call, and require `auditHook()` for the audit proxy. No other test content changed.
+- `docs/HANDOFF.md`: appended this Task 2d CHANGES entry only. PLAN and REVIEW preserved; no production code edits, Electron runs or git mutations. Task remains pending approval before DONE.
+- PASS: `node tests/network-exits.test.js` (exit 0; `host-resolver tests passed` and `network-exits tests passed`).
+- `npm run check`: exit 1 at `tests/safe-fetch-integration.test.js` with `listen EPERM: operation not permitted 127.0.0.1`. Earlier checks passed. Sandbox integration failure reported only; subsequent checks did not run.
+- PASS: `git diff --check`.
+- Manual reproduction: run `node tests/network-exits.test.js`, `npm run check`, and `git diff --check`; inspect the three switch assertions and the hook-body assertion. No Electron needed for this round.
+
+#### Round 5 (2026-11-24): gate uses app.getAppPath() (approved)
+
+- `src/test-hooks.js`: added the exact resolved `<appRoot>/tests/electron` app-path alternative, still requiring `isPackaged === false`; preserved the existing entry rule and updated the top comment to explain Electron's app path.
+- `src/main.js`: replaced `ENTRY`/`require.main` with `APP_PATH = app.getAppPath()`; both `IS_TEST_RUN` and `hook()` now pass `appPath` without `entry`. No other source changes.
+- `tests/test-hooks.test.js`: added app-path cases for the exact suite folder, app root, `electron-evil`, a subfolder, `electron/..`, and undefined with no entry, in unpackaged and packaged states. Existing cases and all other test files are unchanged by this round.
+- PASS: `node tests/test-hooks.test.js` and `node tests/network-exits.test.js`.
+- `npm run check`: exit 1 at `tests/safe-fetch-integration.test.js`, with sandbox `listen EPERM: operation not permitted 127.0.0.1`. Earlier checks passed; subsequent checks did not run. Reported only, without a sandbox bypass.
+- PASS: `git diff --check`.
+- Manual verification: inspect the exact-folder comparison and the two main-process call sites; rerun the two Node test commands above to verify acceptance and rejection cases. Electron was not run.
+- Only this Task 2d CHANGES entry was appended; PLAN/REVIEW and existing workspace edits were preserved. No git commit/push/stash/config/branch commands. Task remains pending Sandeep's approval before DONE.
+
+### REVIEW (Claude)
+#### Round 1 (2026-11-24): REVIEW of Codex Rounds 1–5. **Approved by Claude**; manual checks by Sandeep next (not DONE)
+- **Decisions asked and answered during the run (Sandeep):**
+  1. `network:add-allowed` / `remove-allowed`: Settings only. `offline-mode.test.js` moves just those calls to a Settings tab; assertions unchanged.
+  2. `tests/sensitive-gate.test.js`, which slices `main.js` by `ipcMain.handle('…'` text markers: markers updated to `handleTrusted('…'`, plus fake `handleTrusted` stores; assertions unchanged.
+  3. `tests/network-exits.test.js`, the gated-reads check: now requires `hook('…')` (whose body calls `testHook`) and `auditHook('SOVEREIGN_AUDIT_PROXY'`; still no `process.env.<name>`.
+  4. **Gate entry detection.** The first full Electron run (logs in `~/sov-electron-runs/2d/`) had **7 suites newly failing**: `model-chat`, `offline-mode` and `safe-redirects` refused `--host-resolver-rules`; `media-chat`, `chat-deletion` and `auto-setup-shutdown` had their test switches ignored; `sensitive-guard` also failed.
+     - Root cause: **Claude's PLAN used `require.main.filename`, which is undefined in Electron's main process** (scratch probe).
+     - Fix (approved): the gate uses `app.getAppPath()` (`<repo>/tests/electron` for suites and their spawned children, the repo root for `npm start`). Codex Round 5 added unit cases only.
+- **Tests first (shown):**
+  - Round 1's unit tests failed (missing API and module).
+  - Before the change, `test-switch-gate` failed: no warning for ignored settings.
+  - Before the change, `ipc-sender` failed: an `http://127.0.0.1` page loaded with `src/preload.js` had `window.sovereign` as an `object`. That is gap 2, demonstrated.
+  - `offline-mode` with the moved calls passed before the change.
+- **Reviewed:**
+  - `src/test-hooks.js`: the gate, `auditHook`, `TEST_SWITCHES`, `ignoredTestSwitches`.
+  - `src/ipc-policy.js`: `checkSender` (main frame only; `sovereign:` or the exact `index.html` URL; roles chrome, sidebar, internal tab, setup; policy roles and tab kinds).
+  - `src/main.js`:
+    - `IS_TEST_RUN` and `hook()`;
+    - the early refusal (stderr line, `app.exit(1)`, top-level `return` before anything else loads);
+    - the startup warnings (log plus `warnings` in the state snapshot → `#startup-notice`; the toolbar is 28 px taller only when one is shown);
+    - `describeSender`, `handleTrusted`/`onTrusted`: **92 handlers converted; 2 raw `ipcMain` calls remain, both inside the wrappers**;
+    - policies: `network:add-allowed`, `network:remove-allowed`, `privacy:update-settings` → Settings; `model-setup:worker-state` → setup window.
+  - `src/preload.js`: exposes the API only on `sovereign:` pages or the exact `index.html` file URL.
+  - RUNBOOK summary header: a `SOVEREIGN_` line.
+  - `knowledge:media` confirmed: `knowledgeGate` requires an Ask tab.
+- **Final checks (Claude, outside the sandbox, after Round 5):**
+  - `npm run check` exit 0; `git diff --check` clean.
+  - **All 22 Electron suites EXIT 0** (logs in `~/sov-electron-runs/2d-r2/`, each read): test-switch-gate (6 cases), ipc-sender (5 cases), navigation-guards, browser-features, ui-smoke, stage1-usability, ask-layout, model-chat, offline-mode, generation-shutdown, downloads, permissions, attachments, home-attachments, pdf-attachments, media-chat, chat-deletion, single-instance, safe-redirects, sensitive-guard, local-knowledge, auto-setup-shutdown (Online; temp profile cleaned). `media-chat-live` skipped (needs the internet).
+  - Deliberate-refusal error lines: same counts as the Task 2d-a run (chat-deletion 7, local-knowledge 5, media-chat 3, safe-redirects 1). `ipc-sender`'s 7 rejections are its own cases.
+  - `chat-deletion`'s three `[Sovereign] could not remove chats … (test)` lines are its deliberate `SOVEREIGN_TEST_LEGACY_REMOVE=fail` case, which shows the gate is open in spawned test children.
+- **Docs (after green):** README "Development runs" and evidence C23 → fixed (✅); §16.7 status updated; the `src/test-hooks.js` comment rewritten (Codex).
+- **Outside scope, untouched:** network rules, the Offline allowlist logic, the Privacy Receipt, safety and legal text.
+
+#### Round 2 (2026-11-24): manual: looked good (Sandeep); terminal checks 1–4 verified (Claude)
+- **Manual checks 1–6: looked good (Sandeep).**
+- **Terminal checks 1–4 verified by Claude** (2026-11-24, logs in `~/sov-electron-runs/2d-manual/`).
+  - Each ran `npm start` with `SOVEREIGN_USER_DATA_DIR=$(mktemp -d)`. No other Sovereign was running beforehand.
+  - Runs 1–3 were captured for 15 s, then stopped with SIGTERM to the Electron main process: npm exit 0, no Electron left. Every throwaway profile was deleted afterwards, plus one empty extra one from a direct re-run (below).
+
+  | # | Command | Result |
+  |---|---|---|
+  | 1 | `npm start` | **no `[Sovereign]` line**; no error-like lines |
+  | 2 | `SOVEREIGN_PERMISSION_TEST_ANSWER=allow npm start` | `[Sovereign] Test settings were found and ignored: SOVEREIGN_PERMISSION_TEST_ANSWER.` |
+  | 3 | `SOVEREIGN_AUDIT_PROXY=127.0.0.1:9 npm start` (no browsing) | `[Sovereign] Audit proxy is on (SOVEREIGN_AUDIT_PROXY): this app's traffic goes through 127.0.0.1:9.` |
+  | 4 | `npm start -- --ignore-certificate-errors` | `[Sovereign] Refusing to start: --ignore-certificate-errors can redirect or weaken connections. Start Sovereign without it.` It exited on its own after about 1 s, npm exit 1. A direct `electron . --ignore-certificate-errors` (no npm) also exits **1**, so the code is Electron's own. |
+
+- **Checks 5–6: which automated suite covers what** (from the test code, Claude):
+  - **Offline allowlist add/remove from Settings:** `offline-mode` (the `addAllowed` / `removeAllowed` calls now run in a Settings tab, including the refusal of `192.168.1.5:80`) and `ipc-sender` case (d). The toolbar is refused in `ipc-sender` (c).
+    - **Not covered:** the Settings page's own **Add button and list-remove UI** (`#settings-allow-input`, `#settings-allow-add`, `#settings-allowlist`). Tests call the API from the Settings tab, not the form. Covered by Sandeep's manual check only.
+  - **Sensitive-topic setting:** `sensitive-guard` drives the real Settings radio buttons (`#sensitive-strict` / `#sensitive-standard`) and `privacy.updateSettings` from Settings; `ipc-sender` (d) (allowed from Settings) and (c) (refused from the toolbar). Covered, UI included.
+  - **Tabs:**
+    - open: `browser-features`, `sensitive-guard`, `downloads` and others (`newTab`);
+    - detach: `browser-features` (`detachTab`, API, not a drag);
+    - close: `sensitive-guard` (`closeTab`).
+    - **Not covered:** reordering tabs by drag (`stage1-usability`'s "reorder" is the home-page shortcuts), and detaching by an actual drag. Manual only (and the Task 2d-a manual check).
+  - **Sidebar:** `browser-features`, `navigation-guards` and `ipc-sender` (`toggleSidebar`; `ipc-sender` (e) calls `getState` from the sidebar).
+  - **Ask:** questions are submitted and answered in `model-chat`, `ask-layout`, `attachments`, `pdf-attachments`, `media-chat`, `generation-shutdown` and `sensitive-guard`, all with the **mocked** model. **Not covered:** an answer from the real local model. Manual only.
+  - **Downloads page:** `ui-smoke` (`openDownloads` → `sovereign://downloads/`) and the `downloads` suite.
+  - **Bookmarks:** `browser-features` (`toggleBookmark`, `bookmarks.get`). **Not covered:** opening the Bookmarks **page** (`sovereign://bookmarks/`). Manual only.
+- **Task 2d:** waiting for Sandeep's DONE. Nothing committed.
+
+#### Round 3 (2026-11-24): re-audit, Offline run (Claude ran the terminal steps; Sandeep did the clicks)
+- **Step 0 prep (Claude):** all values as expected.
+  - Docker running; SearXNG and Kiwix at their pinned digests, HTTP 200, listening only on `127.0.0.1`.
+  - ZIM `wikipedia_en_100_2026-08.zim`; no `SOVEREIGN_` variables exported.
+  - `~/sov-audit-base` 1.2G, with 668M of model files.
+  - Branch `phase-2/test-switch-gate`, 19 changed files; `npm run check` OK.
+  - mitmproxy 12.2.3; no mitmproxy CA; extension `[activated enabled]` (Sandeep re-enabled it with one `mitmdump` start).
+- **Offline run** → `docs/audits/2026-11-24-offline-local-2d.txt`: **PASS**.
+  - Capture started 14:30:01; its log shows `Local redirector started.` at 14:30:02. A first instance was restarted before Sovereign started, because its log only flushes on exit.
+  - **0 hosts and 0 `dns:` lines**; nothing uncaptured; no bare IPs; both DNS sections `(none)`.
+  - Receipt: the `example.com` row blocked, plus local Kiwix rows.
+  - `SOVEREIGN_` exported: `(none)`; `[Sovereign]` startup warnings: 0.
+  - Supporting `tcpdump` **not run** (Sandeep couldn't enter the sudo password in this session); recorded in the summary.
+  - §4 query-text check on the file: 0.
+- **Two functional findings (not network findings), for follow-up; not yet investigated:**
+  1. **The plain Ask question (two-line poem) was not answered Offline by the local model**, also not after "Load cached model" with local knowledge unticked (Sandeep). The model files are in the profile copy (668M). This contradicts what the 2026-11-22 Kiwix run showed (a local-model answer Offline) and evidence C22. **To investigate before Task 2d DONE.** It may be a Task 2d regression, for example the sender check or the preload gate affecting the Ask page's model calls or the model-setup window, or an older problem.
+  2. **The Offline block page rendered blank white:** the tab was titled "Offline" but showed no message. Expected the Offline block message. The request was blocked (receipt: "blocked (offline mode) – nothing sent").
+
+#### Round 4 (2026-11-24): findings 1 and 2 investigated (no capture, no code change). **Neither is a Task 2d regression**; fix PLAN waiting for approval
+- **Where things run** (code):
+  - **Finding 2, the "block page":** there is no block page. A blocked web tab's load fails (`ERR_BLOCKED_BY_CLIENT`), so the web view stays blank white with the tab titled "Offline" (`src/main.js` ~2972). The message `offlineLoadMessage` (~4236: "Offline mode is on, so this site can't load. Switch to Online to open it.") goes `sendTabError` → `sendError` (~2520) → `browser:error` → the toolbar view's `setStatus` (`src/renderer.js:106`), which **clears it after 3.6 s**. Same code on `main` (`HEAD`).
+  - **Finding 1, the model:** WebLLM runs **in-page**, in the Ask page (`src/ask.html:107`), the sidebar (`src/sidebar.html:56`) and the hidden model-setup window (`src/model-setup.html:10`); there is no worker. All three are `sovereign://ask/…`, so the preload origin check allows them.
+    - **Sender check:** the Ask page is role `tab`, kind `ask`. Its model channels `model-setup:get-state` / `start` / `cancel` / `update-settings` (`src/main.js` 5069–5075) use the default policy. The setup window is role `setup` via `modelSetupWebContentsId`, set right after creation and before its page loads (~948). `model-setup:worker-ready` (~5077) uses the default policy; `model-setup:worker-state` (~5087) is setup-only, and it is the setup window.
+    - **Nothing in Task 2d excludes the model's path.**
+- **`model-chat`:** this branch EXIT 0; `main` in a separate worktree (`ad79412`, detached, `node_modules` symlinked, removed afterwards) EXIT 0. Identical final JSON. It uses a mocked model, so it doesn't decide finding 1.
+- **Real-model probe** (Claude, a scratch script outside the repo; a fresh copy of `~/sov-audit-base` per run; the app path isn't `tests/electron`, so the gate is closed, as under `npm start`; Offline; profile copies deleted afterwards):
+
+  | Tree | Local knowledge | Poem result | Ask console | example.com |
+  |---|---|---|---|---|
+  | this branch | unticked | model loaded from cache in about 2 s, **answered** ("Softly falls the rain tonight, …") | empty | toolbar status showed the Offline message |
+  | `main` | unticked | **answered** ("Softly falls the rain, …") | empty | same |
+  | this branch | **ticked (the default)** | "No local results found. / **Not found**"; the model isn't asked (Task 2b design: local on, no article, Offline → Not found) | empty | same |
+
+- **Conclusions:**
+  1. **Finding 1:** the first "no" is explained by the default "Use local knowledge" tick. The "no" after unticking and "Load cached model" was **not reproduced** on either tree; the model answers Offline from the cache in seconds. Re-check as the first click of the Online run (both boxes unticked, new chat).
+  2. **Finding 2:** existing design, not a regression. The message is a 3.6 s toolbar status, easy to miss, and the RUNBOOK's "Expect the Offline block page" is inaccurate.
+
+**Proposed fix (PLAN; waiting for Sandeep's approval; docs only unless option c):**
+- (a) **RUNBOOK §2 wording:**
+  - Step 1: "Ask AI: untick **Use local knowledge**, then ask … (the local model should answer). With local knowledge on, a question with no local article gives Not found by design."
+  - Step 4: "Expect a blank tab titled **Offline** and, in the toolbar status line for about 4 seconds, 'Offline mode is on, so this site can't load. Switch to Online to open it.'"
+  - The same correction in §1's equivalent step, if any.
+- (b) **Offline summary** `docs/audits/2026-11-24-offline-local-2d.txt`: append a NOTE, leaving the lines above it unchanged. Local knowledge was ticked by default, so Not found is the design. The later "no" wasn't reproduced; Claude's probe answered Offline on this branch and on `main`. The blank page is the existing design (a toolbar message). The network PASS is unaffected.
+- (c) **P2 follow-up, a separate task, not now:** show the Offline message inside the blocked tab (an in-tab notice instead of a blank page plus a 3.6 s toolbar status). That's a UI change; the message text already exists.
+
+#### Round 5 (2026-11-27): fix plan (a)–(e) applied, docs only (approved by Sandeep)
+- **(a) RUNBOOK §2:**
+  - Step 1: untick "Use local knowledge" before the plain question; the local model should answer; with local knowledge on, no article → Not found by design.
+  - Step 4: the load fails, a blank view titled "Offline", and the toolbar status message for about 4 s; there is no separate block page.
+  - **Consequential edit, step 2:** re-tick local knowledge for the local-knowledge question. "Expect a local-knowledge answer" now applies to the full Set A; with Wikipedia 100 only, Not found is expected. Step 1's untick made this necessary, and the old expectation didn't match Wikipedia 100.
+  - §1 has no equivalent step.
+- **(b)** `docs/audits/2026-11-24-offline-local-2d.txt`: NOTE appended with the probe evidence; the lines above it are unchanged; §4 query-text check still 0.
+- **(c) P2 follow-up (separate task, not started): show the Offline message inside the blocked tab.**
+  - Today a blocked load leaves a blank view titled "Offline", and `offlineLoadMessage` appears only in the toolbar status line, cleared after 3.6 s (`src/renderer.js:106`). That's easy to miss.
+  - Proposal: an in-tab notice with the same existing text. A UI change; needs its own PLAN and approval.
+- **(d)** The status line now says uncommitted on `phase-2/test-switch-gate`.
+- **(e)** README.md, docs/evidence.md and RUNBOOK.md searched for "block page" and similar claims. Only RUNBOOK §2 step 4 made one (reworded in (a)). README and evidence make no block-page claim. RUNBOOK §2 step 5's "Expect the Offline message" is accurate, because the Search page shows the message itself.
+
+#### Round 6 (2026-11-27): re-audit, Online run (Claude ran the terminal steps; Sandeep did the clicks)
+- **Prep:** the extension was still `[activated enabled]`; no `mitmdump` or Sovereign running; no `SOVEREIGN_` variables exported; SearXNG and Kiwix HTTP 200; base 1.2G with 668M of model files; the copy also 668M. `/tmp/sov-audit-offline` was deleted beforehand, as Sandeep asked.
+- **Online run** → `docs/audits/2026-11-27-online-local-2d.txt`: **PASS**.
+  - Capture started 23:00:45; its log shows `Local redirector started.` at 23:00:46.
+  - **7 lines captured:** 5 hosts plus `dns:` lines for the 2 system nameservers. MATCHED: nesdis.noaa.gov, spaceplace.nasa.gov, britannica.com (source pages); thumb.wikimedia.org, upload.wikimedia.org (images).
+  - **No model-download hosts** (cached). Nothing uncaptured; no bare IPs; no other DNS servers.
+  - `SOVEREIGN_` exported: `(none)`; `[Sovereign]` startup warnings: 0.
+  - Observations (Sandeep's detailed account; the receipt confirms each question):
+    - a stray one-word question `ask` was sent first with local knowledge ticked: Not found; its "Search the web" offer was not clicked;
+    - the plain question with both boxes unticked, after "Local model ready": **answered by the local model** ("No sources", "Answer generated locally");
+    - Search tab: 5 results;
+    - web question: answered as **Source excerpts** (the known P2 fallback, Task 2c PLAN §14.8 item 3). Corrected from "Supported", which came from a quick-choice answer; the summary has a NOTE saying so;
+    - images: 5 results from commons.wikimedia.org.
+  - **Finding 1 closed as not reproduced:** the local model answered with both boxes unticked (here Online; Offline in Claude's probe on this branch and on `main`, Round 4). Finding 2 stays as existing design, with the P2 in-tab-notice follow-up (Round 5 (c)).
+  - **§4 query-text check: 0 on all six summaries.**
+- **Clean-up so far:**
+  - `/tmp/sov-audit-online` deleted.
+  - Raw files (both receipt exports, both app logs, the online `mitm-hosts.txt` and its start marker, the empty Offline DNS file) moved to `~/sov-audit-raw-2d` (mode 700) until Task 2d is DONE; nothing left in `/tmp` or the repo root.
+- **Remaining:** Sandeep turns the Mitmproxy Redirector extension off; then the `pgrep` and `systemextensionsctl` checks; then the Task 2d DONE decision. Nothing committed.
+- **Post-audit checks (Claude, 2026-11-27, after Sandeep turned the extension off):**
+  - `systemextensionsctl`: Mitmproxy Redirector `[activated disabled]`;
+  - `no mitmdump running`; `no Sovereign running`; `no system proxy set`;
+  - nothing matching `/tmp/sov-*` (already deleted or moved in Round 6).
+  - Kept: `~/sov-audit-base` (1.2G, Sandeep) and `~/sov-audit-raw-2d` (raw files, until DONE).
+  - Fixes (a)–(e) confirmed present in the files.
+  - 21 changed files (15 modified, 6 new). Nothing committed.
+- **Task 2d marked DONE by Sandeep (2026-11-27).** The 21 files are staged on `phase-2/test-switch-gate`; Sandeep commits and pushes. Open follow-ups: the P2 list (Task 2c PLAN §13.5, §14.7, §14.8; Task 2d REVIEW Round 5 (c)). `~/sov-audit-raw-2d` can be deleted after the PR is merged.
