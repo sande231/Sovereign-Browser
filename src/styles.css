@@ -547,6 +547,20 @@ button:disabled {
   background: var(--accent-strong);
 }
 
+.startup-notice {
+  height: 28px;
+  padding: 4px 10px;
+  border-top: 1px solid var(--line);
+  background: var(--status-panel);
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.startup-notice[hidden] { display: none; }
+
 .network-intro {
   min-height: 42px;
   display: grid;

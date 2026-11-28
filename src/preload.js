@@ -1,5 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+const allowed = location.protocol === 'sovereign:' || location.href.split(/[?#]/)[0] === require('url').pathToFileURL(require('path').join(__dirname, 'index.html')).href;
+if (allowed) {
 contextBridge.exposeInMainWorld('sovereign', {
   getState: () => ipcRenderer.invoke('browser:get-state'),
   onState: callback => {
@@ -201,3 +203,4 @@ contextBridge.exposeInMainWorld('sovereign', {
     }
   }
 });
+}

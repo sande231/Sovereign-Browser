@@ -20,8 +20,10 @@ assert.match(body('setupNetworkMonitorForSession'), /offlineDecision|networkDeci
 assert.match(source, /session-created/);
 for (const name of ['SOVEREIGN_AUDIT_PROXY', 'SOVEREIGN_TEST_NETWORK_MODE', 'SOVEREIGN_TEST_OFFLINE_LAYERS']) {
   assert(!source.includes(`process.env.${name}`));
-  assert(source.includes(`testHook('${name}'`));
 }
+for (const name of ['SOVEREIGN_TEST_NETWORK_MODE', 'SOVEREIGN_TEST_OFFLINE_LAYERS']) assert(source.includes(`hook('${name}'`));
+assert.match(body('hook'), /\btestHook\s*\(/);
+assert(source.includes("auditHook('SOVEREIGN_AUDIT_PROXY'"));
 for (const file of fs.readdirSync('src').filter(file => file.endsWith('.js'))) {
   const text = fs.readFileSync(`src/${file}`, 'utf8');
   for (const match of text.matchAll(/autoUpdater|update-electron-app|crashReporter/g)) assert.match(text.slice(Math.max(0, match.index - 250), match.index + 250), /assertOnline/, file);

@@ -184,10 +184,11 @@ async function main() {
  let saveHandler, writes = 0;
  const saveContext = vm.createContext({ sensitiveGuard:guard, chatSenderTab(){}, aiSettings:{saveChatsOnDevice:true},
   chatStore:()=>({save(){writes++;}}), broadcastSavedChats:()=>({chats:[]}), pendingChatConsents:new Map(),
+  handleTrusted(_name, policy, handler){saveHandler=handler;},
   ipcMain:{handle(_name, handler){saveHandler=handler;}},
   lockedChatIds:new Set(), FIXED_CRISIS_REPLIES:()=>[guard.CRISIS_REPLY, guard.HARM_REPLY] });
  vm.runInContext(body('lockChat'), saveContext);
- vm.runInContext(source.slice(source.indexOf("ipcMain.handle('chats:save'"), source.indexOf("ipcMain.handle('chats:delete'")), saveContext);
+ vm.runInContext(source.slice(source.indexOf("handleTrusted('chats:save'"), source.indexOf("handleTrusted('chats:delete'")), saveContext);
  for (const content of ['I want to kill myself','I want to hurt someone','my husband hits me']) {
   const result = saveHandler(event,{id:'consent-fixture',messages:[{role:'user',content}]});
   assert.ok(result?.needsConsent === true && writes === 0, 'G24');
@@ -247,8 +248,9 @@ async function main() {
  const owner=new EventEmitter(); owner.id=101;
  const lifecycle=vm.createContext({pendingChatConsents:pending,consentWatchers:new WeakSet(),
   chatSenderTab(){}, chatStore:()=>({remove(id){removed.push(id);}}), privacyReceipts:{deleteReceipts(){deletedReceipts++;}}, broadcastSavedChats(){},
+  handleTrusted(name,policy,fn){handlers[name]=fn;},
   ipcMain:{handle(name,fn){handlers[name]=fn;}}});
- vm.runInContext(body('discardPendingChat')+'\n'+source.slice(source.indexOf("ipcMain.handle('chats:pending-consent'"),source.indexOf('let legacyRemovalsInFlight')),lifecycle);
+ vm.runInContext(body('discardPendingChat')+'\n'+source.slice(source.indexOf("handleTrusted('chats:pending-consent'"),source.indexOf('let legacyRemovalsInFlight')),lifecycle);
  handlers['chats:pending-consent']({sender:owner},'pending-fixture');
  owner.emit('destroyed');
  assert.ok(removed.includes('pending-fixture') && deletedReceipts===1 && pending.size===0,'G29');
@@ -372,9 +374,10 @@ async function main() {
   KNOWLEDGE_CHECK_RECEIPT_ID: 'local-knowledge-check',
   assignPrivacyReceiptToSender: (_sender, id) => { activeReceipt = id; },
   kiwixFetch: async () => ({ text: async () => '<feed/>' }),
+  handleTrusted: (_name, policy, handler) => { statusHandler = handler; },
   ipcMain: { handle: (_name, handler) => { statusHandler = handler; } }
  });
- vm.runInContext(source.slice(source.indexOf("ipcMain.handle('knowledge:status'"), source.indexOf("ipcMain.handle('knowledge:update-settings'")), statusContext);
+ vm.runInContext(source.slice(source.indexOf("handleTrusted('knowledge:status'"), source.indexOf("handleTrusted('knowledge:update-settings'")), statusContext);
  for (let i = 0; i < 25; i++) await statusHandler(event);
  assert.ok(receipts.getReceipts().filter(r => r.label === 'Local knowledge check').length === 1, 'KS-rolling');
  assert.ok(receipts.getReceipt('KS-earlier') && receipts.getReceipts().length === 20 && Array.from({ length: 18 }, (_, i) => receipts.getReceipt('KS-earlier-' + i)).every(Boolean), 'KS-retained');
@@ -396,9 +399,10 @@ async function main() {
   allowedKnowledgeRequests:new Map(), allowedKnowledgeMedia:new Map(),
   networkSettings:{offlineAllowlist:[]}, normalizeAllowlist:v=>v,
   savePreferences(){}, broadcastNetworkState(){},
+  handleTrusted:(_name,policy,handler)=>{updateKnowledge=handler;},
   ipcMain:{handle:(_name,handler)=>{updateKnowledge=handler;}}
  });
- const updateStart=source.indexOf("ipcMain.handle('knowledge:update-settings'");
+ const updateStart=source.indexOf("handleTrusted('knowledge:update-settings'");
  vm.runInContext(source.slice(updateStart,source.indexOf('\n});',updateStart)+4),statusContext);
  const staleBooks=statusContext.knowledgeBooks;
  updateKnowledge(event,{endpoint:'http://127.0.0.1:8091'});

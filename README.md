@@ -167,7 +167,7 @@ Running AI locally does not make browsing anonymous: websites and search engines
 
 **DNS.** Sovereign looks up website names through macOS's own resolver, for both the browser engine and the app's own requests. It does not use its own encrypted DNS (DNS-over-HTTPS) or Encrypted Client Hello. That keeps all the app's DNS in one place that the privacy audit can account for. The trade-off: unless macOS is set up for encrypted DNS, the names of the sites you visit or search results the app reads can be seen on the network, for example by others on public or untrusted Wi-Fi, and by your network provider. For protection across the whole system, turn on encrypted DNS in macOS, for example by installing an encrypted-DNS configuration profile from a DNS provider you trust. iCloud Private Relay covers Safari only, not Sovereign.
 
-**Development runs.** In development runs (`npm start`), leftover test environment variables can weaken protections. A stricter gate is planned in Task 2d ([docs/evidence.md](docs/evidence.md), C23).
+**Development runs.** Test environment variables are honoured only when Sovereign is started by one of its own Electron test suites. Under `npm start` they are ignored and listed in a toolbar notice. The audit proxy (`SOVEREIGN_AUDIT_PROXY`) still works under `npm start` and is shown in the same notice. Sovereign refuses to start with `--host-resolver-rules` or `--ignore-certificate-errors`, and warns about `--proxy-server` ([docs/evidence.md](docs/evidence.md), C23; fixed in Task 2d).
 
 ## Setup
 

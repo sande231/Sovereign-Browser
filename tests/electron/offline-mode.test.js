@@ -264,6 +264,15 @@ async function child() {
   const chrome = await waitFor(() => find(url => url.includes('index.html')), 'browser chrome');
   await waitFor(() => chrome.executeJavaScript('Boolean(window.sovereign?.network)', true), 'preload');
   const ui = code => chrome.executeJavaScript(code, true);
+  let settingsContents;
+  const settingsUi = async code => {
+    if (!settingsContents) {
+      await ui('window.sovereign.openSettings()');
+      settingsContents = await waitFor(() => webContents.getAllWebContents().find(w => !w.isDestroyed() && w.getURL().startsWith('sovereign://settings/')), 'Settings tab');
+      await waitFor(() => !settingsContents.isLoadingMainFrame(), 'Settings load');
+    }
+    return settingsContents.executeJavaScript(code, true);
+  };
   const network = () => ui('window.sovereign.network.getState()');
   const introHidden = () => ui("document.querySelector('#network-intro').hidden");
   const statusText = () => ui("document.querySelector('#status').textContent");
@@ -278,7 +287,7 @@ async function child() {
     await ui("window.sovereign.network.setMode('online')");
     const website = await openTab(`http://127.0.0.1:${ports.page}/page?wt=0`);
     await waitFor(() => website.executeJavaScript('document.readyState === "complete"'), 'website loaded');
-    assert.equal((await ui(`window.sovereign.network.addAllowed('127.0.0.1:${ports.page}')`)).ok, true);
+    assert.equal((await settingsUi(`window.sovereign.network.addAllowed('127.0.0.1:${ports.page}')`)).ok, true);
     let reloads = 0;
     website.on('did-start-loading', () => reloads++);
     for (const method of ['setMode', 'dismissIntro']) {
@@ -373,13 +382,13 @@ async function child() {
     assert.equal((await counts()).page, 0, 'loopback page blocked without allowlist');
     assert.match(await statusText(), /isn't on your Offline allowlist/);
     // SearXNG and non-loopback entries are refused; the page entry is accepted.
-    const searx = await ui(`window.sovereign.network.addAllowed('127.0.0.1:${ports.searx}')`);
+    const searx = await settingsUi(`window.sovereign.network.addAllowed('127.0.0.1:${ports.searx}')`);
     assert.equal(searx.ok, false);
     assert.match(searx.error, /SearXNG forwards searches/);
-    assert.equal((await ui("window.sovereign.network.addAllowed('192.168.1.5:80')")).ok, false);
+    assert.equal((await settingsUi("window.sovereign.network.addAllowed('192.168.1.5:80')")).ok, false);
   }
   // Every phase allowlists the local test page so its subresource probes actually run.
-  const added = await ui(`window.sovereign.network.addAllowed('127.0.0.1:${ports.page}')`);
+  const added = await settingsUi(`window.sovereign.network.addAllowed('127.0.0.1:${ports.page}')`);
   assert.equal(added.ok, true);
   assert.deepEqual((await network()).offlineAllowlist, [`127.0.0.1:${ports.page}`]);
 
@@ -415,11 +424,11 @@ async function child() {
   }
 
   // localhost still resolves with the DNS layer on (allowlist it and load it).
-  await ui(`window.sovereign.network.addAllowed('localhost:${ports.page}')`);
+  await settingsUi(`window.sovereign.network.addAllowed('localhost:${ports.page}')`);
   const localhostPage = await openTab(`http://localhost:${ports.page}/page`, `http://localhost:${ports.page}`);
   await waitFor(() => localhostPage.executeJavaScript('document.readyState === "complete"'), 'localhost page');
   assert.match(await localhostPage.executeJavaScript("document.querySelector('#text')?.textContent || ''"), /Local page text/, 'localhost works while Offline');
-  await ui(`window.sovereign.network.removeAllowed('localhost:${ports.page}')`);
+  await settingsUi(`window.sovereign.network.removeAllowed('localhost:${ports.page}')`);
 
   // Main-process exits: search, sources, media, download box, open in another app.
   await ui("window.sovereign.newTab('sovereign://ask/')");

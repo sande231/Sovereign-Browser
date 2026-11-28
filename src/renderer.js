@@ -350,6 +350,10 @@ document.querySelector('#network-confirm-continue').addEventListener('click', ()
 
 function renderNetworkMode(network) {
   if (!network) return;
+  const notice = document.querySelector('#startup-notice');
+  notice.textContent = (network.warnings || []).join(' ');
+  notice.title = notice.textContent;
+  notice.hidden = !notice.textContent;
   const offline = Boolean(network.offline);
   networkModeToggle.textContent = offline ? 'Offline' : 'Online';
   networkModeToggle.classList.toggle('offline', offline);
